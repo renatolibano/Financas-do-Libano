@@ -5,7 +5,8 @@ import {
   CalendarClock, Bell, StickyNote, Bot, Plus, TrendingUp, TrendingDown,
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
-  Bold, Italic, Underline, AlignCenter, List, ListOrdered, Smile, Target, PiggyBank, Repeat2
+  Bold, Italic, Underline, AlignCenter, List, ListOrdered, Smile, Target, PiggyBank, Repeat2,
+  GraduationCap, Layers, Settings, Sun, Moon
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -121,8 +122,20 @@ function useSession(){
   return {session, checking};
 }
 
+function useTheme(){
+  const [theme,setTheme] = useState(()=>{
+    try{ return localStorage.getItem("libano-theme") || "dark"; }catch(e){ return "dark"; }
+  });
+  useEffect(()=>{
+    document.documentElement.setAttribute("data-theme", theme);
+    try{ localStorage.setItem("libano-theme", theme); }catch(e){}
+  },[theme]);
+  return [theme,setTheme];
+}
+
 function Root(){
   const {session, checking} = useSession();
+  const [theme,setTheme] = useTheme();
 
   if(cloudConfigured && checking){
     return <div className="bootScreen">Carregando…</div>;
@@ -130,10 +143,10 @@ function Root(){
   if(cloudConfigured && !session){
     return <Auth/>;
   }
-  return <App session={session}/>;
+  return <App session={session} theme={theme} setTheme={setTheme}/>;
 }
 
-function App({session}){
+function App({session,theme,setTheme}){
   const [page,setPage] = useState("Visão Geral");
   const [mobileOpen,setMobileOpen] = useState(false);
   const transactions = useEntity("transactions", initialTransactions, session, "desc");
@@ -147,6 +160,7 @@ function App({session}){
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
   const [showAdd,setShowAdd] = useState(false);
+  const [showSettings,setShowSettings] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
 
   const monthTransactions = useMemo(()=>transactions.data.filter(x=>{
@@ -225,8 +239,12 @@ function App({session}){
       { key:"Livros Lidos", label:"Livros que já li", icon:BookCheck },
       { key:"Livros Para Ler", label:"Livros que quero ler", icon:BookMarked },
     ]},
+    { type:"group", key:"estudos", label:"Área de Estudos", icon:GraduationCap, children:[
+      { key:"Metas de Estudo", label:"Metas", icon:Target },
+      { key:"Flashcards", icon:Layers },
+    ]},
   ];
-  const [openGroups,setOpenGroups] = useState({financas:true});
+  const [openGroups,setOpenGroups] = useState({});
   const goTo = (key)=>{
     setPage(key);
     if(window.innerWidth<=760) setMobileOpen(false);
@@ -279,18 +297,12 @@ function App({session}){
             <small>{cloudConfigured && session ? ("Conectado como "+session.user.email) : "Salvo neste dispositivo"}</small>
           </div>
         </div>
-        {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair</button>}
-        <button className="resetData" onClick={()=>{
-          if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo. Continuar?")){
-            clearLocal();
-            location.reload();
-          }
-        }}><Trash2 size={14}/> Limpar dados locais</button>
+        <button className="resetData" onClick={()=>setShowSettings(true)}><Settings size={14}/> Configurações</button>
       </div>
     </aside>
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</header>
 
       {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
@@ -305,6 +317,8 @@ function App({session}){
       {page==="Notas" && <Notes entity={notes}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
+      {page==="Metas de Estudo" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       {showAdd && <div className="modalBack"><form className="modal" onSubmit={addTransaction}>
         <div className="modalHead"><h2>Nova movimentação</h2><button type="button" onClick={()=>setShowAdd(false)}><X/></button></div>
@@ -314,6 +328,30 @@ function App({session}){
         <label>Tipo<select name="type"><option value="out">Saída</option><option value="in">Entrada</option></select></label>
         <button className="primary" type="submit">Adicionar</button>
       </form></div>}
+
+      {showSettings && <div className="modalBack" onClick={()=>setShowSettings(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+        <div className="modalHead"><h2>Configurações</h2><button type="button" onClick={()=>setShowSettings(false)}><X/></button></div>
+        <label>Tema
+          <div className="themeToggle">
+            <button type="button" className={theme==="dark"?"active":""} onClick={()=>setTheme("dark")}><Moon size={14}/> Escuro</button>
+            <button type="button" className={theme==="light"?"active":""} onClick={()=>setTheme("light")}><Sun size={14}/> Claro</button>
+          </div>
+        </label>
+        <div className="cloud">
+          {cloudConfigured && session ? <Cloud size={20}/> : <CloudOff size={20}/>}
+          <div>
+            <b>Sincronização</b>
+            <small>{cloudConfigured && session ? ("Conectado como "+session.user.email) : "Salvo neste dispositivo"}</small>
+          </div>
+        </div>
+        {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
+        <button className="resetData" onClick={()=>{
+          if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo. Continuar?")){
+            clearLocal();
+            location.reload();
+          }
+        }}><Trash2 size={14}/> Limpar dados locais</button>
+      </div></div>}
     </main>
   </div>
 }
@@ -556,14 +594,14 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
     <div className="bookTile">
       <div className="bookCoverWrap" onClick={onOpen}>
         <BookCoverThumb book={book}/>
-        <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
-        {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
-          {status==="lido"
-            ? <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>
-            : <button onClick={onMarkRead}>Marcar como lido</button>}
-          <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
-        </div>}
       </div>
+      <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        {status==="lido"
+          ? <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>
+          : <button onClick={onMarkRead}>Marcar como lido</button>}
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+      </div>}
       <b className="bookTitle">{book.title}</b>
       <div className="progress"><i style={{width:progress+"%"}}/></div>
       <small className="bookProgressLabel">{progress}%</small>
@@ -875,16 +913,16 @@ function Notes({entity}){
             <div className="noteCoverWrap" onClick={() => setActiveNote(note)}>
               <b className="noteTitle">{note.title}</b>
               <p className="notePreview">{preview(note.content)}</p>
-              <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === note.id ? null : note.id); }}>
-                <MoreVertical size={15}/>
-              </button>
-              {openMenuId === note.id && (
-                <div className="bookMenu" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => { setOpenMenuId(null); setActiveNote(note); }}><StickyNote size={14}/> Abrir</button>
-                  <button className="danger" onClick={() => handleDelete(note)}><Trash2 size={14}/> Excluir</button>
-                </div>
-              )}
             </div>
+            <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === note.id ? null : note.id); }}>
+              <MoreVertical size={15}/>
+            </button>
+            {openMenuId === note.id && (
+              <div className="bookMenu" onClick={e => e.stopPropagation()}>
+                <button onClick={() => { setOpenMenuId(null); setActiveNote(note); }}><StickyNote size={14}/> Abrir</button>
+                <button className="danger" onClick={() => handleDelete(note)}><Trash2 size={14}/> Excluir</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
