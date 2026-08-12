@@ -15,27 +15,31 @@ export function useEntity(table, initialData, session, order = "asc") {
   const [loading, setLoading] = useState(cloud);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
+  const fetchCloud = useCallback(async () => {
     if (!cloud) {
       setLoading(false);
       return;
     }
-    let active = true;
     setLoading(true);
-    supabase
+    const { data, error } = await supabase
       .from(table)
       .select("*")
-      .order("created_at", { ascending: order === "asc" })
-      .then(({ data, error }) => {
-        if (!active) return;
-        if (error) {
-          console.error(error);
-          setError(error.message);
-        } else {
-          setCloudData(data || []);
-        }
-        setLoading(false);
-      });
+      .order("created_at", { ascending: order === "asc" });
+    if (error) {
+      console.error(error);
+      setError(error.message);
+    } else {
+      setCloudData(data || []);
+    }
+    setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloud, table, order]);
+
+  useEffect(() => {
+    let active = true;
+    fetchCloud().catch((e) => {
+      if (active) console.error(e);
+    });
     return () => {
       active = false;
     };
@@ -102,5 +106,5 @@ export function useEntity(table, initialData, session, order = "asc") {
     [cloud, table, setLocalData]
   );
 
-  return { data, add, remove, update, loading, error, cloud };
+  return { data, add, remove, update, loading, error, cloud, refresh: fetchCloud };
 }

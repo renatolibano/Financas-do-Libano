@@ -1,15 +1,17 @@
-import React, {useMemo, useState, useEffect} from "react";
+import React, {useMemo, useState, useEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
 import {
   LayoutDashboard, ArrowLeftRight, CreditCard, CircleDollarSign,
   CalendarClock, Bell, ListTodo, Bot, Plus, TrendingUp, TrendingDown,
   WalletCards, CheckCircle2, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
-  Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown
+  Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal } from "./lib/storage";
+import { pdfjsLib } from "./lib/pdf";
+import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import Auth from "./Auth";
 
 const initialTransactions = [
@@ -237,8 +239,8 @@ function App({session}){
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Quero fazer" && <Todos entity={todos}/>}
-      {page==="Livros Lidos" && <BooksList entity={books} status="lido"/>}
-      {page==="Livros Para Ler" && <BooksList entity={books} status="quero_ler"/>}
+      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
+      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
 
       {showAdd && <div className="modalBack"><form className="modal" onSubmit={addTransaction}>
         <div className="modalHead"><h2>Nova movimentação</h2><button type="button" onClick={()=>setShowAdd(false)}><X/></button></div>
@@ -410,32 +412,214 @@ function Birthdays({entity}){
   </div>
 }
 
-function BooksList({entity,status}){
-  const {data,add,remove,update} = entity;
-  const filtered = data.filter(x=>x.status===status);
-  const [title,setTitle]=useState(""); const [author,setAuthor]=useState("");
-  const submit=()=>{
-    if(!title.trim()) return;
-    add({title,author,status});
-    setTitle("");setAuthor("");
-  };
-  const toggleStatus = (x)=>update(x.id, {status: status==="lido" ? "quero_ler" : "lido"});
-  return <div className="content">
-    <div className="panel">
-      <div className="inlineAdd">
-        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Título do livro"/>
-        <input value={author} onChange={e=>setAuthor(e.target.value)} placeholder="Autor (opcional)"/>
-        <button onClick={submit}><Plus/></button>
+const coverCache = new Map();
+
+function BookCoverThumb({ book }) {
+  const [src, setSrc] = useState(coverCache.get(book.file_path) || null);
+  useEffect(() => {
+    let active = true;
+    if (!book.file_path || coverCache.has(book.file_path)) return;
+    (async () => {
+      try {
+        const blob = await downloadBookFile(book.file_path);
+        const buf = await blob.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const page = await pdf.getPage(1);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = 260 / baseViewport.width;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        coverCache.set(book.file_path, dataUrl);
+        if (active) setSrc(dataUrl);
+      } catch (e) {
+        console.error("Não foi possível gerar a capa:", e);
+      }
+    })();
+    return () => { active = false; };
+  }, [book.file_path]);
+  return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
+}
+
+function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete }) {
+  const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
+  return (
+    <div className="bookTile">
+      <div className="bookCoverWrap" onClick={onOpen}>
+        <BookCoverThumb book={book}/>
+        <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
+        {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+          {status==="lido"
+            ? <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>
+            : <button onClick={onMarkRead}>Marcar como lido</button>}
+          <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+        </div>}
       </div>
-      {filtered.map(x=><div className="row reminder" key={x.id}>
-        <div className="rowIcon">{status==="lido" ? <BookCheck size={18}/> : <BookMarked size={18}/>}</div>
-        <div><b>{x.title}</b>{x.author && <small>{x.author}</small>}</div>
-        <button className="ghost" onClick={()=>toggleStatus(x)}>{status==="lido" ? "Mover p/ quero ler" : "Marcar como lido"}</button>
-        <button onClick={()=>remove(x.id)}><Trash2 size={16}/></button>
-      </div>)}
-      {filtered.length===0 && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
+      <b className="bookTitle">{book.title}</b>
+      <div className="progress"><i style={{width:progress+"%"}}/></div>
+      <small className="bookProgressLabel">{progress}%</small>
     </div>
-  </div>
+  );
+}
+
+function PdfReader({ book, onClose, onProgress }) {
+  const [pdf, setPdf] = useState(null);
+  const [pageNum, setPageNum] = useState(book.current_page || 1);
+  const [numPages, setNumPages] = useState(book.total_pages || 0);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const blob = await downloadBookFile(book.file_path);
+        const buf = await blob.arrayBuffer();
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        if (!active) return;
+        setPdf(doc);
+        setNumPages(doc.numPages);
+        setLoading(false);
+      } catch (e) {
+        console.error(e);
+        if (active) { setErr("Não foi possível abrir esse PDF."); setLoading(false); }
+      }
+    })();
+    return () => { active = false; };
+  }, [book.file_path]);
+
+  useEffect(() => {
+    if (!pdf) return;
+    let active = true;
+    (async () => {
+      const page = await pdf.getPage(pageNum);
+      const containerWidth = containerRef.current?.clientWidth || 800;
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(2.2, Math.max(0.3, (containerWidth - 24) / baseViewport.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = canvasRef.current;
+      if (!canvas || !active) return;
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    })();
+    return () => { active = false; };
+  }, [pdf, pageNum]);
+
+  const goTo = (n) => {
+    const clamped = Math.max(1, Math.min(numPages || 1, n));
+    setPageNum(clamped);
+    onProgress(book.id, clamped);
+  };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "ArrowRight") goTo(pageNum + 1);
+      if (e.key === "ArrowLeft") goTo(pageNum - 1);
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageNum, numPages]);
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <div className="readerModal" onClick={(e)=>e.stopPropagation()}>
+        <div className="readerHead"><b>{book.title}</b><button onClick={onClose}><X size={18}/></button></div>
+        <div className="readerBody" ref={containerRef}>
+          {loading && <p className="readerHint">Abrindo PDF...</p>}
+          {err && <p className="readerHint">{err}</p>}
+          {!loading && !err && <canvas ref={canvasRef} className="readerCanvas" onClick={()=>goTo(pageNum+1)}/>}
+        </div>
+        <div className="readerNav">
+          <button className="ghost" onClick={()=>goTo(pageNum-1)} disabled={pageNum<=1}>‹ Anterior</button>
+          <span>{numPages ? `Página ${pageNum} de ${numPages}` : "..."}</span>
+          <button className="ghost" onClick={()=>goTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookShelf({ entity, status, session }) {
+  const { data, add, remove, update, cloud } = entity;
+  const filtered = data.filter(x => x.status === status);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [readingBook, setReadingBook] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+  const progressTimer = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!cloud) { alert('Enviar PDFs precisa de sincronização ativa (Supabase) — veja o README.'); return; }
+    try {
+      setUploading(true);
+      const buf = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const totalPages = doc.numPages;
+      const id = crypto.randomUUID();
+      const defaultTitle = file.name.replace(/\.pdf$/i, "");
+      const title = window.prompt("Título do livro:", defaultTitle) || defaultTitle;
+      const filePath = await uploadBookFile(session.user.id, id, file);
+      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1 });
+    } catch (err) {
+      console.error(err);
+      alert("Não foi possível enviar o PDF: " + (err.message || err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onProgress = (bookId, page) => {
+    clearTimeout(progressTimer.current);
+    progressTimer.current = setTimeout(() => { update(bookId, { current_page: page }); }, 400);
+  };
+
+  const handleDelete = async (book) => {
+    if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
+    setOpenMenuId(null);
+    await remove(book.id);
+    if (book.file_path) deleteBookFile(book.file_path);
+  };
+
+  return (
+    <div className="content">
+      <div className="shelf" onClick={()=>setOpenMenuId(null)}>
+        <div className="bookTile addTile" onClick={()=>fileInputRef.current?.click()}>
+          <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
+          <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
+        </div>
+        {filtered.map(book => (
+          <BookTile
+            key={book.id}
+            book={book}
+            status={status}
+            menuOpen={openMenuId===book.id}
+            onToggleMenu={()=>setOpenMenuId(id=>id===book.id?null:book.id)}
+            onOpen={()=>setReadingBook(book)}
+            onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"});}}
+            onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, {status:"quero_ler"});}}
+            onDelete={()=>handleDelete(book)}
+          />
+        ))}
+      </div>
+      {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
+      {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
+      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress}/>}
+    </div>
+  );
 }
 
 function Todos({entity}){

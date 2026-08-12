@@ -45,7 +45,7 @@ export default defineConfig({
       },
       workbox: {
         // Garante que o app abra offline depois da primeira visita
-        globPatterns: ["**/*.{js,css,html,png,svg,ico}"],
+        globPatterns: ["**/*.{js,mjs,css,html,png,svg,ico}"],
         runtimeCaching: [
           {
             // Chamadas ao Supabase sempre vão para a rede (dados financeiros atualizados)

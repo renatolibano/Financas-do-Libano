@@ -76,6 +76,30 @@ alter table reminders enable row level security;
 alter table todos enable row level security;
 alter table books enable row level security;
 
+-- Atualização: estante de PDFs
+-- Adiciona as colunas usadas pelo leitor (arquivo, total de páginas, página atual)
+-- e cria o bucket de armazenamento privado onde os PDFs ficam guardados.
+alter table books add column if not exists file_path text;
+alter table books add column if not exists total_pages int;
+alter table books add column if not exists current_page int not null default 1;
+
+insert into storage.buckets (id, name, public)
+values ('books', 'books', false)
+on conflict (id) do nothing;
+
+drop policy if exists "select_own_book_files" on storage.objects;
+drop policy if exists "insert_own_book_files" on storage.objects;
+drop policy if exists "update_own_book_files" on storage.objects;
+drop policy if exists "delete_own_book_files" on storage.objects;
+
+create policy "select_own_book_files" on storage.objects for select
+  using (bucket_id = 'books' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "insert_own_book_files" on storage.objects for insert
+  with check (bucket_id = 'books' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_book_files" on storage.objects for update
+  using (bucket_id = 'books' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_book_files" on storage.objects for delete
+  using (bucket_id = 'books' and (storage.foldername(name))[1] = auth.uid()::text);
 -- Uma política por tabela: cada usuário só acessa suas próprias linhas
 -- (idempotente — pode rodar este script mais de uma vez sem erro)
 do $$

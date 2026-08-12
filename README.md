@@ -17,7 +17,7 @@ Sem nenhuma configuração extra, o app funciona em **modo local**: os dados fic
 O app já vem pronto para usar o [Supabase](https://supabase.com) (gratuito) como backend. Enquanto você não configurar, ele continua funcionando 100% localmente — nada quebra.
 
 1. Crie uma conta em supabase.com e um novo projeto (gratuito).
-2. No painel do projeto, vá em **SQL Editor**, cole o conteúdo do arquivo `schema.sql` (na raiz deste projeto) e clique em **Run**. Isso cria as tabelas e as regras de segurança (cada pessoa só vê seus próprios dados). *Se você já tinha configurado a sincronização antes, rode o `schema.sql` de novo — ele é seguro de rodar mais de uma vez e vai criar a nova tabela `books` (usada pela aba Livros).*
+2. No painel do projeto, vá em **SQL Editor**, cole o conteúdo do arquivo `schema.sql` (na raiz deste projeto) e clique em **Run**. Isso cria as tabelas e as regras de segurança (cada pessoa só vê seus próprios dados). *Se você já tinha configurado a sincronização antes, rode o `schema.sql` de novo — ele é seguro de rodar mais de uma vez, e agora também cria o bucket de armazenamento `books` usado pela estante de PDFs.*
 3. Vá em **Project Settings → API** e copie a **Project URL** e a **anon public key**.
 4. Nesta pasta, copie `.env.example` para um novo arquivo chamado `.env` e preencha:
    ```
@@ -66,6 +66,7 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
 - Dados salvos localmente (funciona offline).
 - Sincronização real entre dispositivos via Supabase (login por e-mail/senha), quando configurado.
 - Análise de gastos por IA real (Claude, via Supabase Edge Function), quando configurada.
+- Estante virtual de livros em PDF, com leitor embutido, capa gerada automaticamente a partir do PDF, e progresso de leitura salvo por livro (retoma exatamente na página em que parou). Precisa de sincronização ativa (os arquivos ficam no Supabase Storage).
 - Layout adaptado para celular e PC.
 
 ## Próximas etapas para produção
