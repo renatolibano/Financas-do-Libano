@@ -795,8 +795,53 @@ function NoteEditor({ note, onClose, onSave }) {
     scheduleSave({ title: v });
   };
 
+  const BULLET = "•  ";
+
+  const handleKeyDown = (e) => {
+    if (e.key !== "Enter") return;
+    const el = e.target;
+    const v = el.value;
+    const cursor = el.selectionStart;
+    const lineStart = v.lastIndexOf("\n", cursor - 1) + 1;
+    const currentLine = v.slice(lineStart, cursor);
+
+    if (currentLine.startsWith(BULLET)) {
+      e.preventDefault();
+      const restOfLine = currentLine.slice(BULLET.length);
+      let newValue, newCursor;
+      if (restOfLine.trim() === "") {
+        // Linha só com a bolinha vazia: sai da lista em vez de criar outra
+        newValue = v.slice(0, lineStart) + v.slice(cursor);
+        newCursor = lineStart;
+      } else {
+        newValue = v.slice(0, cursor) + "\n" + BULLET + v.slice(cursor);
+        newCursor = cursor + 1 + BULLET.length;
+      }
+      setContent(newValue);
+      scheduleSave({ content: newValue });
+      requestAnimationFrame(() => {
+        el.selectionStart = el.selectionEnd = newCursor;
+      });
+    }
+  };
+
   const handleContentChange = (e) => {
-    const v = e.target.value;
+    const el = e.target;
+    let v = el.value;
+    const cursor = el.selectionStart;
+
+    // Se o usuário acabou de digitar "- " no início de uma linha, vira "• "
+    if (cursor >= 2 && v.slice(cursor - 2, cursor) === "- ") {
+      const lineStart = v.lastIndexOf("\n", cursor - 3) + 1;
+      const linePrefix = v.slice(lineStart, cursor - 2);
+      if (linePrefix === "") {
+        v = v.slice(0, cursor - 2) + BULLET + v.slice(cursor);
+        requestAnimationFrame(() => {
+          el.selectionStart = el.selectionEnd = cursor + 1;
+        });
+      }
+    }
+
     setContent(v);
     scheduleSave({ content: v });
   };
@@ -819,6 +864,7 @@ function NoteEditor({ note, onClose, onSave }) {
             className="noteTextarea"
             value={content}
             onChange={handleContentChange}
+            onKeyDown={handleKeyDown}
             placeholder="Escreva o que quiser..."
           />
         </div>
