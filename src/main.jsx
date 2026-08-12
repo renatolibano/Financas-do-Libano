@@ -58,6 +58,54 @@ const initialCardPurchases = [
 
 const money = n => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
+// dd/mm ou dd/mm/aaaa -> Date. Sem ano informado, usa o ano atual (ou o próximo, se a data já passou este ano).
+function parseReminderDate(dateStr){
+  if(!dateStr) return null;
+  const parts = String(dateStr).split("/").map(p=>parseInt(p,10));
+  if(parts.length<2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) return null;
+  const [day, month, yearPart] = parts;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let year = yearPart || today.getFullYear();
+  let d = new Date(year, month-1, day);
+  if(!yearPart && d < today) d = new Date(year+1, month-1, day);
+  return d;
+}
+
+function daysUntil(dateStr){
+  const d = parseReminderDate(dateStr);
+  if(!d) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.round((d-today)/86400000);
+}
+
+function urgencyClass(days){
+  if(days===null || days===undefined) return "gray";
+  if(days<=7) return "red";
+  if(days<=20) return "yellow";
+  return "green";
+}
+
+function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children}){
+  const cls = urgencyClass(days);
+  return <div className={"reminderCard "+cls}>
+    <div className="reminderCardTop">
+      <div className="reminderCardLeft">
+        <div className="reminderCardIcon">{icon}</div>
+        <div><b>{title}</b>{subtitle && <small>{subtitle}</small>}</div>
+      </div>
+      <div className="reminderCardRight">
+        {onToggleMenu && <button className="reminderCardMenu" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={18}/></button>}
+        <div className="reminderCardCount">
+          <strong>{days!==null && days!==undefined ? Math.max(days,0) : "—"}</strong>
+          <small>{days===1?"DIA RESTANTE":"DIAS RESTANTES"}</small>
+        </div>
+      </div>
+    </div>
+    {menuOpen && <div className="reminderCardMenuPop" onClick={e=>e.stopPropagation()}>{menuContent}</div>}
+    {children}
+  </div>
+}
+
 function useSession(){
   const [session,setSession] = useState(null);
   const [checking,setChecking] = useState(cloudConfigured);
@@ -315,6 +363,7 @@ function Fixed({entity,total}){
 function Debts({entity,remaining}){
   const {data,add,remove,update} = entity;
   const [name,setName]=useState(""); const [total,setTotal]=useState(""); const [next,setNext]=useState("");
+  const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
     if(!name.trim()||!total) return;
     add({name,total:Number(total),paid:0,next:next||"—"});
@@ -336,12 +385,28 @@ function Debts({entity,remaining}){
         <button onClick={submit}><Plus/></button>
       </div>
     </div>
-    {data.map(x=><div className="panel debt" key={x.id}>
-      <div className="panelTitle"><div><h2>{x.name}</h2><span>Próximo pagamento: {x.next}</span></div><b>{Math.round(x.paid/x.total*100)}%</b></div>
-      <div className="progress"><i style={{width:(x.paid/x.total*100)+"%"}}/></div>
-      <div className="debtNumbers"><span>Pago <b>{money(x.paid)}</b></span><span>Restante <b>{money(x.total-x.paid)}</b></span></div>
-      <div className="debtActions"><button className="ghost" onClick={()=>pay(x)}>Registrar pagamento</button><button className="ghost danger" onClick={()=>remove(x.id)}><Trash2 size={14}/> Excluir</button></div>
-    </div>)}
+    <div className="reminderGrid">
+      {data.map(x=>{
+        const pct = x.total ? Math.round(x.paid/x.total*100) : 0;
+        return <ReminderCard
+          key={x.id}
+          icon={<CircleDollarSign size={18}/>}
+          title={x.name}
+          subtitle={"Próximo pagamento: "+x.next}
+          days={daysUntil(x.next)}
+          menuOpen={openMenuId===x.id}
+          onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
+          menuContent={<>
+            <button onClick={()=>{setOpenMenuId(null);pay(x);}}>Registrar pagamento</button>
+            <button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>
+          </>}
+        >
+          <div className="progress" style={{marginTop:14}}><i style={{width:pct+"%"}}/></div>
+          <div className="debtNumbers"><span>Pago <b>{money(x.paid)}</b></span><span>Restante <b>{money(x.total-x.paid)}</b></span><span>{pct}%</span></div>
+        </ReminderCard>;
+      })}
+      {data.length===0 && <p className="emptyHint">Nenhuma dívida cadastrada ainda.</p>}
+    </div>
   </div>
 }
 
@@ -371,6 +436,7 @@ function CommonReminders({entity}){
   const {data,add,remove} = entity;
   const filtered = data.filter(x=>x.kind!=="Aniversário");
   const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro");
+  const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
     if(!title.trim()||!date) return;
     add({title,date,kind});
@@ -384,7 +450,18 @@ function CommonReminders({entity}){
         <select value={kind} onChange={e=>setKind(e.target.value)}><option>Financeiro</option><option>Outros</option></select>
         <button onClick={submit}><Plus/></button>
       </div>
-      {filtered.map(x=><div className="row reminder" key={x.id}><div className="rowIcon"><Bell size={18}/></div><div><b>{x.title}</b><small>{x.kind}</small></div><strong>{x.date}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}
+    </div>
+    <div className="reminderGrid">
+      {filtered.map(x=><ReminderCard
+        key={x.id}
+        icon={<Bell size={18}/>}
+        title={x.title}
+        subtitle={x.kind+" · "+x.date}
+        days={daysUntil(x.date)}
+        menuOpen={openMenuId===x.id}
+        onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
+        menuContent={<button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>}
+      />)}
       {filtered.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
     </div>
   </div>
@@ -394,6 +471,7 @@ function Birthdays({entity}){
   const {data,add,remove} = entity;
   const filtered = data.filter(x=>x.kind==="Aniversário");
   const [title,setTitle]=useState(""); const [date,setDate]=useState("");
+  const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
     if(!title.trim()||!date) return;
     add({title,date,kind:"Aniversário"});
@@ -406,7 +484,18 @@ function Birthdays({entity}){
         <input value={date} onChange={e=>setDate(e.target.value)} placeholder="Data (dd/mm)"/>
         <button onClick={submit}><Plus/></button>
       </div>
-      {filtered.map(x=><div className="row reminder" key={x.id}><div className="rowIcon"><Cake size={18}/></div><div><b>{x.title}</b><small>Aniversário</small></div><strong>{x.date}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}
+    </div>
+    <div className="reminderGrid">
+      {filtered.map(x=><ReminderCard
+        key={x.id}
+        icon={<Cake size={18}/>}
+        title={x.title}
+        subtitle={"Aniversário · "+x.date}
+        days={daysUntil(x.date)}
+        menuOpen={openMenuId===x.id}
+        onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
+        menuContent={<button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>}
+      />)}
       {filtered.length===0 && <p className="emptyHint">Nenhum aniversário cadastrado ainda.</p>}
     </div>
   </div>
