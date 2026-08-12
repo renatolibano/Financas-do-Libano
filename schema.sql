@@ -67,6 +67,15 @@ create table if not exists books (
   created_at timestamptz not null default now()
 );
 
+-- Atualização: aba Notas (estilo Samsung Notes)
+create table if not exists notes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  content text,
+  created_at timestamptz not null default now()
+);
+
 -- Ativa RLS em todas as tabelas
 alter table transactions enable row level security;
 alter table fixed_payments enable row level security;
@@ -75,6 +84,7 @@ alter table card_purchases enable row level security;
 alter table reminders enable row level security;
 alter table todos enable row level security;
 alter table books enable row level security;
+alter table notes enable row level security;
 
 -- Atualização: estante de PDFs
 -- Adiciona as colunas usadas pelo leitor (arquivo, total de páginas, página atual)
@@ -106,7 +116,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['transactions','fixed_payments','debts','card_purchases','reminders','todos','books']
+  foreach t in array array['transactions','fixed_payments','debts','card_purchases','reminders','todos','books','notes']
   loop
     execute format('drop policy if exists "select_own_%1$s" on %1$s', t);
     execute format('drop policy if exists "insert_own_%1$s" on %1$s', t);

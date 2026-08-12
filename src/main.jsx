@@ -2,8 +2,8 @@ import React, {useMemo, useState, useEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
 import {
   LayoutDashboard, ArrowLeftRight, CreditCard, CircleDollarSign,
-  CalendarClock, Bell, ListTodo, Bot, Plus, TrendingUp, TrendingDown,
-  WalletCards, CheckCircle2, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
+  CalendarClock, Bell, StickyNote, Bot, Plus, TrendingUp, TrendingDown,
+  WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical
 } from "lucide-react";
 import "./styles.css";
@@ -31,10 +31,9 @@ const initialDebts = [
   {id:1, name:"Celular", total:600, paid:480, next:"15/08"},
 ];
 
-const initialTodos = [
-  {id:1, text:"Comprar um relógio", done:false},
-  {id:2, text:"Fazer um curso", done:false},
-  {id:3, text:"Viajar para São Paulo", done:true},
+const initialNotes = [
+  {id:1, title:"Ideias para o fim de semana", content:"Rever o orçamento de viagem e escolher um restaurante novo para experimentar."},
+  {id:2, title:"Lista de compras", content:"Arroz, feijão, café, frutas."},
 ];
 
 const initialReminders = [
@@ -139,7 +138,7 @@ function App({session}){
   const transactions = useEntity("transactions", initialTransactions, session, "desc");
   const fixed = useEntity("fixed_payments", initialFixed, session);
   const debts = useEntity("debts", initialDebts, session);
-  const todos = useEntity("todos", initialTodos, session);
+  const notes = useEntity("notes", initialNotes, session);
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
   const books = useEntity("books", initialBooks, session);
@@ -207,7 +206,7 @@ function App({session}){
       { key:"Lembretes Comuns", label:"Lembretes comuns", icon:Bell },
       { key:"Aniversários", icon:Cake },
     ]},
-    { type:"single", key:"Quero fazer", icon:ListTodo },
+    { type:"single", key:"Notas", icon:StickyNote },
     { type:"group", key:"livros", label:"Livros", icon:BookOpen, children:[
       { key:"Livros Lidos", label:"Livros que já li", icon:BookCheck },
       { key:"Livros Para Ler", label:"Livros que quero ler", icon:BookMarked },
@@ -279,14 +278,14 @@ function App({session}){
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
       <header><div><h1>{page}</h1><p>Terça-feira, 11 de agosto</p></div><button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button></header>
 
-      {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} todos={todos.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable}/>}
+      {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
-      {page==="Quero fazer" && <Todos entity={todos}/>}
+      {page==="Notas" && <Notes entity={notes}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
 
@@ -302,7 +301,7 @@ function App({session}){
   </div>
 }
 
-function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,reminders,todos,setPage,askAI,aiInsight,aiLoading,aiError,aiAvailable}){
+function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,reminders,notes,setPage,askAI,aiInsight,aiLoading,aiError,aiAvailable}){
  return <div className="content">
    <section className="stats">
     <Card title="Saldo atual" value={money(balance)} icon={<WalletCards/>} big/>
@@ -329,7 +328,7 @@ function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,rem
    </section>
    <section className="grid3">
     <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>{reminders.slice(0,3).map(r=><div className="row" key={r.id}><div className="rowIcon"><Bell size={17}/></div><div><b>{r.title}</b><small>{r.kind}</small></div><strong>{r.date}</strong></div>)}</div>
-    <div className="panel"><div className="panelTitle"><h2>Quero fazer</h2><button onClick={()=>setPage("Quero fazer")}>Ver todos</button></div>{todos.slice(0,3).map(t=><div className="todoRow" key={t.id}><CheckCircle2 className={t.done?"done":""}/><span className={t.done?"doneText":""}>{t.text}</span></div>)}</div>
+    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row" key={n.id}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{n.content?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
  </div>
@@ -711,17 +710,121 @@ function BookShelf({ entity, status, session }) {
   );
 }
 
-function Todos({entity}){
-  const {data,add,remove,update} = entity;
-  const [text,setText]=useState("");
-  const submit=()=>{if(!text.trim())return;add({text,done:false});setText("")};
-  return <div className="content"><div className="panel">
-    <div className="todoAdd"><input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="Algo que você quer fazer..."/><button onClick={submit}><Plus/></button></div>
-    {data.map(t=><div className="todoRow bigTodo" key={t.id}>
-      <div className="todoMain" onClick={()=>update(t.id, {done:!t.done})}><CheckCircle2 className={t.done?"done":""}/><span className={t.done?"doneText":""}>{t.text}</span></div>
-      <button onClick={()=>remove(t.id)}><Trash2 size={15}/></button>
-    </div>)}
-  </div></div>
+function Notes({entity}){
+  const { data, add, remove, update } = entity;
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [activeNote, setActiveNote] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  const createNote = async () => {
+    const title = window.prompt("Título da nota:", "Nova nota");
+    if (!title) return;
+    setCreating(true);
+    try {
+      await add({ title, content: "" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (note) => {
+    if (!confirm(`Excluir "${note.title}"?`)) return;
+    setOpenMenuId(null);
+    await remove(note.id);
+    if (activeNote?.id === note.id) setActiveNote(null);
+  };
+
+  const preview = (content) => !content ? "Nota vazia" : (content.length > 90 ? content.slice(0, 90) + "…" : content);
+
+  return (
+    <div className="content">
+      <div className="notesGrid" onClick={() => setOpenMenuId(null)}>
+        <div className="noteTile addTile" onClick={createNote}>
+          <div className="noteCoverWrap addCover">
+            {creating ? <span>Criando...</span> : <><Plus size={26}/><span>Nova nota</span></>}
+          </div>
+        </div>
+        {data.map(note => (
+          <div className="noteTile" key={note.id}>
+            <div className="noteCoverWrap" onClick={() => setActiveNote(note)}>
+              <b className="noteTitle">{note.title}</b>
+              <p className="notePreview">{preview(note.content)}</p>
+              <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === note.id ? null : note.id); }}>
+                <MoreVertical size={15}/>
+              </button>
+              {openMenuId === note.id && (
+                <div className="bookMenu" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => { setOpenMenuId(null); setActiveNote(note); }}><StickyNote size={14}/> Abrir</button>
+                  <button className="danger" onClick={() => handleDelete(note)}><Trash2 size={14}/> Excluir</button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {data.length === 0 && <p className="emptyHint">Nenhuma nota por aqui ainda.</p>}
+      {activeNote && (
+        <NoteEditor
+          note={activeNote}
+          onClose={() => setActiveNote(null)}
+          onSave={(patch) => update(activeNote.id, patch)}
+        />
+      )}
+    </div>
+  );
+}
+
+function NoteEditor({ note, onClose, onSave }) {
+  const [title, setTitle] = useState(note.title);
+  const [content, setContent] = useState(note.content || "");
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    setTitle(note.title);
+    setContent(note.content || "");
+  }, [note.id]);
+
+  const scheduleSave = (patch) => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => onSave(patch), 600);
+  };
+
+  const handleTitleChange = (e) => {
+    const v = e.target.value;
+    setTitle(v);
+    scheduleSave({ title: v });
+  };
+
+  const handleContentChange = (e) => {
+    const v = e.target.value;
+    setContent(v);
+    scheduleSave({ content: v });
+  };
+
+  const handleClose = () => {
+    clearTimeout(saveTimer.current);
+    onSave({ title: title.trim() || "Sem título", content });
+    onClose();
+  };
+
+  return (
+    <div className="readerBack">
+      <div className="readerModal noteModal">
+        <div className="readerHead">
+          <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Título da nota" autoFocus/>
+          <button onClick={handleClose}><X/></button>
+        </div>
+        <div className="noteEditorBody">
+          <textarea
+            className="noteTextarea"
+            value={content}
+            onChange={handleContentChange}
+            placeholder="Escreva o que quiser..."
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 createRoot(document.getElementById("root")).render(<Root/>);
