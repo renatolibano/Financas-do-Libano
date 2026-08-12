@@ -93,6 +93,10 @@ alter table books add column if not exists file_path text;
 alter table books add column if not exists total_pages int;
 alter table books add column if not exists current_page int not null default 1;
 
+-- Atualização: anotações por livro (aba Livros)
+-- Cada livro passa a ter seu próprio campo de notas, editado ao lado do PDF no leitor.
+alter table books add column if not exists notes text;
+
 insert into storage.buckets (id, name, public)
 values ('books', 'books', false)
 on conflict (id) do nothing;
@@ -128,3 +132,31 @@ begin
     execute format('create policy "delete_own_%1$s" on %1$s for delete using (auth.uid() = user_id)', t);
   end loop;
 end $$;
+
+-- Novos recursos: orçamento, metas e pagamentos recorrentes
+create table if not exists budgets (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  cat text not null, limit_value numeric not null default 0, created_at timestamptz not null default now()
+);
+alter table budgets add column if not exists limit_value numeric not null default 0;
+create table if not exists goals (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null, target numeric not null, saved numeric not null default 0, created_at timestamptz not null default now()
+);
+create table if not exists recurring_payments (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null, value numeric not null, cat text, day int not null check(day between 1 and 31), type text not null default 'out' check(type in ('in','out')), active boolean not null default true, created_at timestamptz not null default now()
+);
+alter table budgets enable row level security;
+alter table goals enable row level security;
+alter table recurring_payments enable row level security;
+do $$ declare t text; begin foreach t in array array['budgets','goals','recurring_payments'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

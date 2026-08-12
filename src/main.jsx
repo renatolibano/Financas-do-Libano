@@ -4,7 +4,8 @@ import {
   LayoutDashboard, ArrowLeftRight, CreditCard, CircleDollarSign,
   CalendarClock, Bell, StickyNote, Bot, Plus, TrendingUp, TrendingDown,
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
-  Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical
+  Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
+  Bold, Italic, Underline, AlignCenter, List, ListOrdered, Smile, Target, PiggyBank, Repeat2
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -142,11 +143,21 @@ function App({session}){
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
   const books = useEntity("books", initialBooks, session);
+  const budgets = useEntity("budgets", [], session);
+  const goals = useEntity("goals", [], session);
+  const recurring = useEntity("recurring_payments", [], session);
   const [showAdd,setShowAdd] = useState(false);
+  const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
 
-  const income = useMemo(()=>transactions.data.filter(x=>x.type==="in").reduce((a,b)=>a+b.value,0),[transactions.data]);
-  const expense = useMemo(()=>transactions.data.filter(x=>x.type==="out").reduce((a,b)=>a+b.value,0),[transactions.data]);
-  const balance = income-expense;
+  const monthTransactions = useMemo(()=>transactions.data.filter(x=>{
+    const d=String(x.date||"");
+    if(/^\d{4}-\d{2}/.test(d)) return d.slice(0,7)===selectedMonth;
+    const [dd,mm]=d.split("/");
+    return mm===selectedMonth.slice(5);
+  }),[transactions.data,selectedMonth]);
+  const income = useMemo(()=>monthTransactions.filter(x=>x.type==="in").reduce((a,b)=>a+b.value,0),[monthTransactions]);
+  const expense = useMemo(()=>monthTransactions.filter(x=>x.type==="out").reduce((a,b)=>a+b.value,0),[monthTransactions]);
+  const balance = useMemo(()=>transactions.data.filter(x=>x.type==="in").reduce((a,b)=>a+b.value,0)-transactions.data.filter(x=>x.type==="out").reduce((a,b)=>a+b.value,0),[transactions.data]);
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);
   const cardBill = cardPurchases.data.reduce((a,b)=>a+b.value,0);
@@ -201,6 +212,9 @@ function App({session}){
       { key:"Pagamentos Fixos", icon:CalendarClock },
       { key:"Dívidas", icon:CircleDollarSign },
       { key:"Cartões", icon:CreditCard },
+      { key:"Orçamento", icon:PiggyBank },
+      { key:"Metas", icon:Target },
+      { key:"Recorrentes", icon:Repeat2 },
     ]},
     { type:"group", key:"lembretes", label:"Lembretes", icon:Bell, children:[
       { key:"Lembretes Comuns", label:"Lembretes comuns", icon:Bell },
@@ -276,13 +290,16 @@ function App({session}){
     </aside>
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>Terça-feira, 11 de agosto</p></div><button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button></header>
 
-      {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable}/>}
+      {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
+      {page==="Orçamento" && <Budgets entity={budgets} transactions={monthTransactions} month={selectedMonth}/>}
+      {page==="Metas" && <Goals entity={goals}/>}
+      {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Notas" && <Notes entity={notes}/>}
@@ -301,18 +318,18 @@ function App({session}){
   </div>
 }
 
-function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,reminders,notes,setPage,askAI,aiInsight,aiLoading,aiError,aiAvailable}){
+function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,reminders,notes,setPage,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals}){
  return <div className="content">
-   <section className="stats">
+   <div className="monthToolbar"><label>Mês analisado <input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><span>{budgets.length} orçamento(s) · {goals.length} meta(s)</span></div><section className="stats">
     <Card title="Saldo atual" value={money(balance)} icon={<WalletCards/>} big/>
     <Card title="Entradas" value={money(income)} icon={<TrendingUp/>} positive/>
-    <Card title="Gastos" value={money(expense)} icon={<TrendingDown/>}/>
+    <Card title="Gastos" value={money(expense)} icon={<TrendingDown/>} negative/>
     <Card title="Fatura do cartão" value={money(cardBill)} icon={<CreditCard/>}/>
    </section>
    <section className="grid2">
-    <div className="panel"><div className="panelTitle"><h2>Resumo do mês</h2><span>Agosto</span></div>
+    <div className="panel"><div className="panelTitle"><h2>Resumo do mês</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div>
       <div className="chart"><div className="bars">{[45,60,35,72,55,83,65,91,58,76,48,68].map((h,i)=><div key={i} className="barWrap"><div className="bar" style={{height:h+"%"}}></div><small>{i+1}</small></div>)}</div></div>
-      <div className="legend"><span><i/>Entradas <b>{money(income)}</b></span><span><i/>Saídas <b>{money(expense)}</b></span></div>
+      <div className="legend"><span className="in"><i/>Entradas <b>{money(income)}</b></span><span className="out"><i/>Saídas <b>{money(expense)}</b></span></div>
     </div>
     <div className="panel ai"><div className="aiHead"><div className="aiIcon"><Bot/></div><div><h2>Análise da IA</h2><small>{aiAvailable?"Assistente financeiro":"Disponível com sincronização ativa"}</small></div></div>
       {aiInsight
@@ -328,14 +345,14 @@ function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,rem
    </section>
    <section className="grid3">
     <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>{reminders.slice(0,3).map(r=><div className="row" key={r.id}><div className="rowIcon"><Bell size={17}/></div><div><b>{r.title}</b><small>{r.kind}</small></div><strong>{r.date}</strong></div>)}</div>
-    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row" key={n.id}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{n.content?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
+    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row" key={n.id}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
  </div>
 }
 
-function Card({title,value,icon,positive,big}){return <div className={"stat "+(big?"featured":"")}><div className="statIcon">{icon}</div><small>{title}</small><strong className={positive?"positive":""}>{value}</strong></div>}
-function Transactions({data,onDelete}){return <div className="content"><div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}</small></div><strong className={x.type==="in"?"positive":""}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}</div></div>}
+function Card({title,value,icon,positive,negative,big}){return <div className={"stat "+(big?"featured":"")}><div className="statIcon">{icon}</div><small>{title}</small><strong className={positive?"positive":(negative?"negative":"")}>{value}</strong></div>}
+function Transactions({data,onDelete}){return <div className="content"><div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}</div></div>}
 
 function Fixed({entity,total}){
   const {data,add,remove} = entity;
@@ -554,14 +571,17 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
   );
 }
 
-function PdfReader({ book, onClose, onProgress }) {
+function PdfReader({ book, onClose, onProgress, onNotesChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
   const [numPages, setNumPages] = useState(book.total_pages || 0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [notesOpen, setNotesOpen] = useState(false);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const notesBodyRef = useRef(null);
+  const notesSaveTimer = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -608,25 +628,96 @@ function PdfReader({ book, onClose, onProgress }) {
     onProgress(book.id, clamped);
   };
 
+  // Carrega a nota salva desse livro sempre que o painel de notas é aberto
+  useEffect(() => {
+    if (notesOpen && notesBodyRef.current) {
+      notesBodyRef.current.innerHTML = book.notes || "";
+    }
+  }, [notesOpen]);
+
+  const flushNotes = () => {
+    clearTimeout(notesSaveTimer.current);
+    if (notesBodyRef.current) onNotesChange(book.id, notesBodyRef.current.innerHTML || "");
+  };
+
+  const scheduleNotesSave = () => {
+    clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = setTimeout(() => {
+      onNotesChange(book.id, notesBodyRef.current?.innerHTML || "");
+    }, 600);
+  };
+
+  const execNote = (command) => {
+    notesBodyRef.current?.focus();
+    document.execCommand(command, false, null);
+    scheduleNotesSave();
+  };
+
+  const handleClose = () => {
+    if (notesOpen) flushNotes();
+    onClose();
+  };
+
+  const toggleNotes = () => {
+    setNotesOpen((o) => {
+      if (o) flushNotes(); // fechando o painel: salva o que estiver pendente
+      return !o;
+    });
+  };
+
   useEffect(() => {
     const handler = (e) => {
-      if (e.key === "ArrowRight") goTo(pageNum + 1);
-      if (e.key === "ArrowLeft") goTo(pageNum - 1);
-      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight" && !notesOpen) goTo(pageNum + 1);
+      if (e.key === "ArrowLeft" && !notesOpen) goTo(pageNum - 1);
+      if (e.key === "Escape") handleClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages]);
+  }, [pageNum, numPages, notesOpen]);
 
   return (
-    <div className="readerBack" onClick={onClose}>
-      <div className="readerModal" onClick={(e)=>e.stopPropagation()}>
-        <div className="readerHead"><b>{book.title}</b><button onClick={onClose}><X size={18}/></button></div>
-        <div className="readerBody" ref={containerRef}>
-          {loading && <p className="readerHint">Abrindo PDF...</p>}
-          {err && <p className="readerHint">{err}</p>}
-          {!loading && !err && <canvas ref={canvasRef} className="readerCanvas" onClick={()=>goTo(pageNum+1)}/>}
+    <div className="readerBack" onClick={handleClose}>
+      <div className={`readerModal${notesOpen ? " readerModalWide" : ""}`} onClick={(e)=>e.stopPropagation()}>
+        <div className="readerHead">
+          <b>{book.title}</b>
+          <div className="readerHeadActions">
+            <button className={`ghost${notesOpen ? " active" : ""}`} onClick={toggleNotes}>
+              <StickyNote size={15}/> <span>{notesOpen ? "Fechar notas" : "Notas"}</span>
+            </button>
+            <button onClick={handleClose}><X size={18}/></button>
+          </div>
+        </div>
+        <div className="readerMain">
+          <div className="readerBody" ref={containerRef}>
+            {loading && <p className="readerHint">Abrindo PDF...</p>}
+            {err && <p className="readerHint">{err}</p>}
+            {!loading && !err && <canvas ref={canvasRef} className="readerCanvas" onClick={()=>goTo(pageNum+1)}/>}
+          </div>
+          {notesOpen && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Minhas anotações</b><span>sobre "{book.title}"</span></div>
+              <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
+                <button title="Negrito" onClick={() => execNote("bold")}><Bold size={16}/></button>
+                <button title="Itálico" onClick={() => execNote("italic")}><Italic size={16}/></button>
+                <button title="Sublinhado" onClick={() => execNote("underline")}><Underline size={16}/></button>
+                <span className="noteToolDivider"/>
+                <button title="Lista com marcadores" onClick={() => execNote("insertUnorderedList")}><List size={16}/></button>
+                <button title="Lista numerada (1, 2, 3)" onClick={() => execNote("insertOrderedList")}><ListOrdered size={16}/></button>
+              </div>
+              <div className="notesPaneBody">
+                <div
+                  ref={notesBodyRef}
+                  className="noteTextarea noteRichBody"
+                  contentEditable
+                  suppressContentEditableWarning
+                  onInput={scheduleNotesSave}
+                  onBlur={flushNotes}
+                  data-placeholder="Escreva suas anotações sobre este livro..."
+                />
+              </div>
+            </div>
+          )}
         </div>
         <div className="readerNav">
           <button className="ghost" onClick={()=>goTo(pageNum-1)} disabled={pageNum<=1}>‹ Anterior</button>
@@ -675,6 +766,10 @@ function BookShelf({ entity, status, session }) {
     progressTimer.current = setTimeout(() => { update(bookId, { current_page: page }); }, 400);
   };
 
+  const onNotesChange = (bookId, content) => {
+    update(bookId, { notes: content });
+  };
+
   const handleDelete = async (book) => {
     if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
     setOpenMenuId(null);
@@ -705,9 +800,37 @@ function BookShelf({ entity, status, session }) {
       </div>
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
       {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
-      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress}/>}
+      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange}/>}
     </div>
   );
+}
+
+function stripHtml(html){
+  if (!html) return "";
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  return div.textContent || div.innerText || "";
+}
+
+
+function Budgets({entity,transactions,month}){
+  const {data,add,remove}=entity;
+  const [cat,setCat]=useState(""); const [limit,setLimit]=useState("");
+  const spent=(cat)=>transactions.filter(x=>x.type==="out" && x.cat===cat).reduce((a,b)=>a+b.value,0);
+  const submit=()=>{if(!cat.trim()||!limit)return; add({cat,limit_value:Number(limit)});setCat("");setLimit("");};
+  return <div className="content"><div className="panel"><div className="panelTitle"><h2>Orçamento mensal</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div><div className="inlineAdd"><input value={cat} onChange={e=>setCat(e.target.value)} placeholder="Categoria (ex.: Alimentação)"/><input value={limit} onChange={e=>setLimit(e.target.value)} type="number" step="0.01" min="0" placeholder="Limite mensal"/><button onClick={submit}><Plus/></button></div></div><div className="budgetGrid">{data.map(x=>{const s=spent(x.cat),pct=x.limit_value?Math.round(s/x.limit_value*100):0;return <div className="budgetCard" key={x.id}><div className="panelTitle"><h3>{x.cat}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><b>{money(s)} <small>/ {money(x.limit_value)}</small></b><div className="progress"><i style={{width:Math.min(100,pct)+"%"}}/></div><p>{pct>100?`Você ultrapassou ${money(s-x.limit_value)}.`:`Restam ${money(Math.max(0,x.limit_value-s))}.`}</p></div>})}{!data.length&&<p className="emptyHint">Cadastre limites por categoria para acompanhar seus gastos.</p>}</div></div>;
+}
+
+function Goals({entity}){
+  const {data,add,remove,update}=entity; const [name,setName]=useState(""); const [target,setTarget]=useState(""); const [saved,setSaved]=useState("");
+  const submit=()=>{if(!name.trim()||!target)return;add({name,target:Number(target),saved:Number(saved)||0});setName("");setTarget("");setSaved("");};
+  return <div className="content"><div className="panel"><div className="panelTitle"><h2>Metas financeiras</h2></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Computador"/><input value={target} onChange={e=>setTarget(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor da meta"/><input value={saved} onChange={e=>setSaved(e.target.value)} type="number" step="0.01" min="0" placeholder="Já guardado"/><button onClick={submit}><Plus/></button></div></div><div className="goalGrid">{data.map(x=>{const pct=x.target?Math.min(100,Math.round(x.saved/x.target*100)):0;return <div className="goalCard" key={x.id}><div className="panelTitle"><h3><Target size={17}/> {x.name}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><strong>{money(x.saved)}</strong><small> de {money(x.target)}</small><div className="progress"><i style={{width:pct+"%"}}/></div><div className="goalActions"><span>{pct}% concluído</span><button onClick={()=>{const n=Number(prompt("Quanto adicionar à meta?"));if(n>0)update(x.id,{saved:Math.min(x.target,x.saved+n)})}}>+ Adicionar</button></div></div>})}{!data.length&&<p className="emptyHint">Crie uma meta para acompanhar seu progresso.</p>}</div></div>;
+}
+
+function Recurring({entity,transactions}){
+  const {data,add,remove}=entity; const [name,setName]=useState(""); const [value,setValue]=useState(""); const [cat,setCat]=useState("Assinaturas"); const [day,setDay]=useState("");
+  const submit=()=>{if(!name.trim()||!value||!day)return;add({name,value:Number(value),cat,day:Number(day),type:"out"});setName("");setValue("");setDay("");};
+  return <div className="content"><div className="panel"><div className="panelTitle"><h2>Pagamentos recorrentes</h2><span>Modelo para gerar despesas mensais</span></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Netflix"/><input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/><input value={day} onChange={e=>setDay(e.target.value)} type="number" min="1" max="31" placeholder="Dia"/><button onClick={submit}><Plus/></button></div></div><div className="panel">{data.map(x=><div className="transaction" key={x.id}><div><b>{x.name}</b><small>{x.cat} · todo dia {x.day}</small></div><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}{!data.length&&<p className="emptyHint">Cadastre assinaturas e contas mensais aqui.</p>}</div></div>;
 }
 
 function Notes({entity}){
@@ -734,7 +857,10 @@ function Notes({entity}){
     if (activeNote?.id === note.id) setActiveNote(null);
   };
 
-  const preview = (content) => !content ? "Nota vazia" : (content.length > 90 ? content.slice(0, 90) + "…" : content);
+  const preview = (content) => {
+    const text = stripHtml(content);
+    return !text ? "Nota vazia" : (text.length > 90 ? text.slice(0, 90) + "…" : text);
+  };
 
   return (
     <div className="content">
@@ -774,14 +900,22 @@ function Notes({entity}){
   );
 }
 
+const EMOJIS = [
+  "😀","😄","😁","😂","🙂","😉","😍","🤩","🤔","😅",
+  "😎","🙃","😴","😭","😡","🥳","😇","🤗","👍","👎",
+  "👏","🙏","💪","✨","🔥","⭐","❤️","💡","✅","❌",
+  "📌","📅","⏰","🎯","📝","🚀","🎉","☕","💰","📚"
+];
+
 function NoteEditor({ note, onClose, onSave }) {
   const [title, setTitle] = useState(note.title);
-  const [content, setContent] = useState(note.content || "");
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const saveTimer = useRef(null);
+  const bodyRef = useRef(null);
 
   useEffect(() => {
     setTitle(note.title);
-    setContent(note.content || "");
+    if (bodyRef.current) bodyRef.current.innerHTML = note.content || "";
   }, [note.id]);
 
   const scheduleSave = (patch) => {
@@ -795,60 +929,29 @@ function NoteEditor({ note, onClose, onSave }) {
     scheduleSave({ title: v });
   };
 
-  const BULLET = "•  ";
-
-  const handleKeyDown = (e) => {
-    if (e.key !== "Enter") return;
-    const el = e.target;
-    const v = el.value;
-    const cursor = el.selectionStart;
-    const lineStart = v.lastIndexOf("\n", cursor - 1) + 1;
-    const currentLine = v.slice(lineStart, cursor);
-
-    if (currentLine.startsWith(BULLET)) {
-      e.preventDefault();
-      const restOfLine = currentLine.slice(BULLET.length);
-      let newValue, newCursor;
-      if (restOfLine.trim() === "") {
-        // Linha só com a bolinha vazia: sai da lista em vez de criar outra
-        newValue = v.slice(0, lineStart) + v.slice(cursor);
-        newCursor = lineStart;
-      } else {
-        newValue = v.slice(0, cursor) + "\n" + BULLET + v.slice(cursor);
-        newCursor = cursor + 1 + BULLET.length;
-      }
-      setContent(newValue);
-      scheduleSave({ content: newValue });
-      requestAnimationFrame(() => {
-        el.selectionStart = el.selectionEnd = newCursor;
-      });
-    }
+  const handleBodyInput = () => {
+    scheduleSave({ content: bodyRef.current?.innerHTML || "" });
   };
 
-  const handleContentChange = (e) => {
-    const el = e.target;
-    let v = el.value;
-    const cursor = el.selectionStart;
+  // Impede que o clique num botão da barra tire o foco/seleção do texto
+  const keepFocus = (e) => e.preventDefault();
 
-    // Se o usuário acabou de digitar "- " no início de uma linha, vira "• "
-    if (cursor >= 2 && v.slice(cursor - 2, cursor) === "- ") {
-      const lineStart = v.lastIndexOf("\n", cursor - 3) + 1;
-      const linePrefix = v.slice(lineStart, cursor - 2);
-      if (linePrefix === "") {
-        v = v.slice(0, cursor - 2) + BULLET + v.slice(cursor);
-        requestAnimationFrame(() => {
-          el.selectionStart = el.selectionEnd = cursor + 1;
-        });
-      }
-    }
+  const exec = (command, value = null) => {
+    bodyRef.current?.focus();
+    document.execCommand(command, false, value);
+    handleBodyInput();
+  };
 
-    setContent(v);
-    scheduleSave({ content: v });
+  const insertEmoji = (emoji) => {
+    bodyRef.current?.focus();
+    document.execCommand("insertText", false, emoji);
+    setEmojiOpen(false);
+    handleBodyInput();
   };
 
   const handleClose = () => {
     clearTimeout(saveTimer.current);
-    onSave({ title: title.trim() || "Sem título", content });
+    onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
     onClose();
   };
 
@@ -859,13 +962,35 @@ function NoteEditor({ note, onClose, onSave }) {
           <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Título da nota" autoFocus/>
           <button onClick={handleClose}><X/></button>
         </div>
-        <div className="noteEditorBody">
-          <textarea
-            className="noteTextarea"
-            value={content}
-            onChange={handleContentChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Escreva o que quiser..."
+        <div className="noteToolbar" onMouseDown={keepFocus}>
+          <button title="Negrito" onClick={() => exec("bold")}><Bold size={16}/></button>
+          <button title="Itálico" onClick={() => exec("italic")}><Italic size={16}/></button>
+          <button title="Sublinhado" onClick={() => exec("underline")}><Underline size={16}/></button>
+          <span className="noteToolDivider"/>
+          <div className="emojiWrap">
+            <button title="Emoji" onClick={() => setEmojiOpen(o => !o)}><Smile size={16}/></button>
+            {emojiOpen && (
+              <div className="emojiPopover">
+                {EMOJIS.map(em => (
+                  <button key={em} className="emojiBtn" onClick={() => insertEmoji(em)}>{em}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <span className="noteToolDivider"/>
+          <button title="Centralizar texto" onClick={() => exec("justifyCenter")}><AlignCenter size={16}/></button>
+          <span className="noteToolDivider"/>
+          <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={16}/></button>
+          <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
+        </div>
+        <div className="noteEditorBody" onClick={() => setEmojiOpen(false)}>
+          <div
+            ref={bodyRef}
+            className="noteTextarea noteRichBody"
+            contentEditable
+            suppressContentEditableWarning
+            onInput={handleBodyInput}
+            data-placeholder="Escreva o que quiser..."
           />
         </div>
       </div>
