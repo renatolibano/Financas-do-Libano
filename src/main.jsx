@@ -86,6 +86,17 @@ function urgencyClass(days){
   return "green";
 }
 
+function sortByProximity(list){
+  return [...list].sort((a,b)=>{
+    const da = daysUntil(a.date);
+    const db = daysUntil(b.date);
+    if(da===null && db===null) return 0;
+    if(da===null) return 1;
+    if(db===null) return -1;
+    return da-db;
+  });
+}
+
 function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children}){
   const cls = urgencyClass(days);
   return <div className={"reminderCard "+cls}>
@@ -152,10 +163,10 @@ function App({session,theme,setTheme}){
   const transactions = useEntity("transactions", initialTransactions, session, "desc");
   const fixed = useEntity("fixed_payments", initialFixed, session);
   const debts = useEntity("debts", initialDebts, session);
-  const notes = useEntity("notes", initialNotes, session);
+  const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true});
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
-  const books = useEntity("books", initialBooks, session);
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true});
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
@@ -382,7 +393,7 @@ function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,rem
     </div>
    </section>
    <section className="grid3">
-    <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>{reminders.slice(0,3).map(r=><div className="row" key={r.id}><div className="rowIcon"><Bell size={17}/></div><div><b>{r.title}</b><small>{r.kind}</small></div><strong>{r.date}</strong></div>)}</div>
+    <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>{sortByProximity(reminders).slice(0,3).map(r=><div className="row" key={r.id}><div className="rowIcon"><Bell size={17}/></div><div><b>{r.title}</b><small>{r.kind}</small></div><strong>{r.date}</strong></div>)}</div>
     <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row" key={n.id}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
@@ -488,7 +499,7 @@ function Cards({entity,bill}){
 
 function CommonReminders({entity}){
   const {data,add,remove} = entity;
-  const filtered = data.filter(x=>x.kind!=="Aniversário");
+  const filtered = sortByProximity(data.filter(x=>x.kind!=="Aniversário"));
   const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro");
   const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
@@ -523,7 +534,7 @@ function CommonReminders({entity}){
 
 function Birthdays({entity}){
   const {data,add,remove} = entity;
-  const filtered = data.filter(x=>x.kind==="Aniversário");
+  const filtered = sortByProximity(data.filter(x=>x.kind==="Aniversário"));
   const [title,setTitle]=useState(""); const [date,setDate]=useState("");
   const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
@@ -588,10 +599,10 @@ function BookCoverThumb({ book }) {
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
-function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete }) {
+function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete, dragProps }) {
   const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
   return (
-    <div className="bookTile">
+    <div className={"bookTile"+(dragProps?.dragging?" dragging":"")} {...dragProps}>
       <div className="bookCoverWrap" onClick={onOpen}>
         <BookCoverThumb book={book}/>
       </div>
@@ -768,11 +779,12 @@ function PdfReader({ book, onClose, onProgress, onNotesChange }) {
 }
 
 function BookShelf({ entity, status, session }) {
-  const { data, add, remove, update, cloud } = entity;
+  const { data, add, remove, update, cloud, reorder } = entity;
   const filtered = data.filter(x => x.status === status);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingBook, setReadingBook] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [dragId, setDragId] = useState(null);
   const fileInputRef = useRef(null);
   const progressTimer = useRef(null);
 
@@ -815,6 +827,20 @@ function BookShelf({ entity, status, session }) {
     if (book.file_path) deleteBookFile(book.file_path);
   };
 
+  const handleDrop = (targetId) => {
+    if (dragId === null || dragId === targetId) { setDragId(null); return; }
+    const newFiltered = [...filtered];
+    const fromIdx = newFiltered.findIndex(b => b.id === dragId);
+    const toIdx = newFiltered.findIndex(b => b.id === targetId);
+    setDragId(null);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = newFiltered.splice(fromIdx, 1);
+    newFiltered.splice(toIdx, 0, moved);
+    let i = 0;
+    const newFull = data.map(item => item.status === status ? newFiltered[i++] : item);
+    reorder(newFull);
+  };
+
   return (
     <div className="content">
       <div className="shelf" onClick={()=>setOpenMenuId(null)}>
@@ -833,6 +859,14 @@ function BookShelf({ entity, status, session }) {
             onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"});}}
             onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, {status:"quero_ler"});}}
             onDelete={()=>handleDelete(book)}
+            dragProps={{
+              draggable:true,
+              dragging: dragId===book.id,
+              onDragStart:(e)=>{ e.stopPropagation(); setDragId(book.id); e.dataTransfer.effectAllowed="move"; },
+              onDragOver:(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; },
+              onDrop:(e)=>{ e.preventDefault(); e.stopPropagation(); handleDrop(book.id); },
+              onDragEnd:()=>setDragId(null),
+            }}
           />
         ))}
       </div>
@@ -872,10 +906,11 @@ function Recurring({entity,transactions}){
 }
 
 function Notes({entity}){
-  const { data, add, remove, update } = entity;
+  const { data, add, remove, update, reorder } = entity;
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeNote, setActiveNote] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [dragId, setDragId] = useState(null);
 
   const createNote = async () => {
     const title = window.prompt("Título da nota:", "Nova nota");
@@ -895,6 +930,18 @@ function Notes({entity}){
     if (activeNote?.id === note.id) setActiveNote(null);
   };
 
+  const handleDrop = (targetId) => {
+    if (dragId === null || dragId === targetId) { setDragId(null); return; }
+    const newData = [...data];
+    const fromIdx = newData.findIndex(n => n.id === dragId);
+    const toIdx = newData.findIndex(n => n.id === targetId);
+    setDragId(null);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = newData.splice(fromIdx, 1);
+    newData.splice(toIdx, 0, moved);
+    reorder(newData);
+  };
+
   const preview = (content) => {
     const text = stripHtml(content);
     return !text ? "Nota vazia" : (text.length > 90 ? text.slice(0, 90) + "…" : text);
@@ -909,7 +956,15 @@ function Notes({entity}){
           </div>
         </div>
         {data.map(note => (
-          <div className="noteTile" key={note.id}>
+          <div
+            className={"noteTile"+(dragId===note.id?" dragging":"")}
+            key={note.id}
+            draggable
+            onDragStart={(e)=>{ e.stopPropagation(); setDragId(note.id); e.dataTransfer.effectAllowed="move"; }}
+            onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
+            onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); handleDrop(note.id); }}
+            onDragEnd={()=>setDragId(null)}
+          >
             <div className="noteCoverWrap" onClick={() => setActiveNote(note)}>
               <b className="noteTitle">{note.title}</b>
               <p className="notePreview">{preview(note.content)}</p>

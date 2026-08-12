@@ -8,7 +8,8 @@ const uid = () => Date.now() + Math.random();
 // initialData: dados de exemplo usados apenas no modo local, na primeira vez
 // session: sessão atual do Supabase (null se deslogado)
 // order: "asc" | "desc" — em que ordem os itens novos entram na lista
-export function useEntity(table, initialData, session, order = "asc") {
+export function useEntity(table, initialData, session, order = "asc", opts = {}) {
+  const { orderable = false } = opts;
   const cloud = cloudConfigured && !!session;
   const [localData, setLocalData] = usePersistentState(table, initialData);
   const [cloudData, setCloudData] = useState([]);
@@ -21,10 +22,11 @@ export function useEntity(table, initialData, session, order = "asc") {
       return;
     }
     setLoading(true);
-    const { data, error } = await supabase
-      .from(table)
-      .select("*")
-      .order("created_at", { ascending: order === "asc" });
+    let query = supabase.from(table).select("*");
+    query = orderable
+      ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
+      : query.order("created_at", { ascending: order === "asc" });
+    const { data, error } = await query;
     if (error) {
       console.error(error);
       setError(error.message);
@@ -33,7 +35,7 @@ export function useEntity(table, initialData, session, order = "asc") {
     }
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloud, table, order]);
+  }, [cloud, table, order, orderable]);
 
   useEffect(() => {
     let active = true;
@@ -106,5 +108,25 @@ export function useEntity(table, initialData, session, order = "asc") {
     [cloud, table, setLocalData]
   );
 
-  return { data, add, remove, update, loading, error, cloud, refresh: fetchCloud };
+  const reorder = useCallback(
+    async (newList) => {
+      if (cloud) {
+        setCloudData(newList);
+        try {
+          await Promise.all(
+            newList.map((item, idx) =>
+              supabase.from(table).update({ sort_order: idx }).eq("id", item.id)
+            )
+          );
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
+        setLocalData(newList);
+      }
+    },
+    [cloud, table, setLocalData]
+  );
+
+  return { data, add, remove, update, reorder, loading, error, cloud, refresh: fetchCloud };
 }

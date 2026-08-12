@@ -97,6 +97,10 @@ alter table books add column if not exists current_page int not null default 1;
 -- Cada livro passa a ter seu próprio campo de notas, editado ao lado do PDF no leitor.
 alter table books add column if not exists notes text;
 
+-- Atualização: ordem manual (arrastar e soltar) para livros e notas
+alter table books add column if not exists sort_order int;
+alter table notes add column if not exists sort_order int;
+
 insert into storage.buckets (id, name, public)
 values ('books', 'books', false)
 on conflict (id) do nothing;

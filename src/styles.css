@@ -259,7 +259,9 @@ h1{font-size:23px}
 .reminderCard .debtNumbers{margin-top:12px}
 
 .shelf{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:22px 16px}
-.bookTile{position:relative;display:flex;flex-direction:column;gap:6px}
+.bookTile{position:relative;display:flex;flex-direction:column;gap:6px;cursor:grab}
+.bookTile.dragging{opacity:.4}
+.bookTile.addTile{cursor:pointer}
 .bookCoverWrap{position:relative;aspect-ratio:3/4.2;border-radius:10px;overflow:hidden;background:var(--bg-surface-2);border:1px solid var(--border);cursor:pointer;box-shadow:0 10px 24px #0006;transition:transform .15s ease}
 .bookCoverWrap:hover{transform:translateY(-3px)}
 .bookCoverImg{width:100%;height:100%}
@@ -309,7 +311,9 @@ h1{font-size:23px}
 .notesPane{width:100%;height:44vh;border-left:none;border-top:1px solid var(--border-soft)}
 }
 .notesGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:22px 16px}
-.noteTile{position:relative;display:flex;flex-direction:column;gap:6px}
+.noteTile{position:relative;display:flex;flex-direction:column;gap:6px;cursor:grab}
+.noteTile.dragging{opacity:.4}
+.noteTile.addTile{cursor:pointer}
 .noteCoverWrap{position:relative;aspect-ratio:3/3.6;border-radius:10px;overflow:hidden;background:var(--bg-surface-2);border:1px solid var(--border);cursor:pointer;box-shadow:0 10px 24px #0006;transition:transform .15s ease;padding:14px;display:flex;flex-direction:column}
 .noteCoverWrap:hover{transform:translateY(-3px)}
 .noteCoverWrap.addCover{background:transparent;border:1px dashed var(--border);box-shadow:none;padding:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--text-2);font-size:12px;text-align:center}
