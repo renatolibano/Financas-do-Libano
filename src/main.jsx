@@ -8,7 +8,7 @@ import {
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
-  CheckCheck, Download
+  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -17,6 +17,7 @@ import { clearLocal, usePersistentState } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
+import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
 import Auth from "./Auth";
 
 const initialTransactions = [
@@ -51,6 +52,8 @@ const initialBooks = [
   {id:1, title:"Dom Casmurro", author:"Machado de Assis", status:"lido"},
   {id:2, title:"O Poder do Hábito", author:"Charles Duhigg", status:"quero_ler"},
 ];
+
+const initialStudyPdfs = [];
 
 const STUDY_COLORS = [
   {key:"red", hex:"#ff5c5c"},
@@ -283,6 +286,7 @@ function App({session,theme,setTheme}){
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
   const books = useEntity("books", initialBooks, session, "asc", {orderable:true});
+  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true});
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
@@ -504,7 +508,7 @@ function App({session,theme,setTheme}){
       {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
-      {page==="Leitor de PDF" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session}/>}
 
       {showOverviewEdit && <OverviewEditModal
         overview={overview}
@@ -1108,6 +1112,426 @@ function BookShelf({ entity, status, session }) {
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
       {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
       {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange}/>}
+    </div>
+  );
+}
+
+const studyPdfCoverCache = new Map();
+
+function StudyPdfCoverThumb({ pdfDoc }) {
+  const [src, setSrc] = useState(studyPdfCoverCache.get(pdfDoc.file_path) || null);
+  useEffect(() => {
+    let active = true;
+    if (!pdfDoc.file_path || studyPdfCoverCache.has(pdfDoc.file_path)) return;
+    (async () => {
+      try {
+        const blob = await downloadStudyPdfFile(pdfDoc.file_path);
+        const buf = await blob.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const page = await pdf.getPage(1);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const scale = 260 / baseViewport.width;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        studyPdfCoverCache.set(pdfDoc.file_path, dataUrl);
+        if (active) setSrc(dataUrl);
+      } catch (e) {
+        console.error("Não foi possível gerar a capa:", e);
+      }
+    })();
+    return () => { active = false; };
+  }, [pdfDoc.file_path]);
+  return <div className="bookCoverImg">{src ? <img src={src} alt={pdfDoc.title}/> : <div className="bookCoverPlaceholder"><FileText size={28}/></div>}</div>;
+}
+
+function StudyPdfTile({ pdfDoc, menuOpen, onToggleMenu, onOpen, onDelete, dragProps }) {
+  const progress = pdfDoc.total_pages ? Math.min(100, Math.round((pdfDoc.current_page / pdfDoc.total_pages) * 100)) : 0;
+  const favCount = pdfDoc.favorite_pages?.length || 0;
+  const impCount = pdfDoc.important_pages?.length || 0;
+  return (
+    <div className={"bookTile"+(dragProps?.dragging?" dragging":"")} {...dragProps}>
+      <div className="bookCoverWrap" onClick={onOpen}>
+        <StudyPdfCoverThumb pdfDoc={pdfDoc}/>
+      </div>
+      <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+      </div>}
+      <b className="bookTitle">{pdfDoc.title}</b>
+      <div className="progress"><i style={{width:progress+"%"}}/></div>
+      <small className="bookProgressLabel">
+        {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
+      </small>
+    </div>
+  );
+}
+
+function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImportantChange }) {
+  const [pdf, setPdf] = useState(null);
+  const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
+  const [numPages, setNumPages] = useState(pdfDoc.total_pages || 0);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  const [zoom, setZoom] = useState(1);
+  const [fitWidth, setFitWidth] = useState(true);
+  const [nightMode, setNightMode] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const [favoritePages, setFavoritePages] = useState(pdfDoc.favorite_pages || []);
+  const [importantPages, setImportantPages] = useState(pdfDoc.important_pages || []);
+
+  const [panel, setPanel] = useState(null); // null | "busca" | "marcadores"
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+  const [jumpValue, setJumpValue] = useState("");
+
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const modalRef = useRef(null);
+  const searchToken = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const blob = await downloadStudyPdfFile(pdfDoc.file_path);
+        const buf = await blob.arrayBuffer();
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        if (!active) return;
+        setPdf(doc);
+        setNumPages(doc.numPages);
+        setLoading(false);
+      } catch (e) {
+        console.error(e);
+        if (active) { setErr("Não foi possível abrir esse PDF."); setLoading(false); }
+      }
+    })();
+    return () => { active = false; };
+  }, [pdfDoc.file_path]);
+
+  useEffect(() => {
+    if (!pdf) return;
+    let active = true;
+    (async () => {
+      const page = await pdf.getPage(pageNum);
+      const containerWidth = containerRef.current?.clientWidth || 800;
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = fitWidth
+        ? Math.min(2.5, Math.max(0.3, (containerWidth - 24) / baseViewport.width))
+        : zoom;
+      if (fitWidth) setZoom(scale);
+      const viewport = page.getViewport({ scale });
+      const canvas = canvasRef.current;
+      if (!canvas || !active) return;
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdf, pageNum, fitWidth, zoom]);
+
+  const goTo = (n) => {
+    const clamped = Math.max(1, Math.min(numPages || 1, n));
+    setPageNum(clamped);
+    onProgress(pdfDoc.id, clamped);
+  };
+
+  const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
+  const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
+  const resetZoom = () => setFitWidth(true);
+
+  const handleJump = (e) => {
+    e.preventDefault();
+    const n = parseInt(jumpValue, 10);
+    if (!isNaN(n)) goTo(n);
+    setJumpValue("");
+  };
+
+  const toggleFavorite = () => {
+    setFavoritePages(prev => {
+      const has = prev.includes(pageNum);
+      const next = has ? prev.filter(p=>p!==pageNum) : [...prev, pageNum].sort((a,b)=>a-b);
+      onFavoritesChange(pdfDoc.id, next);
+      return next;
+    });
+  };
+
+  const toggleImportant = () => {
+    setImportantPages(prev => {
+      const has = prev.includes(pageNum);
+      const next = has ? prev.filter(p=>p!==pageNum) : [...prev, pageNum].sort((a,b)=>a-b);
+      onImportantChange(pdfDoc.id, next);
+      return next;
+    });
+  };
+
+  const runSearch = async (e) => {
+    e?.preventDefault();
+    if (!pdf || !searchQuery.trim()) { setSearchResults([]); return; }
+    const token = ++searchToken.current;
+    setSearching(true);
+    setSearchResults([]);
+    const q = searchQuery.trim().toLowerCase();
+    const found = [];
+    for (let n = 1; n <= numPages; n++) {
+      if (searchToken.current !== token) return; // uma busca nova começou / leitor fechou
+      setSearchProgress(n);
+      try {
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        const text = content.items.map(it => it.str).join(" ");
+        const idx = text.toLowerCase().indexOf(q);
+        if (idx !== -1) {
+          const start = Math.max(0, idx - 30);
+          const snippet = (start>0?"…":"") + text.slice(start, idx+q.length+30).trim() + "…";
+          found.push({ page: n, snippet });
+        }
+      } catch (e) { /* página sem texto extraível, ignora */ }
+    }
+    if (searchToken.current === token) {
+      setSearchResults(found);
+      setSearching(false);
+    }
+  };
+
+  useEffect(() => {
+    const handler = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await modalRef.current?.requestFullscreen?.();
+      } else {
+        await document.exitFullscreen?.();
+      }
+    } catch (e) {
+      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
+    }
+  };
+
+  const handleClose = () => {
+    searchToken.current++;
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
+    onClose();
+  };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.key === "ArrowRight") goTo(pageNum + 1);
+      if (e.key === "ArrowLeft") goTo(pageNum - 1);
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageNum, numPages]);
+
+  const isFav = favoritePages.includes(pageNum);
+  const isImp = importantPages.includes(pageNum);
+
+  return (
+    <div className="readerBack" onClick={handleClose}>
+      <div ref={modalRef} className={`readerModal readerModalWide${fullscreen ? " readerModalFull" : ""}`} onClick={(e)=>e.stopPropagation()}>
+        <div className="readerHead">
+          <b>{pdfDoc.title}</b>
+          <div className="readerHeadActions">
+            <button className={`ghost${panel==="busca" ? " active" : ""}`} onClick={()=>setPanel(p=>p==="busca"?null:"busca")}>
+              <Search size={15}/> <span>Buscar</span>
+            </button>
+            <button className={`ghost${panel==="marcadores" ? " active" : ""}`} onClick={()=>setPanel(p=>p==="marcadores"?null:"marcadores")}>
+              <Bookmark size={15}/> <span>Marcadores</span>
+            </button>
+            <button onClick={handleClose}><X size={18}/></button>
+          </div>
+        </div>
+
+        <div className="pdfToolbar">
+          <div className="pdfToolbarGroup">
+            <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
+            <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
+            <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
+          </div>
+          <form className="pdfToolbarGroup pdfJumpForm" onSubmit={handleJump}>
+            <input type="number" min="1" max={numPages||undefined} placeholder={`Ir p/ página (1-${numPages||"?"})`} value={jumpValue} onChange={e=>setJumpValue(e.target.value)}/>
+            <button type="submit" title="Ir para a página"><ArrowRight size={15}/></button>
+          </form>
+          <div className="pdfToolbarGroup">
+            <button title={isFav?"Remover dos favoritos":"Favoritar esta página"} className={isFav?"active":""} onClick={toggleFavorite}><Star size={16} fill={isFav?"currentColor":"none"}/></button>
+            <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
+            <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
+            <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+          </div>
+        </div>
+
+        <div className="readerMain">
+          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
+            {loading && <p className="readerHint">Abrindo PDF...</p>}
+            {err && <p className="readerHint">{err}</p>}
+            {!loading && !err && <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>goTo(pageNum+1)}/>}
+          </div>
+
+          {panel==="busca" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Buscar no PDF</b><span>em "{pdfDoc.title}"</span></div>
+              <form className="pdfSearchForm" onSubmit={runSearch}>
+                <input autoFocus value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Digite uma palavra..."/>
+                <button type="submit" disabled={searching}><Search size={15}/></button>
+              </form>
+              <div className="notesPaneBody pdfSearchResults">
+                {searching && <p className="readerHint">Buscando... página {searchProgress} de {numPages}</p>}
+                {!searching && searchResults.length===0 && searchQuery && <p className="emptyHint">Nenhum resultado encontrado.</p>}
+                {!searching && searchResults.map(r => (
+                  <button key={r.page} className="pdfSearchResultItem" onClick={()=>{goTo(r.page); setPanel(null);}}>
+                    <b>Página {r.page}</b>
+                    <small>{r.snippet}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {panel==="marcadores" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Marcadores</b><span>em "{pdfDoc.title}"</span></div>
+              <div className="notesPaneBody pdfBookmarksBody">
+                <div className="pdfBookmarksSection">
+                  <small><Star size={12}/> Páginas favoritas</small>
+                  {favoritePages.length===0 && <p className="emptyHint">Nenhuma página favoritada ainda.</p>}
+                  <div className="pdfBookmarksChips">
+                    {favoritePages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
+                  </div>
+                </div>
+                <div className="pdfBookmarksSection">
+                  <small><Flag size={12}/> Páginas importantes</small>
+                  {importantPages.length===0 && <p className="emptyHint">Nenhuma página marcada ainda.</p>}
+                  <div className="pdfBookmarksChips">
+                    {importantPages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="readerNav">
+          <button className="ghost" onClick={()=>goTo(pageNum-1)} disabled={pageNum<=1}>‹ Anterior</button>
+          <span>{numPages ? `Página ${pageNum} de ${numPages}` : "..."}</span>
+          <button className="ghost" onClick={()=>goTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudyPdfShelf({ entity, session }) {
+  const { data, add, remove, update, cloud, reorder } = entity;
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [readingPdf, setReadingPdf] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const fileInputRef = useRef(null);
+  const progressTimer = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!cloud) { alert('Enviar PDFs precisa de sincronização ativa (Supabase) — veja o README.'); return; }
+    try {
+      setUploading(true);
+      const buf = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const totalPages = doc.numPages;
+      const id = crypto.randomUUID();
+      const defaultTitle = file.name.replace(/\.pdf$/i, "");
+      const title = window.prompt("Título do PDF:", defaultTitle) || defaultTitle;
+      const filePath = await uploadStudyPdfFile(session.user.id, id, file);
+      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [] });
+    } catch (err) {
+      console.error(err);
+      alert("Não foi possível enviar o PDF: " + (err.message || err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onProgress = (id, page) => {
+    clearTimeout(progressTimer.current);
+    progressTimer.current = setTimeout(() => { update(id, { current_page: page }); }, 400);
+  };
+
+  const onFavoritesChange = (id, favorite_pages) => update(id, { favorite_pages });
+  const onImportantChange = (id, important_pages) => update(id, { important_pages });
+
+  const handleDelete = async (pdfDoc) => {
+    if (!confirm(`Excluir "${pdfDoc.title}"? Isso também apaga o PDF.`)) return;
+    setOpenMenuId(null);
+    await remove(pdfDoc.id);
+    if (pdfDoc.file_path) deleteStudyPdfFile(pdfDoc.file_path);
+  };
+
+  const handleDrop = (targetId) => {
+    if (dragId === null || dragId === targetId) { setDragId(null); return; }
+    const newList = [...data];
+    const fromIdx = newList.findIndex(b => b.id === dragId);
+    const toIdx = newList.findIndex(b => b.id === targetId);
+    setDragId(null);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = newList.splice(fromIdx, 1);
+    newList.splice(toIdx, 0, moved);
+    reorder(newList);
+  };
+
+  return (
+    <div className="content">
+      <div className="shelf" onClick={()=>setOpenMenuId(null)}>
+        <div className="bookTile addTile" onClick={()=>fileInputRef.current?.click()}>
+          <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
+          <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
+        </div>
+        {data.map(pdfDoc => (
+          <StudyPdfTile
+            key={pdfDoc.id}
+            pdfDoc={pdfDoc}
+            menuOpen={openMenuId===pdfDoc.id}
+            onToggleMenu={()=>setOpenMenuId(id=>id===pdfDoc.id?null:pdfDoc.id)}
+            onOpen={()=>setReadingPdf(pdfDoc)}
+            onDelete={()=>handleDelete(pdfDoc)}
+            dragProps={{
+              draggable:true,
+              dragging: dragId===pdfDoc.id,
+              onDragStart:(e)=>{ e.stopPropagation(); setDragId(pdfDoc.id); e.dataTransfer.effectAllowed="move"; },
+              onDragOver:(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; },
+              onDrop:(e)=>{ e.preventDefault(); e.stopPropagation(); handleDrop(pdfDoc.id); },
+              onDragEnd:()=>setDragId(null),
+            }}
+          />
+        ))}
+      </div>
+      {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
+      {data.length===0 && cloud && <p className="emptyHint">Nenhum PDF de estudo por aqui ainda.</p>}
+      {readingPdf && <StudyPdfReader
+        pdfDoc={readingPdf}
+        onClose={()=>setReadingPdf(null)}
+        onProgress={onProgress}
+        onFavoritesChange={onFavoritesChange}
+        onImportantChange={onImportantChange}
+      />}
     </div>
   );
 }

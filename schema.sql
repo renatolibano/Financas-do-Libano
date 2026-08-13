@@ -182,3 +182,49 @@ do $$ declare t text; begin foreach t in array array['budgets','goals','recurrin
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Área de Estudos: Leitor de PDF
+-- Estante própria de PDFs de estudo (separada da estante de "Livros"), com
+-- página atual (salva automaticamente), páginas favoritas e páginas marcadas como importantes.
+create table if not exists study_pdfs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  file_path text,
+  total_pages int,
+  current_page int not null default 1,
+  favorite_pages int[] not null default '{}',
+  important_pages int[] not null default '{}',
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table study_pdfs enable row level security;
+
+insert into storage.buckets (id, name, public)
+values ('study_pdfs', 'study_pdfs', false)
+on conflict (id) do nothing;
+
+drop policy if exists "select_own_study_pdf_files" on storage.objects;
+drop policy if exists "insert_own_study_pdf_files" on storage.objects;
+drop policy if exists "update_own_study_pdf_files" on storage.objects;
+drop policy if exists "delete_own_study_pdf_files" on storage.objects;
+
+create policy "select_own_study_pdf_files" on storage.objects for select
+  using (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "insert_own_study_pdf_files" on storage.objects for insert
+  with check (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_study_pdf_files" on storage.objects for update
+  using (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_study_pdf_files" on storage.objects for delete
+  using (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+
+do $$ declare t text; begin foreach t in array array['study_pdfs'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
