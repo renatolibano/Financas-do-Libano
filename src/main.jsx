@@ -6,7 +6,7 @@ import {
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
-  GraduationCap, Layers, Swords, BarChart3, Settings, Sun, Moon
+  GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -258,6 +258,7 @@ function App({session,theme,setTheme}){
       { key:"Flashcards", icon:Layers },
       { key:"Desafios", icon:Swords },
       { key:"Nivelamento", icon:BarChart3 },
+      { key:"Leitor de PDF", icon:FileText },
     ]},
   ];
   const [openGroups,setOpenGroups] = useState({});
@@ -337,6 +338,7 @@ function App({session,theme,setTheme}){
       {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Leitor de PDF" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       {showAdd && <div className="modalBack"><form className="modal" onSubmit={addTransaction}>
         <div className="modalHead"><h2>Nova movimentação</h2><button type="button" onClick={()=>setShowAdd(false)}><X/></button></div>
@@ -1050,12 +1052,33 @@ function NoteEditor({ note, onClose, onSave }) {
   };
 
   const insertChecklist = () => {
-    bodyRef.current?.focus();
-    document.execCommand(
-      "insertHTML",
-      false,
-      '<div class="checklist-item"><span class="check-box" contenteditable="false"></span><span class="check-text">Novo item</span></div><br>'
-    );
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    const newItem = document.createElement("div");
+    newItem.className = "checklist-item";
+    const box = document.createElement("span");
+    box.className = "check-box";
+    box.setAttribute("contenteditable", "false");
+    const text = document.createElement("span");
+    text.className = "check-text";
+    newItem.appendChild(box);
+    newItem.appendChild(text);
+
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
+      const range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(newItem);
+    } else {
+      el.appendChild(newItem);
+    }
+
+    const r = document.createRange();
+    r.setStart(text, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
     handleBodyInput();
   };
 
@@ -1065,6 +1088,61 @@ function NoteEditor({ note, onClose, onSave }) {
     if (!box) return;
     e.preventDefault();
     box.closest(".checklist-item")?.classList.toggle("checked");
+    handleBodyInput();
+  };
+
+  // Ao apertar Enter dentro de um item de marcação, cria automaticamente o próximo
+  // (mesmo comportamento das listas com bolinhas). Enter num item vazio sai da lista.
+  const handleBodyKeyDown = (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range0 = sel.getRangeAt(0);
+    const startNode = range0.startContainer;
+    const textEl = (startNode.nodeType === 3 ? startNode.parentElement : startNode)?.closest?.(".check-text");
+    if (!textEl) return;
+    e.preventDefault();
+    const itemEl = textEl.closest(".checklist-item");
+
+    // Pega o que ficou depois do cursor para levar para o novo item
+    let afterFrag = document.createDocumentFragment();
+    if (textEl.lastChild) {
+      const afterRange = document.createRange();
+      afterRange.setStart(range0.endContainer, range0.endOffset);
+      afterRange.setEndAfter(textEl.lastChild);
+      afterFrag = afterRange.extractContents();
+    }
+
+    const isEmpty = textEl.textContent.trim() === "" && afterFrag.textContent.trim() === "";
+
+    if (isEmpty) {
+      // Enter num item vazio: sai da lista de marcação
+      const exitLine = document.createElement("div");
+      exitLine.innerHTML = "<br>";
+      itemEl.replaceWith(exitLine);
+      const r = document.createRange();
+      r.setStart(exitLine, 0);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } else {
+      const newItem = document.createElement("div");
+      newItem.className = "checklist-item";
+      const box = document.createElement("span");
+      box.className = "check-box";
+      box.setAttribute("contenteditable", "false");
+      const text = document.createElement("span");
+      text.className = "check-text";
+      text.appendChild(afterFrag);
+      newItem.appendChild(box);
+      newItem.appendChild(text);
+      itemEl.after(newItem);
+      const r = document.createRange();
+      r.setStart(text, 0);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
     handleBodyInput();
   };
 
@@ -1111,6 +1189,7 @@ function NoteEditor({ note, onClose, onSave }) {
             suppressContentEditableWarning
             onInput={handleBodyInput}
             onClick={handleBodyClick}
+            onKeyDown={handleBodyKeyDown}
             data-placeholder="Escreva o que quiser..."
           />
         </div>

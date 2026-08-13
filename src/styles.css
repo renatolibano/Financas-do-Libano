@@ -343,6 +343,7 @@ h1{font-size:23px}
 .noteRichBody .checklist-item.checked .check-box{background:#ff8a80;border-color:#ff8a80}
 .noteRichBody .checklist-item.checked .check-box:after{content:"";position:absolute;left:3px;top:-1px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
 .noteRichBody .checklist-item .check-text{flex:1;outline:none}
+.noteRichBody .checklist-item .check-text:empty:before{content:"Item";color:var(--text-3)}
 .noteRichBody .checklist-item.checked .check-text{text-decoration:line-through;color:var(--text-3)}
 @media(max-width:760px){.notesGrid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}
 .monthToolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid var(--border);border-radius:14px;background:var(--bg-surface)}
