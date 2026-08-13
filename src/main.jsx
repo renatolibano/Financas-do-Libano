@@ -5,8 +5,8 @@ import {
   CalendarClock, Bell, StickyNote, Bot, Plus, TrendingUp, TrendingDown,
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
-  Bold, Italic, Underline, AlignCenter, List, ListOrdered, Smile, Target, PiggyBank, Repeat2,
-  GraduationCap, Layers, Settings, Sun, Moon, CheckCheck
+  Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
+  GraduationCap, Layers, Swords, BarChart3, Settings, Sun, Moon
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -79,17 +79,6 @@ function daysUntil(dateStr){
   return Math.round((d-today)/86400000);
 }
 
-// Para pagamentos fixos/recorrentes que só têm o "dia do mês" (sem data completa):
-// calcula quantos dias faltam até a próxima ocorrência (este mês ou o próximo, se já passou).
-function daysUntilMonthlyDay(day){
-  const d = Number(day);
-  if(!d || Number.isNaN(d)) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  let target = new Date(today.getFullYear(), today.getMonth(), d);
-  if(target < today) target = new Date(today.getFullYear(), today.getMonth()+1, d);
-  return Math.round((target-today)/86400000);
-}
-
 function urgencyClass(days){
   if(days===null || days===undefined) return "gray";
   if(days<=7) return "red";
@@ -155,73 +144,6 @@ function useTheme(){
   return [theme,setTheme];
 }
 
-// Guarda quais notificações já foram marcadas como lidas HOJE (reseta sozinho no dia seguinte).
-function useDismissedToday(){
-  const storageKey = "libano-notifs-dismissed-"+new Date().toISOString().slice(0,10);
-  const [dismissed,setDismissed] = useState(()=>{
-    try{ return JSON.parse(localStorage.getItem(storageKey)||"[]"); }catch(e){ return []; }
-  });
-  const dismissAll = (ids)=>{
-    setDismissed(prev=>{
-      const merged = Array.from(new Set([...prev,...ids]));
-      try{ localStorage.setItem(storageKey, JSON.stringify(merged)); }catch(e){}
-      return merged;
-    });
-  };
-  return [dismissed, dismissAll];
-}
-
-function notifIcon(kind){
-  if(kind==="Aniversário") return <Cake size={16}/>;
-  if(kind==="Dívida") return <CircleDollarSign size={16}/>;
-  if(kind==="Fixo") return <CalendarClock size={16}/>;
-  if(kind==="Recorrente") return <Repeat2 size={16}/>;
-  return <Bell size={16}/>;
-}
-
-function NotificationsBell({items, goTo}){
-  const [open,setOpen] = useState(false);
-  const [dismissed,dismissAll] = useDismissedToday();
-  const ref = useRef(null);
-
-  useEffect(()=>{
-    const onDoc = (e)=>{ if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDoc);
-    return ()=>document.removeEventListener("mousedown", onDoc);
-  },[]);
-
-  const visible = items.filter(it=>!dismissed.includes(it.id));
-  const count = visible.length;
-
-  return <div className="notifWrap" ref={ref}>
-    <button className="notifBellBtn" onClick={()=>setOpen(o=>!o)} title="Notificações">
-      <Bell size={19}/>
-      {count>0 && <span className="notifBadge">{count>9?"9+":count}</span>}
-    </button>
-    {open && <div className="notifPop">
-      <div className="notifPopHead">
-        <div className="notifPopIcon"><Bell size={18}/></div>
-        <div><b>Notificações</b><small>Vence amanhã, é bom não esquecer</small></div>
-      </div>
-      <div className="notifList">
-        {visible.length===0 && <div className="notifEmpty">
-          <div className="notifEmptyIcon"><CheckCheck size={22}/></div>
-          <b>Tudo em dia!</b>
-          <small>Nada vencendo amanhã.</small>
-        </div>}
-        {visible.map(it=><button key={it.id} className="notifItem" onClick={()=>{goTo(it.page); setOpen(false);}}>
-          <div className="notifItemIcon">{notifIcon(it.kind)}</div>
-          <div className="notifItemBody"><b>{it.title}</b><small>{it.subtitle}</small></div>
-          <span className="notifItemTag">amanhã</span>
-        </button>)}
-      </div>
-      {visible.length>0 && <div className="notifFoot">
-        <button className="notifFootGhost" onClick={()=>dismissAll(visible.map(v=>v.id))}><CheckCheck size={14}/> Marcar como lidas</button>
-      </div>}
-    </div>}
-  </div>
-}
-
 function Root(){
   const {session, checking} = useSession();
   const [theme,setTheme] = useTheme();
@@ -238,6 +160,9 @@ function Root(){
 function App({session,theme,setTheme}){
   const [page,setPage] = useState("Visão Geral");
   const [mobileOpen,setMobileOpen] = useState(false);
+  // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
+  // o que conflitava com o botão de abrir/fechar. Só reagimos ao hover em dispositivos que de fato têm mouse.
+  const canHover = () => typeof window!=="undefined" && window.matchMedia && window.matchMedia("(hover:hover) and (pointer:fine)").matches;
   const transactions = useEntity("transactions", initialTransactions, session, "desc");
   const fixed = useEntity("fixed_payments", initialFixed, session);
   const debts = useEntity("debts", initialDebts, session);
@@ -264,50 +189,6 @@ function App({session,theme,setTheme}){
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);
   const cardBill = cardPurchases.data.reduce((a,b)=>a+b.value,0);
-
-  // Tudo que tem uma data/prazo e falta exatamente 1 dia entra na sininho de notificações.
-  const notifItems = useMemo(()=>{
-    const items = [];
-    reminders.data.forEach(r=>{
-      if(daysUntil(r.date)===1){
-        const isBday = r.kind==="Aniversário";
-        items.push({
-          id:"rem-"+r.id, title:r.title,
-          subtitle:isBday?"Aniversário amanhã":("Lembrete · "+(r.kind||"Geral")),
-          page:isBday?"Aniversários":"Lembretes Comuns",
-          kind:isBday?"Aniversário":"Lembrete",
-        });
-      }
-    });
-    debts.data.forEach(d=>{
-      if(daysUntil(d.next)===1){
-        items.push({
-          id:"debt-"+d.id, title:d.name,
-          subtitle:"Parcela da dívida vence amanhã",
-          page:"Dívidas", kind:"Dívida",
-        });
-      }
-    });
-    fixed.data.forEach(f=>{
-      if(daysUntilMonthlyDay(f.day)===1){
-        items.push({
-          id:"fixed-"+f.id, title:f.name,
-          subtitle:"Pagamento fixo vence amanhã",
-          page:"Pagamentos Fixos", kind:"Fixo",
-        });
-      }
-    });
-    recurring.data.forEach(r=>{
-      if(daysUntilMonthlyDay(r.day)===1){
-        items.push({
-          id:"rec-"+r.id, title:r.name,
-          subtitle:"Pagamento recorrente vence amanhã",
-          page:"Recorrentes", kind:"Recorrente",
-        });
-      }
-    });
-    return items;
-  },[reminders.data,debts.data,fixed.data,recurring.data]);
 
   const addTransaction = (e)=>{
     e.preventDefault();
@@ -375,6 +256,8 @@ function App({session,theme,setTheme}){
     { type:"group", key:"estudos", label:"Área de Estudos", icon:GraduationCap, children:[
       { key:"Metas de Estudo", label:"Metas", icon:Target },
       { key:"Flashcards", icon:Layers },
+      { key:"Desafios", icon:Swords },
+      { key:"Nivelamento", icon:BarChart3 },
     ]},
   ];
   const [openGroups,setOpenGroups] = useState({});
@@ -390,8 +273,8 @@ function App({session,theme,setTheme}){
   return <div className="app">
     <aside
       className={"sidebar "+(mobileOpen?"expanded":"")}
-      onMouseEnter={()=>setMobileOpen(true)}
-      onMouseLeave={()=>setMobileOpen(false)}
+      onMouseEnter={()=>{ if(canHover()) setMobileOpen(true); }}
+      onMouseLeave={()=>{ if(canHover()) setMobileOpen(false); }}
     >
       <div className="brand">
         <div className="brandIcon">L</div>
@@ -435,7 +318,7 @@ function App({session,theme,setTheme}){
     </aside>
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</header>
 
       {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
@@ -452,6 +335,8 @@ function App({session,theme,setTheme}){
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
       {page==="Metas de Estudo" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       {showAdd && <div className="modalBack"><form className="modal" onSubmit={addTransaction}>
         <div className="modalHead"><h2>Nova movimentação</h2><button type="button" onClick={()=>setShowAdd(false)}><X/></button></div>
@@ -1164,6 +1049,25 @@ function NoteEditor({ note, onClose, onSave }) {
     handleBodyInput();
   };
 
+  const insertChecklist = () => {
+    bodyRef.current?.focus();
+    document.execCommand(
+      "insertHTML",
+      false,
+      '<div class="checklist-item"><span class="check-box" contenteditable="false"></span><span class="check-text">Novo item</span></div><br>'
+    );
+    handleBodyInput();
+  };
+
+  // Alterna o estado marcado/desmarcado ao clicar no quadradinho
+  const handleBodyClick = (e) => {
+    const box = e.target.closest?.(".check-box");
+    if (!box) return;
+    e.preventDefault();
+    box.closest(".checklist-item")?.classList.toggle("checked");
+    handleBodyInput();
+  };
+
   const handleClose = () => {
     clearTimeout(saveTimer.current);
     onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
@@ -1197,6 +1101,7 @@ function NoteEditor({ note, onClose, onSave }) {
           <span className="noteToolDivider"/>
           <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={16}/></button>
           <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
+          <button title="Lista de marcação" onClick={insertChecklist}><CheckSquare size={16}/></button>
         </div>
         <div className="noteEditorBody" onClick={() => setEmojiOpen(false)}>
           <div
@@ -1205,6 +1110,7 @@ function NoteEditor({ note, onClose, onSave }) {
             contentEditable
             suppressContentEditableWarning
             onInput={handleBodyInput}
+            onClick={handleBodyClick}
             data-placeholder="Escreva o que quiser..."
           />
         </div>
