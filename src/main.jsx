@@ -13,7 +13,7 @@ import {
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { useEntity } from "./lib/useEntity";
-import { clearLocal } from "./lib/storage";
+import { clearLocal, usePersistentState } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
@@ -204,13 +204,13 @@ function useDismissedToday(){
   return [dismissed, dismissAll];
 }
 
-function notifIcon(kind){
-  if(kind==="Aniversário") return <Cake size={16}/>;
-  if(kind==="Dívida") return <CircleDollarSign size={16}/>;
-  if(kind==="Fixo") return <CalendarClock size={16}/>;
-  if(kind==="Recorrente") return <Repeat2 size={16}/>;
-  if(kind==="Meta") return <Target size={16}/>;
-  return <Bell size={16}/>;
+function notifIcon(kind, size=16){
+  if(kind==="Aniversário") return <Cake size={size}/>;
+  if(kind==="Dívida") return <CircleDollarSign size={size}/>;
+  if(kind==="Fixo") return <CalendarClock size={size}/>;
+  if(kind==="Recorrente") return <Repeat2 size={size}/>;
+  if(kind==="Meta") return <Target size={size}/>;
+  return <Bell size={size}/>;
 }
 
 function NotificationsBell({items, goTo}){
@@ -271,6 +271,7 @@ function Root(){
 
 function App({session,theme,setTheme}){
   const [page,setPage] = useState("Visão Geral");
+  const [openNoteId,setOpenNoteId] = useState(null);
   const [mobileOpen,setMobileOpen] = useState(false);
   // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
   // o que conflitava com o botão de abrir/fechar. Só reagimos ao hover em dispositivos que de fato têm mouse.
@@ -286,7 +287,7 @@ function App({session,theme,setTheme}){
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
   const studyGoals = useEntity("study_goals", initialStudyGoals, session);
-  const [showAdd,setShowAdd] = useState(false);
+  const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
 
@@ -302,6 +303,17 @@ function App({session,theme,setTheme}){
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);
   const cardBill = cardPurchases.data.reduce((a,b)=>a+b.value,0);
+
+  // Enquanto não há integração bancária, a pessoa pode preencher esses 4 números
+  // na mão. Quando um campo está preenchido, ele substitui o valor calculado a
+  // partir das movimentações/compras; vazio (null) volta a calcular automaticamente.
+  const [overview, setOverview] = usePersistentState("overview_overrides", {
+    balance: null, income: null, expense: null, cardBill: null,
+  });
+  const effectiveBalance = overview.balance ?? balance;
+  const effectiveIncome = overview.income ?? income;
+  const effectiveExpense = overview.expense ?? expense;
+  const effectiveCardBill = overview.cardBill ?? cardBill;
 
   // Tudo que tem uma data/prazo e falta exatamente 1 dia entra no sininho de notificações.
   const notifItems = useMemo(()=>{
@@ -356,18 +368,6 @@ function App({session,theme,setTheme}){
     return items;
   },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data]);
 
-  const addTransaction = (e)=>{
-    e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    const value = Number(f.get("value"));
-    transactions.add({
-      desc:f.get("desc"), cat:f.get("cat"), value,
-      type:f.get("type"), date:new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"})
-    });
-    setShowAdd(false);
-    e.currentTarget.reset();
-  };
-
   const [aiInsight,setAiInsight] = useState(null);
   const [aiLoading,setAiLoading] = useState(false);
   const [aiError,setAiError] = useState(null);
@@ -383,7 +383,7 @@ function App({session,theme,setTheme}){
     try{
       const { data, error } = await supabase.functions.invoke("ai-insights", {
         body: {
-          balance, income, expense, fixedTotal, debtRemaining, cardBill,
+          balance: effectiveBalance, income: effectiveIncome, expense: effectiveExpense, fixedTotal, debtRemaining, cardBill: effectiveCardBill,
           cardCategories: cardPurchases.data.map(x=>({cat:x.cat, value:x.value})),
           recentTransactions: transactions.data.slice(0,8).map(x=>({desc:x.desc, cat:x.cat, value:x.value, type:x.type, date:x.date})),
         },
@@ -485,10 +485,10 @@ function App({session,theme,setTheme}){
     </aside>
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
-      {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
-      {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
+      {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
+      {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
@@ -497,7 +497,7 @@ function App({session,theme,setTheme}){
       {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
-      {page==="Notas" && <Notes entity={notes}/>}
+      {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals}/>}
@@ -506,14 +506,12 @@ function App({session,theme,setTheme}){
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Leitor de PDF" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
-      {showAdd && <div className="modalBack"><form className="modal" onSubmit={addTransaction}>
-        <div className="modalHead"><h2>Nova movimentação</h2><button type="button" onClick={()=>setShowAdd(false)}><X/></button></div>
-        <label>Descrição<input name="desc" required placeholder="Ex.: Mercado"/></label>
-        <label>Categoria<select name="cat"><option>Alimentação</option><option>Transporte</option><option>Assinaturas</option><option>Compras</option><option>Renda</option><option>Outros</option></select></label>
-        <label>Valor<input name="value" required type="number" step="0.01" min="0.01" placeholder="0,00"/></label>
-        <label>Tipo<select name="type"><option value="out">Saída</option><option value="in">Entrada</option></select></label>
-        <button className="primary" type="submit">Adicionar</button>
-      </form></div>}
+      {showOverviewEdit && <OverviewEditModal
+        overview={overview}
+        auto={{balance, income, expense, cardBill}}
+        onSave={(patch)=>{ setOverview(o=>({...o, ...patch})); setShowOverviewEdit(false); }}
+        onClose={()=>setShowOverviewEdit(false)}
+      />}
 
       {showSettings && <div className="modalBack" onClick={()=>setShowSettings(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modalHead"><h2>Configurações</h2><button type="button" onClick={()=>setShowSettings(false)}><X/></button></div>
@@ -542,13 +540,13 @@ function App({session,theme,setTheme}){
   </div>
 }
 
-function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,reminders,notes,setPage,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals}){
+function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals}){
  return <div className="content">
    <div className="monthToolbar"><label>Mês analisado <input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><span>{budgets.length} orçamento(s) · {goals.length} meta(s)</span></div><section className="stats">
-    <Card title="Saldo atual" value={money(balance)} icon={<WalletCards/>} big/>
-    <Card title="Entradas" value={money(income)} icon={<TrendingUp/>} positive/>
-    <Card title="Gastos" value={money(expense)} icon={<TrendingDown/>} negative/>
-    <Card title="Fatura do cartão" value={money(cardBill)} icon={<CreditCard/>}/>
+    <Card title="Saldo atual" value={money(balance)} icon={<WalletCards/>} big manual={manualFields?.balance!=null}/>
+    <Card title="Entradas" value={money(income)} icon={<TrendingUp/>} positive manual={manualFields?.income!=null}/>
+    <Card title="Gastos" value={money(expense)} icon={<TrendingDown/>} negative manual={manualFields?.expense!=null}/>
+    <Card title="Fatura do cartão" value={money(cardBill)} icon={<CreditCard/>} manual={manualFields?.cardBill!=null}/>
    </section>
    <section className="grid2">
     <div className="panel"><div className="panelTitle"><h2>Resumo do mês</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div>
@@ -568,15 +566,77 @@ function Dashboard({balance,income,expense,cardBill,debtRemaining,fixedTotal,rem
     </div>
    </section>
    <section className="grid3">
-    <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>{sortByProximity(reminders).slice(0,3).map(r=><div className="row" key={r.id}><div className="rowIcon"><Bell size={17}/></div><div><b>{r.title}</b><small>{r.kind}</small></div><strong>{r.date}</strong></div>)}</div>
-    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row" key={n.id}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
+    <div className="panel"><div className="panelTitle"><h2>Próximos lembretes</h2><button onClick={()=>setPage("Lembretes Comuns")}>Ver todos</button></div>
+      <div className="reminderGrid">
+        {sortByProximity(reminders).slice(0,3).map(r=><ReminderCard
+          key={r.id}
+          icon={notifIcon(r.kind, 18)}
+          title={r.title}
+          subtitle={(r.kind||"Geral")+" · "+r.date}
+          days={daysUntil(r.date)}
+        />)}
+        {reminders.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
+      </div>
+    </div>
+    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row rowClickable" key={n.id} onClick={()=>openNote(n.id)}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
  </div>
 }
 
-function Card({title,value,icon,positive,negative,big}){return <div className={"stat "+(big?"featured":"")}><div className="statIcon">{icon}</div><small>{title}</small><strong className={positive?"positive":(negative?"negative":"")}>{value}</strong></div>}
-function Transactions({data,onDelete}){return <div className="content"><div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}</div></div>}
+function Card({title,value,icon,positive,negative,big,manual}){return <div className={"stat "+(big?"featured":"")}><div className="statIcon">{icon}</div><small>{title}{manual && <span className="manualBadge">manual</span>}</small><strong className={positive?"positive":(negative?"negative":"")}>{value}</strong></div>}
+
+function OverviewEditModal({overview, auto, onSave, onClose}){
+  const [balance,setBalance] = useState(overview.balance ?? "");
+  const [income,setIncome] = useState(overview.income ?? "");
+  const [expense,setExpense] = useState(overview.expense ?? "");
+  const [cardBill,setCardBill] = useState(overview.cardBill ?? "");
+
+  const submit = (e)=>{
+    e.preventDefault();
+    onSave({
+      balance: balance===""?null:Number(balance),
+      income: income===""?null:Number(income),
+      expense: expense===""?null:Number(expense),
+      cardBill: cardBill===""?null:Number(cardBill),
+    });
+  };
+
+  const resetAll = ()=>{ setBalance(""); setIncome(""); setExpense(""); setCardBill(""); };
+
+  return <div className="modalBack" onClick={onClose}><form className="modal" onSubmit={submit} onClick={e=>e.stopPropagation()}>
+    <div className="modalHead"><h2>Editar valores</h2><button type="button" onClick={onClose}><X/></button></div>
+    <p className="authSub">Sem integração bancária, você pode preencher esses números na mão. Deixe um campo em branco para voltar a calcular automaticamente a partir das suas movimentações.</p>
+    <label>Saldo atual<input type="number" step="0.01" value={balance} onChange={e=>setBalance(e.target.value)} placeholder={"Automático: "+money(auto.balance)}/></label>
+    <label>Entradas (do mês)<input type="number" step="0.01" value={income} onChange={e=>setIncome(e.target.value)} placeholder={"Automático: "+money(auto.income)}/></label>
+    <label>Gastos (do mês)<input type="number" step="0.01" value={expense} onChange={e=>setExpense(e.target.value)} placeholder={"Automático: "+money(auto.expense)}/></label>
+    <label>Fatura do cartão<input type="number" step="0.01" value={cardBill} onChange={e=>setCardBill(e.target.value)} placeholder={"Automático: "+money(auto.cardBill)}/></label>
+    <button type="button" className="ghost" onClick={resetAll}><RotateCcw size={14}/> Limpar e voltar ao automático</button>
+    <button className="primary" type="submit">Salvar</button>
+  </form></div>;
+}
+function Transactions({data,onAdd,onDelete}){
+  const [desc,setDesc]=useState(""); const [cat,setCat]=useState(""); const [value,setValue]=useState(""); const [type,setType]=useState("out");
+  const submit=()=>{
+    if(!desc.trim()||!value) return;
+    onAdd({desc,cat,value:Number(value),type,date:new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"})});
+    setDesc("");setCat("");setValue("");setType("out");
+  };
+  return <div className="content">
+    <div className="panel">
+      <div className="inlineAdd">
+        <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Descrição"/>
+        <input value={cat} onChange={e=>setCat(e.target.value)} placeholder="Categoria"/>
+        <input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/>
+        <select value={type} onChange={e=>setType(e.target.value)}><option value="out">Saída</option><option value="in">Entrada</option></select>
+        <button onClick={submit}><Plus/></button>
+      </div>
+    </div>
+    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
+    {data.length===0 && <p className="emptyHint">Nenhuma movimentação por aqui ainda.</p>}
+    </div>
+  </div>
+}
 
 function Fixed({entity,total}){
   const {data,add,remove} = entity;
@@ -1262,12 +1322,19 @@ function Recurring({entity,transactions}){
   return <div className="content"><div className="panel"><div className="panelTitle"><h2>Pagamentos recorrentes</h2><span>Modelo para gerar despesas mensais</span></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Netflix"/><input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/><input value={day} onChange={e=>setDay(e.target.value)} type="number" min="1" max="31" placeholder="Dia"/><button onClick={submit}><Plus/></button></div></div><div className="panel">{data.map(x=><div className="transaction" key={x.id}><div><b>{x.name}</b><small>{x.cat} · todo dia {x.day}</small></div><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}{!data.length&&<p className="emptyHint">Cadastre assinaturas e contas mensais aqui.</p>}</div></div>;
 }
 
-function Notes({entity}){
+function Notes({entity, openNoteId, onConsumeOpenNote}){
   const { data, add, remove, update, reorder } = entity;
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeNote, setActiveNote] = useState(null);
   const [creating, setCreating] = useState(false);
   const [dragId, setDragId] = useState(null);
+
+  useEffect(() => {
+    if (!openNoteId) return;
+    const note = data.find(n => n.id === openNoteId);
+    if (note) setActiveNote(note);
+    onConsumeOpenNote?.();
+  }, [openNoteId, data]);
 
   const createNote = async () => {
     const title = window.prompt("Título da nota:", "Nova nota");
