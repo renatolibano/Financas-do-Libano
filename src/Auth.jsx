@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { supabase } from "./lib/supabaseClient";
-import { Wallet } from "lucide-react";
 
 export default function Auth() {
   const [mode, setMode] = useState("login"); // "login" | "signup"
@@ -33,7 +32,7 @@ export default function Auth() {
     <div className="authScreen">
       <form className="authCard" onSubmit={submit}>
         <div className="authBrand">
-          <div className="brandIcon"><Wallet size={20} /></div>
+          <div className="brandIcon"><img src="/icons/icon-192.png" alt="Libano" /></div>
           <div>
             <b>Libano</b>
             <small>Finance + vida</small>

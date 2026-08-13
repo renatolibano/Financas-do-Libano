@@ -151,10 +151,28 @@ create table if not exists recurring_payments (
   id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
   name text not null, value numeric not null, cat text, day int not null check(day between 1 and 31), type text not null default 'out' check(type in ('in','out')), active boolean not null default true, created_at timestamptz not null default now()
 );
+-- Área de Estudos: Metas
+create table if not exists study_goals (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  description text,
+  icon text not null default 'target',
+  color text not null default 'red',
+  mode text not null default 'percent' check (mode in ('percent','count')),
+  percent numeric not null default 0,
+  current_value numeric not null default 0,
+  target_value numeric not null default 0,
+  unit text,
+  due_date date,
+  status text not null default 'andamento' check (status in ('andamento','concluida','pausada')),
+  created_at timestamptz not null default now()
+);
+alter table study_goals enable row level security;
+
 alter table budgets enable row level security;
 alter table goals enable row level security;
 alter table recurring_payments enable row level security;
-do $$ declare t text; begin foreach t in array array['budgets','goals','recurring_payments'] loop
+do $$ declare t text; begin foreach t in array array['budgets','goals','recurring_payments','study_goals'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);

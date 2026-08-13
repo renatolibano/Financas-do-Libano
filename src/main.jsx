@@ -6,13 +6,16 @@ import {
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
-  GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon
+  GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
+  ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
+  CheckCheck, Download
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
+import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import Auth from "./Auth";
 
@@ -49,6 +52,27 @@ const initialBooks = [
   {id:2, title:"O Poder do Hábito", author:"Charles Duhigg", status:"quero_ler"},
 ];
 
+const STUDY_COLORS = [
+  {key:"red", hex:"#ff5c5c"},
+  {key:"blue", hex:"#4c8dff"},
+  {key:"green", hex:"#3ecf6a"},
+  {key:"purple", hex:"#a06bff"},
+  {key:"gold", hex:"#f0b429"},
+  {key:"pink", hex:"#ff6bb0"},
+  {key:"cyan", hex:"#31c4d6"},
+];
+const colorHex = key => (STUDY_COLORS.find(c=>c.key===key)||STUDY_COLORS[0]).hex;
+const STUDY_ICONS = { target:Target, book:BookOpen, list:ClipboardList, dumbbell:Dumbbell, star:Star, flag:Flag, brain:Brain };
+
+const initialStudyGoals = [
+  {id:1, title:"Aprovação na EsPCEx", description:"Estudar com constância e conquistar minha vaga.", icon:"target", color:"red", mode:"percent", percent:80, current_value:0, target_value:0, unit:"", due_date:"2025-11-15", status:"andamento"},
+  {id:2, title:"Ler 10 livros este ano", description:"Expandir conhecimento e vocabulário.", icon:"book", color:"blue", mode:"count", percent:0, current_value:6, target_value:10, unit:"livros", due_date:null, status:"andamento"},
+  {id:3, title:"Resolver 1.000 questões", description:"Treinar questões de todas as matérias.", icon:"list", color:"green", mode:"count", percent:0, current_value:450, target_value:1000, unit:"questões", due_date:null, status:"andamento"},
+  {id:4, title:"Treinar 4x por semana", description:"Manter disciplina e cuidar da saúde.", icon:"dumbbell", color:"purple", mode:"percent", percent:75, current_value:0, target_value:0, unit:"", due_date:"2025-12-31", status:"andamento"},
+  {id:5, title:"Aprender inglês", description:"Alcançar nível intermediário.", icon:"star", color:"gold", mode:"percent", percent:100, current_value:0, target_value:0, unit:"", due_date:"2025-06-10", status:"concluida"},
+  {id:6, title:"Revisar Matemática básica", description:"Retomar assim que a rotina de provas acalmar.", icon:"brain", color:"cyan", mode:"count", percent:0, current_value:3, target_value:12, unit:"módulos", due_date:null, status:"pausada"},
+];
+
 const initialCardPurchases = [
   {id:1, cat:"🍔 Alimentação", value:240},
   {id:2, cat:"🎮 Entretenimento", value:120},
@@ -75,6 +99,26 @@ function parseReminderDate(dateStr){
 function daysUntil(dateStr){
   const d = parseReminderDate(dateStr);
   if(!d) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.round((d-today)/86400000);
+}
+
+// Para pagamentos fixos/recorrentes que só têm o "dia do mês" (sem data completa):
+// calcula quantos dias faltam até a próxima ocorrência (este mês ou o próximo, se já passou).
+function daysUntilMonthlyDay(day){
+  const d = Number(day);
+  if(!d || Number.isNaN(d)) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  let target = new Date(today.getFullYear(), today.getMonth(), d);
+  if(target < today) target = new Date(today.getFullYear(), today.getMonth()+1, d);
+  return Math.round((target-today)/86400000);
+}
+
+// Metas de estudo guardam a data de conclusão em formato ISO (yyyy-mm-dd), diferente do DD/MM usado no resto do app.
+function daysUntilISO(dateStr){
+  if(!dateStr) return null;
+  const d = new Date(dateStr+"T00:00:00");
+  if(Number.isNaN(d.getTime())) return null;
   const today = new Date(); today.setHours(0,0,0,0);
   return Math.round((d-today)/86400000);
 }
@@ -144,6 +188,74 @@ function useTheme(){
   return [theme,setTheme];
 }
 
+// Guarda quais notificações já foram marcadas como lidas HOJE (reseta sozinho no dia seguinte).
+function useDismissedToday(){
+  const storageKey = "libano-notifs-dismissed-"+new Date().toISOString().slice(0,10);
+  const [dismissed,setDismissed] = useState(()=>{
+    try{ return JSON.parse(localStorage.getItem(storageKey)||"[]"); }catch(e){ return []; }
+  });
+  const dismissAll = (ids)=>{
+    setDismissed(prev=>{
+      const merged = Array.from(new Set([...prev,...ids]));
+      try{ localStorage.setItem(storageKey, JSON.stringify(merged)); }catch(e){}
+      return merged;
+    });
+  };
+  return [dismissed, dismissAll];
+}
+
+function notifIcon(kind){
+  if(kind==="Aniversário") return <Cake size={16}/>;
+  if(kind==="Dívida") return <CircleDollarSign size={16}/>;
+  if(kind==="Fixo") return <CalendarClock size={16}/>;
+  if(kind==="Recorrente") return <Repeat2 size={16}/>;
+  if(kind==="Meta") return <Target size={16}/>;
+  return <Bell size={16}/>;
+}
+
+function NotificationsBell({items, goTo}){
+  const [open,setOpen] = useState(false);
+  const [dismissed,dismissAll] = useDismissedToday();
+  const ref = useRef(null);
+
+  useEffect(()=>{
+    const onDoc = (e)=>{ if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return ()=>document.removeEventListener("mousedown", onDoc);
+  },[]);
+
+  const visible = items.filter(it=>!dismissed.includes(it.id));
+  const count = visible.length;
+
+  return <div className="notifWrap" ref={ref}>
+    <button className="notifBellBtn" onClick={()=>setOpen(o=>!o)} title="Notificações">
+      <Bell size={19}/>
+      {count>0 && <span className="notifBadge">{count>9?"9+":count}</span>}
+    </button>
+    {open && <div className="notifPop">
+      <div className="notifPopHead">
+        <div className="notifPopIcon"><Bell size={18}/></div>
+        <div><b>Notificações</b><small>Vence amanhã, é bom não esquecer</small></div>
+      </div>
+      <div className="notifList">
+        {visible.length===0 && <div className="notifEmpty">
+          <div className="notifEmptyIcon"><CheckCheck size={22}/></div>
+          <b>Tudo em dia!</b>
+          <small>Nada vencendo amanhã.</small>
+        </div>}
+        {visible.map(it=><button key={it.id} className="notifItem" onClick={()=>{goTo(it.page); setOpen(false);}}>
+          <div className="notifItemIcon">{notifIcon(it.kind)}</div>
+          <div className="notifItemBody"><b>{it.title}</b><small>{it.subtitle}</small></div>
+          <span className="notifItemTag">amanhã</span>
+        </button>)}
+      </div>
+      {visible.length>0 && <div className="notifFoot">
+        <button className="notifFootGhost" onClick={()=>dismissAll(visible.map(v=>v.id))}><CheckCheck size={14}/> Marcar como lidas</button>
+      </div>}
+    </div>}
+  </div>
+}
+
 function Root(){
   const {session, checking} = useSession();
   const [theme,setTheme] = useTheme();
@@ -173,6 +285,7 @@ function App({session,theme,setTheme}){
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
+  const studyGoals = useEntity("study_goals", initialStudyGoals, session);
   const [showAdd,setShowAdd] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
@@ -189,6 +302,59 @@ function App({session,theme,setTheme}){
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);
   const cardBill = cardPurchases.data.reduce((a,b)=>a+b.value,0);
+
+  // Tudo que tem uma data/prazo e falta exatamente 1 dia entra no sininho de notificações.
+  const notifItems = useMemo(()=>{
+    const items = [];
+    reminders.data.forEach(r=>{
+      if(daysUntil(r.date)===1){
+        const isBday = r.kind==="Aniversário";
+        items.push({
+          id:"rem-"+r.id, title:r.title,
+          subtitle:isBday?"Aniversário amanhã":("Lembrete · "+(r.kind||"Geral")),
+          page:isBday?"Aniversários":"Lembretes Comuns",
+          kind:isBday?"Aniversário":"Lembrete",
+        });
+      }
+    });
+    debts.data.forEach(d=>{
+      if(daysUntil(d.next)===1){
+        items.push({
+          id:"debt-"+d.id, title:d.name,
+          subtitle:"Parcela da dívida vence amanhã",
+          page:"Dívidas", kind:"Dívida",
+        });
+      }
+    });
+    fixed.data.forEach(f=>{
+      if(daysUntilMonthlyDay(f.day)===1){
+        items.push({
+          id:"fixed-"+f.id, title:f.name,
+          subtitle:"Pagamento fixo vence amanhã",
+          page:"Pagamentos Fixos", kind:"Fixo",
+        });
+      }
+    });
+    recurring.data.forEach(r=>{
+      if(daysUntilMonthlyDay(r.day)===1){
+        items.push({
+          id:"rec-"+r.id, title:r.name,
+          subtitle:"Pagamento recorrente vence amanhã",
+          page:"Recorrentes", kind:"Recorrente",
+        });
+      }
+    });
+    studyGoals.data.forEach(g=>{
+      if(g.status!=="concluida" && daysUntilISO(g.due_date)===1){
+        items.push({
+          id:"goal-"+g.id, title:g.title,
+          subtitle:"Meta de estudo conclui amanhã",
+          page:"Metas de Estudo", kind:"Meta",
+        });
+      }
+    });
+    return items;
+  },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data]);
 
   const addTransaction = (e)=>{
     e.preventDefault();
@@ -278,7 +444,7 @@ function App({session,theme,setTheme}){
       onMouseLeave={()=>{ if(canHover()) setMobileOpen(false); }}
     >
       <div className="brand">
-        <div className="brandIcon">L</div>
+        <div className="brandIcon"><img src="/icons/icon-192.png" alt="Libano" /></div>
         <div><b>Libano</b><small>Finance + vida</small></div>
       </div>
       <button className="sidebarToggle" onClick={(e)=>{e.stopPropagation();setMobileOpen(o=>!o)}}>
@@ -319,7 +485,7 @@ function App({session,theme,setTheme}){
     </aside>
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowAdd(true)}><Plus size={19}/> Nova movimentação</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={balance} income={income} expense={expense} cardBill={cardBill} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onDelete={transactions.remove}/>}
@@ -334,7 +500,7 @@ function App({session,theme,setTheme}){
       {page==="Notas" && <Notes entity={notes}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
-      {page==="Metas de Estudo" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals}/>}
       {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
@@ -908,6 +1074,188 @@ function Goals({entity}){
   return <div className="content"><div className="panel"><div className="panelTitle"><h2>Metas financeiras</h2></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Computador"/><input value={target} onChange={e=>setTarget(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor da meta"/><input value={saved} onChange={e=>setSaved(e.target.value)} type="number" step="0.01" min="0" placeholder="Já guardado"/><button onClick={submit}><Plus/></button></div></div><div className="goalGrid">{data.map(x=>{const pct=x.target?Math.min(100,Math.round(x.saved/x.target*100)):0;return <div className="goalCard" key={x.id}><div className="panelTitle"><h3><Target size={17}/> {x.name}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><strong>{money(x.saved)}</strong><small> de {money(x.target)}</small><div className="progress"><i style={{width:pct+"%"}}/></div><div className="goalActions"><span>{pct}% concluído</span><button onClick={()=>{const n=Number(prompt("Quanto adicionar à meta?"));if(n>0)update(x.id,{saved:Math.min(x.target,x.saved+n)})}}>+ Adicionar</button></div></div>})}{!data.length&&<p className="emptyHint">Crie uma meta para acompanhar seu progresso.</p>}</div></div>;
 }
 
+function studyGoalPct(g){
+  if(g.mode==="count"){
+    const t = Number(g.target_value)||0;
+    return t ? Math.min(100, Math.round((Number(g.current_value)||0)/t*100)) : 0;
+  }
+  return Math.min(100, Math.max(0, Number(g.percent)||0));
+}
+function studyGoalFmtDate(d){
+  if(!d) return "";
+  const [y,m,dd] = d.split("-");
+  return (dd && m && y) ? `${dd}/${m}/${y}` : d;
+}
+function studyGoalBadge(g){
+  if(g.status==="concluida") return {label:"Concluída", color:"#3ecf6a"};
+  if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
+  return {label:"Em andamento", color: colorHex(g.color)};
+}
+
+function StudyGoals({entity}){
+  const {data,add,remove,update} = entity;
+  const [filter,setFilter] = useState("todas");
+  const [openMenuId,setOpenMenuId] = useState(null);
+  const [modal,setModal] = useState(null); // null | "new" | goal being edited
+
+  const total = data.length;
+  const emAndamento = data.filter(g=>g.status==="andamento").length;
+  const concluidas = data.filter(g=>g.status==="concluida").length;
+  const pausadas = data.filter(g=>g.status==="pausada").length;
+  const filtered = filter==="todas" ? data : data.filter(g=>g.status===filter);
+
+  const confirmRemove = (id)=>{ if(confirm("Excluir esta meta?")){ setOpenMenuId(null); remove(id); } };
+
+  return <div className="content">
+    <div className="studyGoalsHead">
+      <div><h2>Metas</h2><p>Acompanhe suas metas e conquistas.</p></div>
+      <button className="add" onClick={()=>setModal("new")}><Plus size={17}/> Nova meta</button>
+    </div>
+
+    <div className="studyStats">
+      <div className="studyStat"><div className="studyStatIcon" style={{background:"#ff5c5c22",color:"#ff5c5c"}}><Target size={17}/></div><strong>{total}</strong><small>Metas no total</small></div>
+      <div className="studyStat"><div className="studyStatIcon" style={{background:"#f0b42922",color:"#f0b429"}}><TrendingUp size={17}/></div><strong>{emAndamento}</strong><small>Em andamento</small></div>
+      <div className="studyStat"><div className="studyStatIcon" style={{background:"#3ecf6a22",color:"#3ecf6a"}}><CheckCircle2 size={17}/></div><strong>{concluidas}</strong><small>Concluídas</small></div>
+      <div className="studyStat"><div className="studyStatIcon" style={{background:"#a06bff22",color:"#a06bff"}}><Hourglass size={17}/></div><strong>{pausadas}</strong><small>Pausadas</small></div>
+    </div>
+
+    <div className="studyGoalsListHead">
+      <h3>Minhas metas</h3>
+      <div className="filterWrap"><Filter size={13}/><select value={filter} onChange={e=>setFilter(e.target.value)}>
+        <option value="todas">Todas</option>
+        <option value="andamento">Em andamento</option>
+        <option value="concluida">Concluídas</option>
+        <option value="pausada">Pausadas</option>
+      </select></div>
+    </div>
+
+    <div className="studyGoalList" onClick={()=>setOpenMenuId(null)}>
+      {filtered.map(g=>{
+        const pct = studyGoalPct(g);
+        const hex = colorHex(g.color);
+        const Icon = STUDY_ICONS[g.icon] || Target;
+        const badge = studyGoalBadge(g);
+        return <div className="studyGoalCard" key={g.id}>
+          <div className="studyGoalIcon" style={{background:hex+"22", color:hex}}><Icon size={20}/></div>
+          <div className="studyGoalBody">
+            <div className="studyGoalTop">
+              <div><h4>{g.title}</h4>{g.description && <p>{g.description}</p>}</div>
+              <button className="studyGoalMenuBtn" onClick={(e)=>{e.stopPropagation(); setOpenMenuId(id=>id===g.id?null:g.id);}}><MoreVertical size={18}/></button>
+            </div>
+            <div className="studyGoalProgressRow">
+              <div className="progress"><i style={{width:pct+"%", background:hex}}/></div>
+              <span className="studyGoalPct" style={{color:hex}}>{pct}%</span>
+            </div>
+            <div className="studyGoalFoot">
+              <span className="studyGoalFootInfo">
+                {g.mode==="count"
+                  ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
+                  : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : "")}
+              </span>
+              <span className="studyGoalBadge" style={{color:badge.color, borderColor:badge.color}}>{badge.label}</span>
+            </div>
+          </div>
+          {openMenuId===g.id && <div className="studyGoalMenuPop" onClick={e=>e.stopPropagation()}>
+            <button onClick={()=>{setOpenMenuId(null); setModal(g);}}><Pencil size={13}/> Editar</button>
+            {g.status!=="concluida" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"concluida"});}}><CheckCircle2 size={13}/> Marcar como concluída</button>}
+            {g.status==="andamento" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"pausada"});}}><Hourglass size={13}/> Pausar</button>}
+            {(g.status==="pausada"||g.status==="concluida") && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"andamento"});}}><RotateCcw size={13}/> Reativar</button>}
+            <button className="danger" onClick={()=>confirmRemove(g.id)}><Trash2 size={13}/> Excluir</button>
+          </div>}
+        </div>;
+      })}
+      {filtered.length===0 && <p className="emptyHint">{data.length===0 ? "Crie sua primeira meta de estudo." : "Nenhuma meta nesse filtro."}</p>}
+    </div>
+
+    {modal && <StudyGoalModal goal={modal==="new"?null:modal} onClose={()=>setModal(null)} onSave={(payload)=>{
+      if(modal==="new") add(payload); else update(modal.id, payload);
+      setModal(null);
+    }}/>}
+  </div>;
+}
+
+function StudyGoalModal({goal, onClose, onSave}){
+  const [title,setTitle] = useState(goal?.title||"");
+  const [description,setDescription] = useState(goal?.description||"");
+  const [icon,setIcon] = useState(goal?.icon||"target");
+  const [color,setColor] = useState(goal?.color||"red");
+  const [mode,setMode] = useState(goal?.mode||"percent");
+  const [percent,setPercent] = useState(goal?.percent ?? 0);
+  const [currentValue,setCurrentValue] = useState(goal?.current_value ?? "");
+  const [targetValue,setTargetValue] = useState(goal?.target_value ?? "");
+  const [unit,setUnit] = useState(goal?.unit || "");
+  const [dueDate,setDueDate] = useState(goal?.due_date || "");
+  const [status,setStatus] = useState(goal?.status || "andamento");
+
+  const submit = (e) => {
+    e.preventDefault();
+    if(!title.trim()) return;
+    onSave({
+      title: title.trim(),
+      description: description.trim(),
+      icon, color, mode, status,
+      percent: mode==="percent" ? Math.min(100,Math.max(0,Number(percent)||0)) : 0,
+      current_value: mode==="count" ? Number(currentValue)||0 : 0,
+      target_value: mode==="count" ? Number(targetValue)||0 : 0,
+      unit: mode==="count" ? unit.trim() : "",
+      due_date: dueDate || null,
+    });
+  };
+
+  return <div className="modalBack" onClick={onClose}>
+    <form className="modal" onClick={e=>e.stopPropagation()} onSubmit={submit}>
+      <div className="modalHead"><h2>{goal?"Editar meta":"Nova meta"}</h2><button type="button" onClick={onClose}><X/></button></div>
+      <label>Título<input value={title} onChange={e=>setTitle(e.target.value)} required placeholder="Ex.: Aprovação na EsPCEx"/></label>
+      <label>Descrição<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Estudar com constância e conquistar minha vaga."/></label>
+
+      <label>Ícone
+        <div className="iconColorPicker">
+          {Object.entries(STUDY_ICONS).map(([key,Ic])=>
+            <button type="button" key={key} className={"iconPickBtn "+(icon===key?"active":"")} onClick={()=>setIcon(key)}><Ic size={17}/></button>
+          )}
+        </div>
+      </label>
+      <label>Cor
+        <div className="iconColorPicker">
+          {STUDY_COLORS.map(c=>
+            <button type="button" key={c.key} className={"colorPickBtn "+(color===c.key?"active":"")} style={{background:c.hex}} onClick={()=>setColor(c.key)}/>
+          )}
+        </div>
+      </label>
+
+      <label>Tipo de progresso
+        <div className="modeToggle">
+          <button type="button" className={mode==="percent"?"active":""} onClick={()=>setMode("percent")}>Percentual</button>
+          <button type="button" className={mode==="count"?"active":""} onClick={()=>setMode("count")}>Quantidade</button>
+        </div>
+      </label>
+
+      {mode==="percent"
+        ? <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>
+        : <>
+            <div className="fieldRow">
+              <label>Valor atual<input type="number" min="0" value={currentValue} onChange={e=>setCurrentValue(e.target.value)} placeholder="0"/></label>
+              <label>Meta<input type="number" min="0" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="10"/></label>
+            </div>
+            <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: livros, questões"/></label>
+          </>
+      }
+
+      <label>Data de conclusão (opcional)<input type="date" value={dueDate||""} onChange={e=>setDueDate(e.target.value)}/></label>
+
+      <label>Status
+        <select value={status} onChange={e=>setStatus(e.target.value)}>
+          <option value="andamento">Em andamento</option>
+          <option value="concluida">Concluída</option>
+          <option value="pausada">Pausada</option>
+        </select>
+      </label>
+
+      <button className="primary" type="submit">{goal?"Salvar":"Criar meta"}</button>
+    </form>
+  </div>;
+}
+
 function Recurring({entity,transactions}){
   const {data,add,remove}=entity; const [name,setName]=useState(""); const [value,setValue]=useState(""); const [cat,setCat]=useState("Assinaturas"); const [day,setDay]=useState("");
   const submit=()=>{if(!name.trim()||!value||!day)return;add({name,value:Number(value),cat,day:Number(day),type:"out"});setName("");setValue("");setDay("");};
@@ -958,6 +1306,13 @@ function Notes({entity}){
 
   return (
     <div className="content">
+      {data.length > 0 && (
+        <div className="notesActions">
+          <button className="ghost" onClick={() => downloadAllNotesPdf(data)}>
+            <Download size={15}/> Baixar todas em PDF
+          </button>
+        </div>
+      )}
       <div className="notesGrid" onClick={() => setOpenMenuId(null)}>
         <div className="noteTile addTile" onClick={createNote}>
           <div className="noteCoverWrap addCover">
@@ -984,6 +1339,7 @@ function Notes({entity}){
             {openMenuId === note.id && (
               <div className="bookMenu" onClick={e => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setActiveNote(note); }}><StickyNote size={14}/> Abrir</button>
+                <button onClick={() => { setOpenMenuId(null); downloadNotePdf(note); }}><Download size={14}/> Baixar PDF</button>
                 <button className="danger" onClick={() => handleDelete(note)}><Trash2 size={14}/> Excluir</button>
               </div>
             )}
@@ -1180,6 +1536,8 @@ function NoteEditor({ note, onClose, onSave }) {
           <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={16}/></button>
           <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
           <button title="Lista de marcação" onClick={insertChecklist}><CheckSquare size={16}/></button>
+          <span className="noteToolDivider"/>
+          <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
         </div>
         <div className="noteEditorBody" onClick={() => setEmojiOpen(false)}>
           <div

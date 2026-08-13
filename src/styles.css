@@ -83,7 +83,8 @@ button{cursor:pointer;border:0;background:none;color:inherit}
 .sidebar.expanded{width:250px;box-shadow:20px 0 60px #0008}
 @media(hover:hover) and (pointer:fine){.sidebar:hover{width:250px;box-shadow:20px 0 60px #0008}}
 .brand{display:flex;align-items:center;gap:11px;padding:0 4px 22px}
-.brandIcon{flex:0 0 auto;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--accent);color:var(--accent-text-on);font-weight:900;font-size:22px}
+.brandIcon{flex:0 0 auto;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--accent);color:var(--accent-text-on);font-weight:900;font-size:22px;overflow:hidden}
+.brandIcon img{width:100%;height:100%;object-fit:cover;display:block}
 .brand>div:nth-child(2){overflow:hidden;white-space:nowrap;opacity:0;transition:opacity .15s}
 .sidebar.expanded .brand>div:nth-child(2),.sidebar:hover .brand>div:nth-child(2){opacity:1}
 .brand b{display:block;font-size:18px}.brand small{display:block;color:var(--text-2);font-size:11px;margin-top:2px}
@@ -108,6 +109,33 @@ nav button.active,.navGroupHead.active{background:var(--accent);color:var(--acce
 .cloud span{font-size:20px}.cloud b,.cloud small{display:block}.cloud small{font-size:11px;color:var(--text-2);margin-top:3px}
 main{width:calc(100% - 76px);margin-left:76px;padding:30px 34px;transition:margin-left .22s ease,width .22s ease}
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+.headerActions{display:flex;align-items:center;gap:12px}
+
+.notifWrap{position:relative}
+.notifBellBtn{position:relative;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-1)}
+.notifBellBtn:hover{background:var(--bg-hover)}
+.notifBadge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#e6342e;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px var(--bg-surface)}
+.notifPop{position:absolute;top:calc(100% + 10px);right:0;width:min(340px,92vw);background:var(--bg-modal);border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:0 20px 60px #000a;z-index:40}
+.notifPopHead{display:flex;align-items:center;gap:12px;padding:16px}
+.notifPopHead{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:var(--accent-text-on)}
+.notifPopIcon{width:36px;height:36px;border-radius:10px;background:#ffffff30;display:grid;place-items:center;flex:0 0 auto}
+.notifPopHead b{display:block;font-size:14px}
+.notifPopHead small{display:block;font-size:11px;opacity:.85;margin-top:2px}
+.notifList{max-height:320px;overflow-y:auto;padding:8px}
+.notifEmpty{display:grid;place-items:center;gap:6px;padding:26px 10px;text-align:center}
+.notifEmptyIcon{width:44px;height:44px;border-radius:12px;background:var(--bg-surface-2);display:grid;place-items:center;color:var(--accent)}
+.notifEmpty b{font-size:13.5px}
+.notifEmpty small{color:var(--text-2);font-size:12px}
+.notifItem{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border-radius:11px;text-align:left}
+.notifItem:hover{background:var(--bg-hover-2)}
+.notifItemIcon{width:32px;height:32px;border-radius:9px;background:var(--bg-surface-2);display:grid;place-items:center;flex:0 0 auto;color:var(--accent-2)}
+.notifItemBody{flex:1;min-width:0}
+.notifItemBody b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.notifItemBody small{display:block;color:var(--text-2);font-size:11px;margin-top:1px}
+.notifItemTag{font-size:9.5px;font-weight:800;color:var(--accent-2);background:var(--accent-soft-bg);padding:3px 7px;border-radius:20px;text-transform:uppercase;letter-spacing:.02em;flex:0 0 auto}
+.notifFoot{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border-soft)}
+.notifFootGhost{flex:1;background:var(--bg-surface-2);color:var(--text-1);border-radius:10px;padding:9px;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:6px}
+.notifFootGhost:hover{background:var(--bg-hover-2)}
 h1{font-size:28px;margin:0 0 4px}
 header p{margin:0;color:var(--text-2);font-size:13px}
 .add,.primary{background:var(--accent);color:var(--accent-text-on);border-radius:10px;padding:11px 15px;font-weight:750;display:flex;align-items:center;gap:8px}
@@ -220,8 +248,10 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 main{width:calc(100% - 64px);margin-left:64px;padding:20px 15px}
 header{justify-content:flex-start}
 header>div{flex:1}
+header>.headerActions{flex:0 0 auto}
 .add{font-size:0;padding:11px}
 .add svg{font-size:19px}
+.notifPop{position:fixed;top:66px;right:12px;left:12px;width:auto}
 .grid2,.grid3{grid-template-columns:1fr}
 .mini{grid-column:auto}
 .stats{grid-template-columns:1fr 1fr}
@@ -310,6 +340,8 @@ h1{font-size:23px}
 .readerMain{flex-direction:column}
 .notesPane{width:100%;height:44vh;border-left:none;border-top:1px solid var(--border-soft)}
 }
+.notesActions{display:flex;justify-content:flex-end;margin-bottom:14px}
+.notesActions .ghost{display:flex;align-items:center;gap:6px}
 .notesGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:22px 16px}
 .noteTile{position:relative;display:flex;flex-direction:column;gap:6px;cursor:grab}
 .noteTile.dragging{opacity:.4}
@@ -363,3 +395,51 @@ h1{font-size:23px}
 .goalActions{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;color:var(--text-2)}
 .goalActions button{border:0;background:none;font-weight:700;cursor:pointer}
 .budgetCard .progress,.goalCard .progress{margin-top:12px}
+
+/* Metas de Estudo */
+.studyGoalsHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}
+.studyGoalsHead h2{margin:0 0 4px;font-size:22px}
+.studyGoalsHead p{margin:0;color:var(--text-2);font-size:13px}
+.studyStats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.studyStat{border:1px solid var(--border);background:var(--bg-surface);border-radius:15px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.studyStatIcon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center}
+.studyStat strong{font-size:24px}
+.studyStat small{color:var(--text-2);font-size:12px}
+.studyGoalsListHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.studyGoalsListHead h3{margin:0;font-size:15px}
+.filterWrap{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg-surface);border-radius:9px;padding:8px 12px;color:var(--accent-2)}
+.filterWrap select{background:none;border:none;color:inherit;font-weight:700;font-size:12.5px;outline:none}
+.studyGoalList{display:grid;gap:14px}
+.studyGoalCard{position:relative;background:var(--bg-surface);border:1px solid var(--border);border-radius:16px;padding:18px 20px;display:flex;gap:14px}
+.studyGoalIcon{flex:0 0 auto;width:44px;height:44px;border-radius:12px;display:grid;place-items:center}
+.studyGoalBody{flex:1;min-width:0}
+.studyGoalTop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.studyGoalTop h4{margin:0;font-size:15.5px}
+.studyGoalTop p{margin:3px 0 0;color:var(--text-2);font-size:12.5px}
+.studyGoalMenuBtn{color:var(--text-3);padding:4px;flex:0 0 auto}
+.studyGoalProgressRow{display:flex;align-items:center;gap:12px;margin-top:12px}
+.studyGoalProgressRow .progress{flex:1}
+.studyGoalPct{font-size:13.5px;font-weight:800;min-width:38px;text-align:right}
+.studyGoalFoot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px;flex-wrap:wrap}
+.studyGoalFootInfo{display:flex;align-items:center;gap:6px;color:var(--text-2);font-size:12px;min-height:16px}
+.studyGoalBadge{font-size:11px;font-weight:700;padding:5px 10px;border-radius:20px;border:1px solid;white-space:nowrap}
+.studyGoalMenuPop{position:absolute;top:44px;right:16px;background:var(--bg-surface-2);border:1px solid var(--border);border-radius:10px;padding:6px;display:grid;gap:2px;min-width:190px;z-index:5;box-shadow:0 12px 30px #000a}
+.studyGoalMenuPop button{padding:9px 10px;border-radius:7px;font-size:12.5px;text-align:left;color:var(--text-1);display:flex;align-items:center;gap:6px;width:100%}
+.studyGoalMenuPop button:hover{background:var(--bg-hover-2)}
+.studyGoalMenuPop button.danger{color:#ff9d9d}
+.iconColorPicker{display:flex;flex-wrap:wrap;gap:8px}
+.iconPickBtn{width:36px;height:36px;border-radius:10px;background:var(--bg-surface-3);border:1.5px solid var(--border);display:grid;place-items:center;color:var(--text-2)}
+.iconPickBtn.active{border-color:var(--text-1);color:var(--text-1)}
+.colorPickBtn{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer}
+.colorPickBtn.active{border-color:var(--text-1)}
+.modeToggle{display:flex;gap:8px;background:var(--bg-surface-2);border:1px solid var(--border);border-radius:10px;padding:4px}
+.modeToggle button{flex:1;padding:9px 10px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--text-2)}
+.modeToggle button.active{background:var(--accent);color:var(--accent-text-on)}
+.fieldRow{display:flex;gap:10px}
+.fieldRow>label{flex:1}
+@media(max-width:760px){
+.studyStats{grid-template-columns:1fr 1fr}
+.studyGoalsHead{flex-direction:column}
+.studyGoalCard{padding:15px}
+}
+@media(max-width:430px){.studyStats{grid-template-columns:1fr 1fr}}
