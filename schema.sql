@@ -213,6 +213,11 @@ alter table study_pdfs add column if not exists favorite_excerpts jsonb not null
 -- Atualização: Anotações no Leitor de PDF da Área de Estudos (mesmo conceito já usado em "Livros")
 alter table study_pdfs add column if not exists notes text;
 
+-- Atualização: Modo Caneta — desenhos/marcações à mão livre por cima do PDF,
+-- guardados como uma camada separada (o arquivo original nunca é alterado).
+-- Formato: { "<numero_da_pagina>": [ {id, type, ...}, ... ] }
+alter table study_pdfs add column if not exists drawings jsonb not null default '{}'::jsonb;
+
 -- Atualização: Metas vinculadas a um PDF (Área de Estudos ou Livros)
 -- Quando vinculada, o progresso da meta é atualizado automaticamente conforme a leitura avança.
 alter table study_goals add column if not exists link_source text not null default 'none' check (link_source in ('none','estudo','livro'));

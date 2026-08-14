@@ -81,27 +81,37 @@ button{cursor:pointer;border:0;background:none;color:inherit}
 .app{min-height:100vh;display:flex;background:radial-gradient(circle at 75% 0%,var(--bg-grad-1) 0,var(--bg-grad-2) 35%,var(--bg-grad-3) 70%)}
 .sidebar{width:76px;min-height:100vh;border-right:1px solid var(--border-soft);background:var(--bg-sidebar);padding:22px 12px;position:fixed;left:0;top:0;z-index:30;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;transition:width .22s ease,box-shadow .22s ease}
 .sidebar.expanded{width:250px;box-shadow:20px 0 60px #0008}
-@media(hover:hover) and (pointer:fine){.sidebar:hover{width:250px;box-shadow:20px 0 60px #0008}}
 .brand{display:flex;align-items:center;gap:11px;padding:0 4px 22px}
 .brandIcon{flex:0 0 auto;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--accent);color:var(--accent-text-on);font-weight:900;font-size:22px;overflow:hidden}
 .brandIcon img{width:100%;height:100%;object-fit:cover;display:block}
 .brand>div:nth-child(2){overflow:hidden;white-space:nowrap;opacity:0;transition:opacity .15s}
-.sidebar.expanded .brand>div:nth-child(2),.sidebar:hover .brand>div:nth-child(2){opacity:1}
+.sidebar.expanded .brand>div:nth-child(2){opacity:1}
 .brand b{display:block;font-size:18px}.brand small{display:block;color:var(--text-2);font-size:11px;margin-top:2px}
 .sidebarToggle{display:none}
 nav{display:grid;gap:6px}
 nav button,.navGroupHead{display:flex;align-items:center;gap:12px;padding:12px;border-radius:11px;color:var(--text-2);text-align:left;width:100%}
 nav button svg,.navGroupHead svg{flex:0 0 auto}
 nav button span,.navGroupHead span{overflow:hidden;white-space:nowrap;opacity:0;transition:opacity .15s;flex:1}
-.sidebar.expanded nav button span,.sidebar.expanded .navGroupHead span,.sidebar:hover nav button span,.sidebar:hover .navGroupHead span{opacity:1}
+.sidebar.expanded nav button span,.sidebar.expanded .navGroupHead span{opacity:1}
 nav button:hover,.navGroupHead:hover{background:var(--bg-hover);color:var(--text-1)}
 nav button.active,.navGroupHead.active{background:var(--accent);color:var(--accent-text-on);font-weight:700}
 .navGroupHead .chev{margin-left:auto;flex:0 0 auto;opacity:0;transition:opacity .15s}
-.sidebar.expanded .navGroupHead .chev,.sidebar:hover .navGroupHead .chev{opacity:1}
+.sidebar.expanded .navGroupHead .chev{opacity:1}
 .navSub{display:grid;gap:4px;padding-left:14px;margin:2px 0 4px}
 .navSub button{padding:9px 10px;font-size:13px}
 .sidebarBottom{margin-top:auto;display:grid;gap:8px;opacity:0;pointer-events:none;transition:opacity .15s}
-.sidebar.expanded .sidebarBottom,.sidebar:hover .sidebarBottom{opacity:1;pointer-events:auto}
+.sidebar.expanded .sidebarBottom{opacity:1;pointer-events:auto}
+/* Expandir a barra lateral por hover é só para quem realmente tem mouse/trackpad.
+   Sem essa media query, um toque no celular deixava o :hover "grudado" no elemento
+   tocado até o próximo toque em outro lugar, fazendo a barra parecer que não fecha
+   por completo ao entrar numa aba. */
+@media(hover:hover) and (pointer:fine){
+  .sidebar:hover{width:250px;box-shadow:20px 0 60px #0008}
+  .sidebar:hover .brand>div:nth-child(2){opacity:1}
+  .sidebar:hover nav button span,.sidebar:hover .navGroupHead span{opacity:1}
+  .sidebar:hover .navGroupHead .chev{opacity:1}
+  .sidebar:hover .sidebarBottom{opacity:1;pointer-events:auto}
+}
 .emptyHint{color:var(--text-3);font-size:12px;padding:10px 0}
 .resetData{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:9px;color:var(--text-2);font-size:11px}
 .resetData:hover{background:var(--bg-hover);color:#ff9d9d}
@@ -365,13 +375,36 @@ h1{font-size:23px}
 .textLayer ::-moz-selection{background:color-mix(in srgb, var(--accent), transparent 70%)}
 .textLayer .endOfContent{display:block;position:absolute;inset:100% 0 0;z-index:0;cursor:default;user-select:none}
 
-.pdfHighlightGroup{position:absolute;inset:0;z-index:1;pointer-events:none}
-.pdfHighlightRect{position:absolute;background:rgba(255,213,74,.45);border-radius:2px}
-
 .pdfSelectionToolbar{position:fixed;transform:translate(-50%,calc(-100% - 10px));display:flex;gap:4px;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;padding:5px;box-shadow:0 12px 30px #000a;z-index:80}
 .pdfSelectionToolbar button{display:flex;align-items:center;gap:6px;padding:8px 11px;border-radius:7px;font-size:11.5px;font-weight:700;color:var(--text-1);white-space:nowrap}
 .pdfSelectionToolbar button:hover{background:var(--bg-hover-2)}
-.pdfHighlightSwatch{width:12px;height:12px;border-radius:3px;background:#ffd54a;display:inline-block;flex:0 0 auto}
+
+/* Modo Caneta ------------------------------------------------------------ */
+.penOptionsBar{display:flex;flex-direction:column;gap:8px;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar)}
+.penToolGroup{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.penToolGroup>button{min-width:32px;height:32px;padding:0 9px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text-2);font-size:11px;font-weight:700;border:1px solid transparent;white-space:nowrap}
+.penToolGroup>button:hover{background:var(--bg-surface-3);color:var(--text-1)}
+.penToolGroup>button.active{background:var(--accent);border-color:var(--accent);color:var(--accent-text-on)}
+.penToolGroup>button:disabled{opacity:.4;cursor:default}
+.penToolDivider{width:1px;align-self:stretch;background:var(--border-soft);margin:0 3px}
+.penOptionsRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--text-2)}
+.penOptionsRow select{background:var(--bg-surface-3);color:var(--text-1);border:1px solid var(--border);border-radius:7px;padding:6px 8px;font-size:11.5px}
+.penSwatches{display:flex;align-items:center;gap:6px}
+.penSwatch{width:20px;height:20px;border-radius:50%;border:2px solid transparent;padding:0;box-shadow:0 0 0 1px var(--border) inset}
+.penSwatch.active{border-color:var(--text-1)}
+.penSwatches input[type=color]{width:22px;height:22px;padding:0;border:none;border-radius:50%;overflow:hidden;background:none;cursor:pointer}
+.penSliderLabel{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.penSliderLabel input[type=range]{width:80px}
+.penCheckLabel{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.penHint{margin:0;font-style:italic}
+.penDeleteBtn{display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:7px;border:1px solid var(--border);color:#ff8a80;font-weight:700;font-size:11.5px}
+.penDeleteBtn:hover{background:var(--bg-surface-3)}
+
+.pdfDrawLayer{z-index:3}
+.pdfTextAnn{position:absolute;z-index:4;white-space:pre-wrap;max-width:60%;line-height:1.25;cursor:default;font-weight:600}
+.pdfTextAnn textarea{background:#fffbe6cc;color:#1f2937;border:1px dashed #0007;border-radius:4px;padding:2px 5px;font:inherit;font-size:inherit;min-width:140px;min-height:1.4em;resize:both}
+.pdfSelectionBox{position:absolute;z-index:5;border:1.5px dashed var(--accent);border-radius:3px;pointer-events:none}
+.pdfSelectionHandle{position:absolute;right:-6px;bottom:-6px;width:13px;height:13px;background:var(--accent);border:2px solid var(--bg-reader-modal);border-radius:50%;pointer-events:auto;cursor:nwse-resize}
 
 .pdfExcerptList{display:flex;flex-direction:column;gap:4px}
 .pdfExcerptItem{display:flex;align-items:stretch;gap:4px}
@@ -535,6 +568,9 @@ h1{font-size:23px}
 @media (max-width:760px){
   .pdfToolbar{gap:8px}
   .pdfJumpForm input{width:120px}
+  .penSliderLabel input[type=range]{width:56px}
+  .penOptionsRow{gap:8px}
+  .pdfToolbarGroup button span{display:none}
 }
 
 .notesPane{width:360px;flex-shrink:0;border-left:1px solid var(--border-soft);background:var(--bg-reader-toolbar);display:flex;flex-direction:column;min-height:0}

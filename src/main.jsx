@@ -9,7 +9,8 @@ import {
   GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
-  ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy
+  ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
+  PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -19,6 +20,10 @@ import { pdfjsLib } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
+import {
+  strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
+  translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf,
+} from "./lib/annotations";
 import Auth from "./Auth";
 
 const initialTransactions = [
@@ -496,6 +501,10 @@ function App({session,theme,setTheme}){
   const goTo = (key)=>{
     setPage(key);
     if(window.innerWidth<=760) setMobileOpen(false);
+    // Em telas de toque, o navegador às vezes mantém o estado ":hover"/":active"
+    // grudado no botão tocado até o próximo toque em outro lugar. Tirar o foco
+    // aqui garante que a barra lateral feche por completo visualmente.
+    document.activeElement?.blur?.();
   };
   const toggleGroup = (key)=>{
     setMobileOpen(true);
@@ -946,9 +955,13 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
       </div>}
       <b className="bookTitle">{book.title}</b>
       {book.total_pages !== 1 && <div className="progress"><i style={{width:progress+"%"}}/></div>}
-      <small className="bookProgressLabel">
-        {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
-      </small>
+      {(book.total_pages !== 1 || favCount>0 || impCount>0) && (
+        <small className="bookProgressLabel">
+          {book.total_pages !== 1 && <>{progress}%</>}
+          {favCount>0 && <> {book.total_pages !== 1 && "· "}<Star size={10}/> {favCount}</>}
+          {impCount>0 && <> · <Flag size={10}/> {impCount}</>}
+        </small>
+      )}
     </div>
   );
 }
@@ -981,6 +994,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
+  const renderTaskRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -1025,7 +1039,22 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
       canvas.style.height = Math.floor(viewport.height) + "px";
       const ctx = canvas.getContext("2d");
       const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-      await page.render({ canvasContext: ctx, viewport, transform }).promise;
+      // Cancela qualquer renderização anterior ainda em andamento nesse mesmo
+      // canvas antes de começar a nova — se duas rodarem juntas (ex.: trocando
+      // de página rápido), elas disputam a matriz de transformação e a página
+      // pode aparecer espelhada/invertida até a próxima renderização "limpa".
+      if (renderTaskRef.current) {
+        try { renderTaskRef.current.cancel(); } catch (e) {}
+      }
+      const task = page.render({ canvasContext: ctx, viewport, transform });
+      renderTaskRef.current = task;
+      try {
+        await task.promise;
+      } catch (e) {
+        if (e?.name === "RenderingCancelledException") return;
+        throw e;
+      }
+      if (renderTaskRef.current === task) renderTaskRef.current = null;
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1453,9 +1482,13 @@ function StudyPdfTile({ pdfDoc, groups, menuOpen, onToggleMenu, onOpen, onDelete
       </div>}
       <b className="bookTitle">{pdfDoc.title}</b>
       {pdfDoc.total_pages !== 1 && <div className="progress"><i style={{width:progress+"%"}}/></div>}
-      <small className="bookProgressLabel">
-        {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
-      </small>
+      {(pdfDoc.total_pages !== 1 || favCount>0 || impCount>0) && (
+        <small className="bookProgressLabel">
+          {pdfDoc.total_pages !== 1 && <>{progress}%</>}
+          {favCount>0 && <> {pdfDoc.total_pages !== 1 && "· "}<Star size={10}/> {favCount}</>}
+          {impCount>0 && <> · <Flag size={10}/> {impCount}</>}
+        </small>
+      )}
     </div>
   );
 }
@@ -1500,7 +1533,59 @@ function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRen
   );
 }
 
-function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onHighlightsChange, onFavoriteExcerptsChange, onCreateFlashcard }) {
+// Desenha uma anotação (traço à mão livre ou forma) dentro do <svg> de anotações.
+// As coordenadas já vêm em "unidades de página" (mesmo sistema do viewBox do svg).
+function AnnotationShape({ ann, preview, onPointerDown }) {
+  if (ann.type === "stroke") {
+    const isHl = ann.tool === "highlighter";
+    const uniform = ann.style === "marker" || isHl;
+    const endpoints = ann.points || [];
+    return (
+      <g
+        style={{ mixBlendMode: isHl ? "multiply" : "normal", opacity: preview ? 0.92 : 1, cursor: onPointerDown ? "pointer" : undefined }}
+        onPointerDown={onPointerDown}
+      >
+        {ann.style === "normal" && !isHl && endpoints.length > 0 && (
+          <>
+            <circle cx={endpoints[0].x} cy={endpoints[0].y} r={(ann.width * (0.55 + (endpoints[0].p ?? 0.5) * 0.9)) / 2} fill={ann.color} opacity={ann.opacity} />
+            <circle cx={endpoints[endpoints.length - 1].x} cy={endpoints[endpoints.length - 1].y} r={(ann.width * (0.55 + (endpoints[endpoints.length - 1].p ?? 0.5) * 0.9)) / 2} fill={ann.color} opacity={ann.opacity} />
+          </>
+        )}
+        <path d={strokeOutlinePath(ann.points, ann.width, { uniform })} fill={ann.color} opacity={ann.opacity} />
+      </g>
+    );
+  }
+  if (ann.type === "shape") {
+    const stroke = ann.color, sw = ann.width, op = ann.opacity;
+    if (ann.shape === "line") {
+      return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} onPointerDown={onPointerDown} />;
+    }
+    if (ann.shape === "arrow") {
+      const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
+      const headLen = Math.max(8, sw * 3);
+      const hx1 = ann.x2 - headLen * Math.cos(angle - Math.PI / 7), hy1 = ann.y2 - headLen * Math.sin(angle - Math.PI / 7);
+      const hx2 = ann.x2 - headLen * Math.cos(angle + Math.PI / 7), hy2 = ann.y2 - headLen * Math.sin(angle + Math.PI / 7);
+      return (
+        <g onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }}>
+          <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} />
+          <polygon points={`${ann.x2},${ann.y2} ${hx1},${hy1} ${hx2},${hy2}`} fill={stroke} opacity={op} />
+        </g>
+      );
+    }
+    if (ann.shape === "rect") {
+      const x = Math.min(ann.x1, ann.x2), y = Math.min(ann.y1, ann.y2);
+      return <rect x={x} y={y} width={Math.abs(ann.x2 - ann.x1)} height={Math.abs(ann.y2 - ann.y1)} stroke={stroke} strokeWidth={sw} fill="none" opacity={op} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} />;
+    }
+    if (ann.shape === "circle") {
+      const cx = ann.cx ?? (ann.x1 + ann.x2) / 2, cy = ann.cy ?? (ann.y1 + ann.y2) / 2;
+      const rx = Math.abs(ann.r ?? (ann.x2 - ann.x1) / 2) || 1, ry = Math.abs(ann.r ?? (ann.y2 - ann.y1) / 2) || 1;
+      return <ellipse cx={cx} cy={cy} rx={rx} ry={ry} stroke={stroke} strokeWidth={sw} fill="none" opacity={op} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} />;
+    }
+  }
+  return null;
+}
+
+function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
   const [numPages, setNumPages] = useState(pdfDoc.total_pages || 0);
@@ -1515,7 +1600,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
 
   const [favoritePages, setFavoritePages] = useState(pdfDoc.favorite_pages || []);
   const [importantPages, setImportantPages] = useState(pdfDoc.important_pages || []);
-  const [highlights, setHighlights] = useState(pdfDoc.highlights || []);
   const [favoriteExcerpts, setFavoriteExcerpts] = useState(pdfDoc.favorite_excerpts || []);
   const [selection, setSelection] = useState(null); // {text, top, left}
 
@@ -1526,6 +1610,37 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [searchProgress, setSearchProgress] = useState(0);
   const [jumpValue, setJumpValue] = useState("");
 
+  // --- Modo Caneta: desenho à mão livre por cima do PDF, guardado como uma
+  // camada separada (nunca altera o PDF original) e sincronizado em drawings.
+  const [penMode, setPenMode] = useState(false);
+  const [tool, setTool] = useState("pen"); // pen | highlighter | eraser | shape | text | select
+  const [penStyle, setPenStyle] = useState("normal"); // normal | pencil | marker
+  const [eraserMode, setEraserMode] = useState("partial"); // partial | object
+  const [shapeType, setShapeType] = useState("line"); // line | arrow | rect | circle
+  const [color, setColor] = useState("#1f2937");
+  const [thickness, setThickness] = useState(3);
+  const [opacity, setOpacity] = useState(1);
+  const [hlColor, setHlColor] = useState("#ffd54a");
+  const [hlThickness, setHlThickness] = useState(16);
+  const [hlOpacity, setHlOpacity] = useState(0.4);
+  const [eraserRadius, setEraserRadius] = useState(12);
+  const [autoShape, setAutoShape] = useState(true);
+  const [drawings, setDrawings] = useState(pdfDoc.drawings || {});
+  const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  const [liveAnn, setLiveAnn] = useState(null);
+  const [selectedAnnId, setSelectedAnnId] = useState(null);
+  const [editingTextId, setEditingTextId] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
+
+  const drawSvgRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  const historyRef = useRef([]);
+  const redoRef = useRef([]);
+  const dragRef = useRef(null);
+  const eraseGestureRef = useRef(false);
+  const drawSaveTimer = useRef(null);
+
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
@@ -1534,6 +1649,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
+  const renderTaskRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -1562,6 +1678,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       const page = await pdf.getPage(pageNum);
       const containerWidth = containerRef.current?.clientWidth || 800;
       const baseViewport = page.getViewport({ scale: 1 });
+      setBasePageSize({ width: baseViewport.width, height: baseViewport.height });
       const scale = fitWidth
         ? Math.min(2.5, Math.max(0.3, (containerWidth - 24) / baseViewport.width))
         : zoom;
@@ -1578,7 +1695,22 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       canvas.style.height = Math.floor(viewport.height) + "px";
       const ctx = canvas.getContext("2d");
       const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-      await page.render({ canvasContext: ctx, viewport, transform }).promise;
+      // Cancela qualquer renderização anterior ainda em andamento nesse mesmo
+      // canvas antes de começar a nova — se duas rodarem juntas (ex.: trocando
+      // de página rápido), elas disputam a matriz de transformação e a página
+      // pode aparecer espelhada/invertida até a próxima renderização "limpa".
+      if (renderTaskRef.current) {
+        try { renderTaskRef.current.cancel(); } catch (e) {}
+      }
+      const task = page.render({ canvasContext: ctx, viewport, transform });
+      renderTaskRef.current = task;
+      try {
+        await task.promise;
+      } catch (e) {
+        if (e?.name === "RenderingCancelledException") return;
+        throw e;
+      }
+      if (renderTaskRef.current === task) renderTaskRef.current = null;
       if (!active) return;
       setPageSize({ width: viewport.width, height: viewport.height });
 
@@ -1658,28 +1790,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     setSelection(null);
   };
 
-  const applyHighlight = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !pageWrapRef.current) return;
-    const range = sel.getRangeAt(0);
-    const wrapRect = pageWrapRef.current.getBoundingClientRect();
-    const rects = Array.from(range.getClientRects())
-      .filter(r => r.width > 0 && r.height > 0)
-      .map(r => ({
-        x: (r.left - wrapRect.left) / wrapRect.width,
-        y: (r.top - wrapRect.top) / wrapRect.height,
-        w: r.width / wrapRect.width,
-        h: r.height / wrapRect.height,
-      }));
-    const text = sel.toString().trim();
-    if (!text || rects.length === 0) return;
-    const entry = { id: crypto.randomUUID(), page: pageNum, rects, text, createdAt: Date.now() };
-    const next = [...highlights, entry];
-    setHighlights(next);
-    onHighlightsChange(pdfDoc.id, next);
-    clearSelection();
-  };
-
   const createFlashcardFromSelection = () => {
     const text = selection?.text || window.getSelection()?.toString().trim();
     if (!text) return;
@@ -1700,16 +1810,262 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     clearSelection();
   };
 
-  const removeHighlight = (id) => {
-    const next = highlights.filter(h => h.id !== id);
-    setHighlights(next);
-    onHighlightsChange(pdfDoc.id, next);
-  };
-
   const removeFavoriteExcerpt = (id) => {
     const next = favoriteExcerpts.filter(h => h.id !== id);
     setFavoriteExcerpts(next);
     onFavoriteExcerptsChange(pdfDoc.id, next);
+  };
+
+  // ---------------------------------------------------------------------
+  // Modo Caneta
+  // ---------------------------------------------------------------------
+
+  const scheduleDrawingsSave = (next) => {
+    clearTimeout(drawSaveTimer.current);
+    drawSaveTimer.current = setTimeout(() => onDrawingsChange(pdfDoc.id, next), 500);
+  };
+  const flushDrawings = () => {
+    clearTimeout(drawSaveTimer.current);
+    onDrawingsChange(pdfDoc.id, drawings);
+  };
+
+  const pushHistory = () => {
+    historyRef.current.push(JSON.stringify(drawings));
+    if (historyRef.current.length > 50) historyRef.current.shift();
+    redoRef.current = [];
+  };
+  const undo = () => {
+    if (!historyRef.current.length) return;
+    redoRef.current.push(JSON.stringify(drawings));
+    const prev = JSON.parse(historyRef.current.pop());
+    setDrawings(prev);
+    scheduleDrawingsSave(prev);
+  };
+  const redo = () => {
+    if (!redoRef.current.length) return;
+    historyRef.current.push(JSON.stringify(drawings));
+    const next = JSON.parse(redoRef.current.pop());
+    setDrawings(next);
+    scheduleDrawingsSave(next);
+  };
+  const commitAnnotation = (ann) => {
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: [...(prev[pageNum] || []), ann] };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+  };
+
+  const togglePenMode = () => {
+    setPenMode(m => {
+      if (m) { flushDrawings(); setSelectedAnnId(null); setEditingTextId(null); }
+      return !m;
+    });
+  };
+
+  const handlePenStyleChange = (val) => {
+    setPenStyle(val);
+    if (val === "normal") { setThickness(3); setOpacity(1); }
+    else if (val === "pencil") { setThickness(1.8); setOpacity(0.85); }
+    else if (val === "marker") { setThickness(8); setOpacity(0.9); }
+  };
+
+  const toPageCoords = (clientX, clientY) => {
+    const rect = drawSvgRef.current.getBoundingClientRect();
+    const scale = basePageSize.width / (rect.width || 1);
+    return { x: (clientX - rect.left) * scale, y: (clientY - rect.top) * scale };
+  };
+
+  const addTextAnnotation = (x, y) => {
+    const id = crypto.randomUUID();
+    const ann = { id, type: "text", x, y, fontSize: 16, color, content: "" };
+    commitAnnotation(ann);
+    setEditingTextId(id);
+  };
+
+  const commitTextEdit = (id, value) => {
+    setEditingTextId(null);
+    setDrawings(prev => {
+      const list = prev[pageNum] || [];
+      const next = value.trim()
+        ? list.map(a => a.id === id ? { ...a, content: value } : a)
+        : list.filter(a => a.id !== id);
+      const nextAll = { ...prev, [pageNum]: next };
+      scheduleDrawingsSave(nextAll);
+      return nextAll;
+    });
+  };
+
+  const eraseRadiusAt = (x, y) => {
+    if (!eraseGestureRef.current) { pushHistory(); eraseGestureRef.current = true; }
+    setDrawings(prev => {
+      const list = prev[pageNum] || [];
+      const next = list.flatMap(ann => eraseAnnotationAtPoint(ann, x, y, eraserRadius));
+      const nextAll = { ...prev, [pageNum]: next };
+      scheduleDrawingsSave(nextAll);
+      return nextAll;
+    });
+  };
+
+  const eraseObjectAt = (x, y) => {
+    const list = drawings[pageNum] || [];
+    const hit = findAnnotationAt(list, x, y, 8);
+    if (!hit) return;
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: (prev[pageNum] || []).filter(a => a.id !== hit.id) };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+  };
+
+  const deleteSelected = () => {
+    if (!selectedAnnId) return;
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: (prev[pageNum] || []).filter(a => a.id !== selectedAnnId) };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+    setSelectedAnnId(null);
+  };
+
+  const clearPage = () => {
+    if (!(drawings[pageNum] || []).length) return;
+    if (!confirm(`Apagar todas as anotações da página ${pageNum}?`)) return;
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: [] };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+    setSelectedAnnId(null);
+  };
+
+  const handleSelectPointerDown = (x, y) => {
+    const list = drawings[pageNum] || [];
+    if (selectedAnnId) {
+      const sel = list.find(a => a.id === selectedAnnId);
+      if (sel && sel.type === "shape" && Math.hypot(x - sel.x2, y - sel.y2) < 14) {
+        pushHistory();
+        dragRef.current = { mode: "resize", id: sel.id };
+        return;
+      }
+    }
+    const hit = findAnnotationAt(list, x, y, 8);
+    if (hit) {
+      setSelectedAnnId(hit.id);
+      pushHistory();
+      dragRef.current = { mode: "move", id: hit.id, lastX: x, lastY: y };
+    } else {
+      setSelectedAnnId(null);
+    }
+  };
+
+  const handleSelectPointerMove = (x, y) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    setDrawings(prev => {
+      const list = prev[pageNum] || [];
+      const next = list.map(a => {
+        if (a.id !== drag.id) return a;
+        if (drag.mode === "resize") return resizeShapeAnnotation(a, x, y);
+        const dx = x - drag.lastX, dy = y - drag.lastY;
+        return translateAnnotation(a, dx, dy);
+      });
+      const nextAll = { ...prev, [pageNum]: next };
+      scheduleDrawingsSave(nextAll);
+      return nextAll;
+    });
+    if (drag.mode === "move") { drag.lastX = x; drag.lastY = y; }
+  };
+
+  const handleDrawPointerDown = (e) => {
+    if (!penMode || !basePageSize.width) return;
+    e.preventDefault();
+    try { drawSvgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    if (tool === "pen" || tool === "highlighter") {
+      isDrawingRef.current = true;
+      setLiveAnn({
+        id: crypto.randomUUID(), type: "stroke", tool,
+        color: tool === "highlighter" ? hlColor : color,
+        width: tool === "highlighter" ? hlThickness : thickness,
+        opacity: tool === "highlighter" ? hlOpacity : opacity,
+        style: tool === "pen" ? penStyle : "marker",
+        points: [{ x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }],
+      });
+    } else if (tool === "shape") {
+      isDrawingRef.current = true;
+      setLiveAnn({ id: crypto.randomUUID(), type: "shape", shape: shapeType, color, width: thickness, opacity, x1: x, y1: y, x2: x, y2: y });
+    } else if (tool === "eraser") {
+      isDrawingRef.current = true;
+      if (eraserMode === "object") eraseObjectAt(x, y);
+      else eraseRadiusAt(x, y);
+    } else if (tool === "text") {
+      addTextAnnotation(x, y);
+    } else if (tool === "select") {
+      handleSelectPointerDown(x, y);
+    }
+  };
+
+  const handleDrawPointerMove = (e) => {
+    if (!penMode || !basePageSize.width) return;
+    if (tool === "select") {
+      if (!dragRef.current) return;
+      const { x, y } = toPageCoords(e.clientX, e.clientY);
+      handleSelectPointerMove(x, y);
+      return;
+    }
+    if (!isDrawingRef.current) return;
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    if (tool === "pen" || tool === "highlighter") {
+      setLiveAnn(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
+    } else if (tool === "shape") {
+      setLiveAnn(prev => prev ? { ...prev, x2: x, y2: y } : prev);
+    } else if (tool === "eraser" && eraserMode === "partial") {
+      eraseRadiusAt(x, y);
+    }
+  };
+
+  const handleDrawPointerUp = () => {
+    if (tool === "select") { dragRef.current = null; return; }
+    if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    if (!liveAnn) return;
+    if ((tool === "pen" || tool === "highlighter") && liveAnn.points.length > 1) {
+      let finalAnn = liveAnn;
+      if (tool === "pen" && autoShape && finalAnn.points.length > 6) {
+        const detected = detectShapeFromPoints(finalAnn.points);
+        if (detected) {
+          finalAnn = {
+            id: finalAnn.id, type: "shape", shape: detected.type,
+            color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
+            x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+            ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
+          };
+        }
+      }
+      commitAnnotation(finalAnn);
+    } else if (tool === "shape" && Math.hypot(liveAnn.x2 - liveAnn.x1, liveAnn.y2 - liveAnn.y1) > 2) {
+      commitAnnotation(liveAnn);
+    }
+    setLiveAnn(null);
+  };
+
+  const handleExportAnnotated = async () => {
+    if (!pdf) return;
+    try {
+      setExporting(true);
+      await exportAnnotatedPdf(pdf, drawings, pdfDoc.title);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível exportar o PDF com anotações.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const runSearch = async (e) => {
@@ -1793,6 +2149,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
 
   const handleClose = () => {
     if (panel==="notas") flushNotes();
+    flushDrawings();
     searchToken.current++;
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
@@ -1802,14 +2159,15 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const handler = (e) => {
       if (panel==="notas") return; // não interfere na digitação das notas
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
-      if (e.key === "ArrowRight") goTo(pageNum + 1);
-      if (e.key === "ArrowLeft") goTo(pageNum - 1);
-      if (e.key === "Escape") handleClose();
+      if (!penMode && e.key === "ArrowRight") goTo(pageNum + 1);
+      if (!penMode && e.key === "ArrowLeft") goTo(pageNum - 1);
+      if (e.key === "Escape") { if (penMode) togglePenMode(); else handleClose(); }
+      if (penMode && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages, panel]);
+  }, [pageNum, numPages, panel, penMode, drawings]);
 
   const isFav = favoritePages.includes(pageNum);
   const isImp = importantPages.includes(pageNum);
@@ -1835,6 +2193,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
 
         <div className="pdfToolbar">
           <div className="pdfToolbarGroup">
+            <button title={penMode?"Sair do modo caneta":"Modo caneta — escrever no PDF"} className={penMode?"active":""} onClick={togglePenMode}>
+              <PenTool size={16}/> <span>Escrever</span>
+            </button>
+          </div>
+          <div className="pdfToolbarGroup">
             <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
             <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
             <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
@@ -1851,26 +2214,164 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
           </div>
         </div>
 
+        {penMode && (
+          <div className="penOptionsBar">
+            <div className="penToolGroup">
+              <button title="Caneta" className={tool==="pen"?"active":""} onClick={()=>{setTool("pen"); setSelectedAnnId(null);}}><PenTool size={16}/></button>
+              <button title="Marca-texto" className={tool==="highlighter"?"active":""} onClick={()=>{setTool("highlighter"); setSelectedAnnId(null);}}><Highlighter size={16}/></button>
+              <button title="Borracha" className={tool==="eraser"?"active":""} onClick={()=>{setTool("eraser"); setSelectedAnnId(null);}}><Eraser size={16}/></button>
+              <button title="Formas" className={tool==="shape"?"active":""} onClick={()=>{setTool("shape"); setSelectedAnnId(null);}}><Square size={16}/></button>
+              <button title="Texto" className={tool==="text"?"active":""} onClick={()=>{setTool("text"); setSelectedAnnId(null);}}><Type size={16}/></button>
+              <button title="Selecionar" className={tool==="select"?"active":""} onClick={()=>setTool("select")}><MousePointer2 size={16}/></button>
+              <span className="penToolDivider"/>
+              <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
+              <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
+              <span className="penToolDivider"/>
+              <button title={annotationsVisible?"Ocultar anotações":"Mostrar anotações"} className={annotationsVisible?"":"active"} onClick={()=>setAnnotationsVisible(v=>!v)}>{annotationsVisible?<Eye size={16}/>:<EyeOff size={16}/>}</button>
+              <button title="Limpar página" onClick={clearPage}><Trash2 size={16}/></button>
+              <button title="Exportar PDF com as anotações" disabled={exporting} onClick={handleExportAnnotated}><Download size={16}/> <span>{exporting?"Exportando...":"Exportar"}</span></button>
+            </div>
+
+            <div className="penOptionsRow">
+              {tool==="pen" && (<>
+                <select value={penStyle} onChange={e=>handlePenStyleChange(e.target.value)}>
+                  <option value="normal">Caneta normal</option>
+                  <option value="pencil">Lápis</option>
+                  <option value="marker">Marcador/brush</option>
+                </select>
+                <div className="penSwatches">
+                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
+                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
+                <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e=>setOpacity(+e.target.value)}/></label>
+                <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e=>setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+              </>)}
+              {tool==="highlighter" && (<>
+                <div className="penSwatches">
+                  {["#ffd54a","#ff6b6b","#4ade80","#5b9dff"].map(c=>(
+                    <button key={c} className={`penSwatch${hlColor===c?" active":""}`} style={{background:c}} onClick={()=>setHlColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={hlColor} onChange={e=>setHlColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e=>setHlThickness(+e.target.value)}/></label>
+                <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e=>setHlOpacity(+e.target.value)}/></label>
+              </>)}
+              {tool==="eraser" && (<>
+                <div className="penToolGroup">
+                  <button className={eraserMode==="partial"?"active":""} onClick={()=>setEraserMode("partial")}>Parcial</button>
+                  <button className={eraserMode==="object"?"active":""} onClick={()=>setEraserMode("object")}>Apagar objeto</button>
+                </div>
+                {eraserMode==="partial" && <label className="penSliderLabel">Tamanho<input type="range" min="4" max="30" step="1" value={eraserRadius} onChange={e=>setEraserRadius(+e.target.value)}/></label>}
+              </>)}
+              {tool==="shape" && (<>
+                <div className="penToolGroup">
+                  <button title="Linha reta" className={shapeType==="line"?"active":""} onClick={()=>setShapeType("line")}><Minus size={16}/></button>
+                  <button title="Seta" className={shapeType==="arrow"?"active":""} onClick={()=>setShapeType("arrow")}><ArrowUpRight size={16}/></button>
+                  <button title="Retângulo" className={shapeType==="rect"?"active":""} onClick={()=>setShapeType("rect")}><Square size={16}/></button>
+                  <button title="Círculo" className={shapeType==="circle"?"active":""} onClick={()=>setShapeType("circle")}><Circle size={16}/></button>
+                </div>
+                <div className="penSwatches">
+                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
+                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="1" max="10" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
+              </>)}
+              {tool==="text" && (<>
+                <div className="penSwatches">
+                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
+                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <p className="penHint">Toque na página para adicionar um texto.</p>
+              </>)}
+              {tool==="select" && (<>
+                <p className="penHint">{selectedAnnId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em uma anotação para selecioná-la."}</p>
+                {selectedAnnId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
+              </>)}
+            </div>
+          </div>
+        )}
+
         <div className="readerMain">
           <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && (
               <div ref={pageWrapRef} className="pdfPageWrap" style={{width:pageSize.width||undefined, height:pageSize.height||undefined}}>
-                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`}/>
-                {highlights.filter(h=>h.page===pageNum).map(h => (
-                  <div key={h.id} className="pdfHighlightGroup" title={h.text}>
-                    {h.rects.map((r,i) => (
-                      <span key={i} className="pdfHighlightRect" style={{left:(r.x*100)+"%", top:(r.y*100)+"%", width:(r.w*100)+"%", height:(r.h*100)+"%"}}/>
+                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!penMode) goTo(pageNum+1); }}/>
+                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
+                {basePageSize.width>0 && (
+                  <svg
+                    ref={drawSvgRef}
+                    className="pdfDrawLayer"
+                    viewBox={`0 0 ${basePageSize.width} ${basePageSize.height}`}
+                    style={{
+                      position:"absolute", inset:0, width:"100%", height:"100%",
+                      pointerEvents: penMode?"auto":"none",
+                      touchAction: penMode?"none":undefined,
+                      cursor: penMode ? (tool==="eraser"?"cell":tool==="select"?"default":tool==="text"?"text":"crosshair") : undefined,
+                    }}
+                    onPointerDown={handleDrawPointerDown}
+                    onPointerMove={handleDrawPointerMove}
+                    onPointerUp={handleDrawPointerUp}
+                    onPointerLeave={handleDrawPointerUp}
+                  >
+                    {annotationsVisible && (drawings[pageNum]||[]).filter(a=>a.type!=="text").map(ann => (
+                      <AnnotationShape key={ann.id} ann={ann}/>
                     ))}
+                    {liveAnn && liveAnn.type!=="text" && <AnnotationShape ann={liveAnn} preview/>}
+                  </svg>
+                )}
+                {annotationsVisible && basePageSize.width>0 && (drawings[pageNum]||[]).filter(a=>a.type==="text").map(a => (
+                  <div
+                    key={a.id}
+                    className={`pdfTextAnn${editingTextId===a.id?" editing":""}`}
+                    style={{
+                      left: (a.x/basePageSize.width*100)+"%",
+                      top: (a.y/basePageSize.height*100)+"%",
+                      fontSize: (a.fontSize/basePageSize.height*100)+"vh",
+                      color: a.color,
+                      pointerEvents: penMode && tool==="select" ? "auto" : "none",
+                    }}
+                    onPointerDown={(e)=>{ if(penMode && tool==="select"){ e.stopPropagation(); setSelectedAnnId(a.id); pushHistory(); const {x,y}=toPageCoords(e.clientX,e.clientY); dragRef.current={mode:"move", id:a.id, lastX:x, lastY:y}; } }}
+                    onDoubleClick={()=>{ if(penMode) setEditingTextId(a.id); }}
+                  >
+                    {editingTextId===a.id
+                      ? <textarea autoFocus defaultValue={a.content} onBlur={(e)=>commitTextEdit(a.id, e.target.value)} onPointerDown={e=>e.stopPropagation()}/>
+                      : (a.content || (penMode ? "Toque duas vezes para escrever" : ""))}
                   </div>
                 ))}
-                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
+                {penMode && tool==="select" && selectedAnnId && basePageSize.width>0 && (() => {
+                  const ann = (drawings[pageNum]||[]).find(a=>a.id===selectedAnnId);
+                  if (!ann) return null;
+                  const bbox = annotationBBox(ann);
+                  const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
+                  const left = (bbox.x-pad)/basePageSize.width*100;
+                  const top = (bbox.y-pad)/basePageSize.height*100;
+                  const w = (bbox.w+pad*2)/basePageSize.width*100;
+                  const h = (bbox.h+pad*2)/basePageSize.height*100;
+                  return (
+                    <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
+                      {ann.type==="shape" && (
+                        <div
+                          className="pdfSelectionHandle"
+                          onPointerDown={(e)=>{ e.stopPropagation(); pushHistory(); dragRef.current={mode:"resize", id:ann.id}; }}
+                          onPointerUp={()=>{ dragRef.current=null; }}
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {selection && (
               <div className="pdfSelectionToolbar" style={{top:selection.top, left:selection.left}} onMouseDown={e=>e.preventDefault()}>
-                <button onClick={applyHighlight}><span className="pdfHighlightSwatch"/> Destacar</button>
                 <button onClick={createFlashcardFromSelection}><Layers size={13}/> Criar flashcard</button>
                 <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar aos favoritos</button>
               </div>
@@ -1913,21 +2414,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   {importantPages.length===0 && <p className="emptyHint">Nenhuma página marcada ainda.</p>}
                   <div className="pdfBookmarksChips">
                     {importantPages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
-                  </div>
-                </div>
-                <div className="pdfBookmarksSection">
-                  <small><span className="pdfHighlightSwatch"/> Trechos destacados</small>
-                  {highlights.length===0 && <p className="emptyHint">Nenhum trecho destacado ainda.</p>}
-                  <div className="pdfExcerptList">
-                    {highlights.map(h => (
-                      <div key={h.id} className="pdfExcerptItem">
-                        <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
-                          <b>Página {h.page}</b>
-                          <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
-                        </button>
-                        <button className="pdfExcerptDelete" title="Remover destaque" onClick={()=>removeHighlight(h.id)}><Trash2 size={13}/></button>
-                      </div>
-                    ))}
                   </div>
                 </div>
                 <div className="pdfBookmarksSection">
@@ -2014,7 +2500,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
       const title = window.prompt("Título do PDF:", defaultTitle) || defaultTitle;
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
-      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], highlights: [], favorite_excerpts: [], notes: "", group_id: currentGroupId });
+      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -2035,8 +2521,8 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const onNotesChange = (id, notes) => update(id, { notes });
   const onFavoritesChange = (id, favorite_pages) => update(id, { favorite_pages });
   const onImportantChange = (id, important_pages) => update(id, { important_pages });
-  const onHighlightsChange = (id, highlights) => update(id, { highlights });
   const onFavoriteExcerptsChange = (id, favorite_excerpts) => update(id, { favorite_excerpts });
+  const onDrawingsChange = (id, drawings) => update(id, { drawings });
   const onCreateFlashcard = (card) => {
     flashcards.add(card);
     alert('Flashcard criado! Confira na aba "Flashcards".');
@@ -2188,9 +2674,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onNotesChange={onNotesChange}
         onFavoritesChange={onFavoritesChange}
         onImportantChange={onImportantChange}
-        onHighlightsChange={onHighlightsChange}
         onFavoriteExcerptsChange={onFavoriteExcerptsChange}
         onCreateFlashcard={onCreateFlashcard}
+        onDrawingsChange={onDrawingsChange}
       />}
     </div>
   );

@@ -1,0 +1,332 @@
+import { jsPDF } from "jspdf";
+
+// ---------------------------------------------------------------------------
+// Todas as coordenadas de anotação são guardadas em "unidades de página":
+// o sistema de coordenadas do PDF na escala 1 (page.getViewport({scale:1})).
+// Isso mantém a anotação nítida e no lugar certo em qualquer zoom, porque o
+// <svg> que desenha por cima usa viewBox nessas mesmas unidades.
+// ---------------------------------------------------------------------------
+
+// Converte os pontos de um traço à mão livre (com pressão opcional em cada
+// ponto) em uma lista de pontos do contorno preenchido (uma "fita" de
+// largura variável, mais fina onde a pressão foi menor).
+export function getStrokeOutlinePoints(points, baseWidth, { uniform = false } = {}) {
+  if (!points || points.length === 0) return [];
+  if (points.length === 1) {
+    const p = points[0];
+    const r = (baseWidth * (uniform ? 0.75 : 0.55 + (p.p ?? 0.5) * 0.9)) / 2;
+    const steps = 12;
+    const circle = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = (i / steps) * Math.PI * 2;
+      circle.push({ x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r });
+    }
+    return circle;
+  }
+  const left = [];
+  const right = [];
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const prev = points[i - 1] || p;
+    const next = points[i + 1] || p;
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const w = (baseWidth * (uniform ? 0.75 : 0.55 + (p.p ?? 0.5) * 0.9)) / 2;
+    left.push({ x: p.x + nx * w, y: p.y + ny * w });
+    right.push({ x: p.x - nx * w, y: p.y - ny * w });
+  }
+  return [...left, ...right.reverse()];
+}
+
+export function strokeOutlinePath(points, baseWidth, opts) {
+  const pts = getStrokeOutlinePoints(points, baseWidth, opts);
+  if (!pts.length) return "";
+  return "M" + pts.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" L") + " Z";
+}
+
+// ---------------------------------------------------------------------------
+// Geometria auxiliar
+// ---------------------------------------------------------------------------
+
+function distToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = a.x + t * dx;
+  const projY = a.y + t * dy;
+  return Math.hypot(p.x - projX, p.y - projY);
+}
+
+// "Desenhar -> corrigir forma automaticamente": olha pro traço recém-feito e,
+// se ele parecer claramente uma linha reta ou um círculo, devolve a forma
+// perfeita equivalente (ou null se não reconhecer nada e o traço continua
+// sendo uma anotação à mão livre normal).
+export function detectShapeFromPoints(points) {
+  if (!points || points.length < 6) return null;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX, h = maxY - minY;
+  const diag = Math.hypot(w, h);
+  if (diag < 8) return null;
+
+  const a = points[0], b = points[points.length - 1];
+  const closed = Math.hypot(b.x - a.x, b.y - a.y) < Math.max(w, h) * 0.22;
+
+  // Linha reta: pouca gente desenha uma reta perfeita à mão.
+  const lineLen = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!closed && lineLen > 10) {
+    let maxDev = 0;
+    for (const p of points) maxDev = Math.max(maxDev, distToSegment(p, a, b));
+    if (maxDev < Math.max(4, lineLen * 0.045)) {
+      return { type: "line", x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    }
+  }
+
+  // Círculo: traço fechado com raio quase constante em torno do centro.
+  if (closed && w > 12 && h > 12) {
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const radii = points.map((p) => Math.hypot(p.x - cx, p.y - cy));
+    const avgR = radii.reduce((s, r) => s + r, 0) / radii.length;
+    const variance = radii.reduce((s, r) => s + Math.abs(r - avgR), 0) / radii.length;
+    const aspect = Math.max(w, h) / Math.min(w, h);
+    if (avgR > 0 && variance / avgR < 0.22 && aspect < 1.35) {
+      return { type: "circle", cx, cy, r: avgR, x1: cx - avgR, y1: cy - avgR, x2: cx + avgR, y2: cy + avgR };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Hit-testing / seleção / borracha de objeto
+// ---------------------------------------------------------------------------
+
+export function hitTestAnnotation(ann, x, y, tol = 6) {
+  if (ann.type === "text") {
+    const w = Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
+    const h = ann.fontSize * 1.3;
+    return x >= ann.x - tol && x <= ann.x + w + tol && y >= ann.y - tol && y <= ann.y + h + tol;
+  }
+  if (ann.type === "shape") {
+    if (ann.shape === "rect") {
+      const bx = Math.min(ann.x1, ann.x2) - tol;
+      const by = Math.min(ann.y1, ann.y2) - tol;
+      const bw = Math.abs(ann.x2 - ann.x1) + tol * 2;
+      const bh = Math.abs(ann.y2 - ann.y1) + tol * 2;
+      return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+    }
+    if (ann.shape === "circle") {
+      const cx = ann.cx ?? (ann.x1 + ann.x2) / 2;
+      const cy = ann.cy ?? (ann.y1 + ann.y2) / 2;
+      const r = ann.r ?? Math.max(Math.abs(ann.x2 - ann.x1), Math.abs(ann.y2 - ann.y1)) / 2;
+      return Math.hypot(x - cx, y - cy) <= r + tol;
+    }
+    return distToSegment({ x, y }, { x: ann.x1, y: ann.y1 }, { x: ann.x2, y: ann.y2 }) <= tol + (ann.width || 2);
+  }
+  if (ann.type === "stroke") {
+    const pts = ann.points || [];
+    if (pts.length === 1) return Math.hypot(x - pts[0].x, y - pts[0].y) <= tol + (ann.width || 2);
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (distToSegment({ x, y }, pts[i], pts[i + 1]) <= tol + (ann.width || 2)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+export function findAnnotationAt(list, x, y, tol = 6) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (hitTestAnnotation(list[i], x, y, tol)) return list[i];
+  }
+  return null;
+}
+
+export function annotationBBox(ann) {
+  if (ann.type === "text") {
+    const w = Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
+    const h = ann.fontSize * 1.3;
+    return { x: ann.x, y: ann.y, w, h };
+  }
+  if (ann.type === "shape") {
+    if (ann.shape === "circle") {
+      const cx = ann.cx ?? (ann.x1 + ann.x2) / 2;
+      const cy = ann.cy ?? (ann.y1 + ann.y2) / 2;
+      const r = ann.r ?? Math.max(Math.abs(ann.x2 - ann.x1), Math.abs(ann.y2 - ann.y1)) / 2;
+      return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
+    }
+    const x = Math.min(ann.x1, ann.x2), y = Math.min(ann.y1, ann.y2);
+    return { x, y, w: Math.abs(ann.x2 - ann.x1) || 4, h: Math.abs(ann.y2 - ann.y1) || 4 };
+  }
+  if (ann.type === "stroke") {
+    const pts = ann.points || [{ x: 0, y: 0 }];
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x || 4, h: Math.max(...ys) - y || 4 };
+  }
+  return { x: 0, y: 0, w: 0, h: 0 };
+}
+
+export function translateAnnotation(ann, dx, dy) {
+  if (ann.type === "text") return { ...ann, x: ann.x + dx, y: ann.y + dy };
+  if (ann.type === "shape") {
+    const next = { ...ann, x1: ann.x1 + dx, y1: ann.y1 + dy, x2: ann.x2 + dx, y2: ann.y2 + dy };
+    if (ann.cx != null) { next.cx = ann.cx + dx; next.cy = ann.cy + dy; }
+    return next;
+  }
+  if (ann.type === "stroke") return { ...ann, points: ann.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) };
+  return ann;
+}
+
+// Redimensiona uma forma arrastando o "cantinho" (o ponto final x2,y2).
+export function resizeShapeAnnotation(ann, x, y) {
+  if (ann.type !== "shape") return ann;
+  const next = { ...ann, x2: x, y2: y };
+  if (ann.cx != null) {
+    next.cx = (ann.x1 + x) / 2;
+    next.cy = (ann.y1 + y) / 2;
+    next.r = Math.max(Math.abs(x - ann.x1), Math.abs(y - ann.y1)) / 2;
+  }
+  return next;
+}
+
+// Borracha parcial: remove os pontos de um traço que caíram dentro do raio
+// da borracha, quebrando o traço em pedaços menores (como apagar no papel).
+// Para formas e textos, a borracha parcial se comporta como objeto (some
+// inteiro) por não fazer sentido "recortar" um retângulo/círculo.
+export function eraseAnnotationAtPoint(ann, x, y, radius) {
+  if (ann.type === "text" || ann.type === "shape") {
+    return hitTestAnnotation(ann, x, y, radius) ? [] : [ann];
+  }
+  if (ann.type === "stroke") {
+    const pts = ann.points || [];
+    const runs = [];
+    let current = [];
+    for (const p of pts) {
+      if (Math.hypot(p.x - x, p.y - y) <= radius) {
+        if (current.length >= 2) runs.push(current);
+        current = [];
+      } else {
+        current.push(p);
+      }
+    }
+    if (current.length >= 2) runs.push(current);
+    if (runs.length === 0) return [];
+    return runs.map((rp, i) => (i === 0 ? { ...ann, points: rp } : { ...ann, id: `${ann.id}-${i}-${Date.now()}`, points: rp }));
+  }
+  return [ann];
+}
+
+// ---------------------------------------------------------------------------
+// Exportação: gera um novo PDF (o original nunca é alterado) com as
+// anotações "queimadas" nas páginas, renderizando cada página num canvas.
+// ---------------------------------------------------------------------------
+
+function drawAnnotationOnCanvas(ctx, ann) {
+  ctx.save();
+  if (ann.type === "stroke") {
+    const uniform = ann.style === "marker" || ann.tool === "highlighter";
+    const pts = getStrokeOutlinePoints(ann.points, ann.width, { uniform });
+    if (pts.length) {
+      ctx.globalAlpha = ann.opacity ?? 1;
+      if (ann.tool === "highlighter") ctx.globalCompositeOperation = "multiply";
+      ctx.fillStyle = ann.color;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else if (ann.type === "shape") {
+    ctx.globalAlpha = ann.opacity ?? 1;
+    ctx.strokeStyle = ann.color;
+    ctx.fillStyle = ann.color;
+    ctx.lineWidth = ann.width || 2;
+    ctx.lineCap = "round";
+    if (ann.shape === "line" || ann.shape === "arrow") {
+      ctx.beginPath();
+      ctx.moveTo(ann.x1, ann.y1);
+      ctx.lineTo(ann.x2, ann.y2);
+      ctx.stroke();
+      if (ann.shape === "arrow") {
+        const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
+        const headLen = Math.max(8, (ann.width || 2) * 3);
+        ctx.beginPath();
+        ctx.moveTo(ann.x2, ann.y2);
+        ctx.lineTo(ann.x2 - headLen * Math.cos(angle - Math.PI / 7), ann.y2 - headLen * Math.sin(angle - Math.PI / 7));
+        ctx.lineTo(ann.x2 - headLen * Math.cos(angle + Math.PI / 7), ann.y2 - headLen * Math.sin(angle + Math.PI / 7));
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if (ann.shape === "rect") {
+      const x = Math.min(ann.x1, ann.x2), y = Math.min(ann.y1, ann.y2);
+      ctx.strokeRect(x, y, Math.abs(ann.x2 - ann.x1), Math.abs(ann.y2 - ann.y1));
+    } else if (ann.shape === "circle") {
+      const cx = ann.cx ?? (ann.x1 + ann.x2) / 2;
+      const cy = ann.cy ?? (ann.y1 + ann.y2) / 2;
+      const rx = ann.r ?? Math.abs(ann.x2 - ann.x1) / 2;
+      const ry = ann.r ?? Math.abs(ann.y2 - ann.y1) / 2;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, Math.abs(rx), Math.abs(ry), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (ann.type === "text") {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = ann.color;
+    ctx.font = `${ann.fontSize}px sans-serif`;
+    ctx.textBaseline = "top";
+    (ann.content || "").split("\n").forEach((line, i) => {
+      ctx.fillText(line, ann.x, ann.y + i * ann.fontSize * 1.25);
+    });
+  }
+  ctx.restore();
+}
+
+const safeFileName = (title) =>
+  (title || "documento").trim().replace(/[^\p{L}\p{N}\-_ ]+/gu, "").replace(/\s+/g, "_").slice(0, 60) || "documento";
+
+// pdfjsDoc: documento já aberto via pdfjsLib.getDocument(...).promise
+// drawings: { [pagina]: Annotation[] }
+export async function exportAnnotatedPdf(pdfjsDoc, drawings, title) {
+  const numPages = pdfjsDoc.numPages;
+  const exportScale = 2; // resolução boa pra impressão/zoom sem pesar demais o arquivo
+  let doc = null;
+
+  for (let n = 1; n <= numPages; n++) {
+    const page = await pdfjsDoc.getPage(n);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: exportScale });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    const pageAnns = drawings?.[n] || drawings?.[String(n)] || [];
+    if (pageAnns.length) {
+      ctx.save();
+      ctx.scale(exportScale, exportScale); // desenha em unidades de página (escala 1), igual à tela
+      for (const ann of pageAnns) drawAnnotationOnCanvas(ctx, ann);
+      ctx.restore();
+    }
+
+    const imgData = canvas.toDataURL("image/jpeg", 0.92);
+    const pw = baseViewport.width, ph = baseViewport.height;
+    const orientation = pw > ph ? "landscape" : "portrait";
+    if (!doc) {
+      doc = new jsPDF({ unit: "pt", format: [pw, ph], orientation });
+    } else {
+      doc.addPage([pw, ph], orientation);
+    }
+    doc.addImage(imgData, "JPEG", 0, 0, pw, ph);
+  }
+
+  doc.save(`${safeFileName(title)}_anotado.pdf`);
+}
