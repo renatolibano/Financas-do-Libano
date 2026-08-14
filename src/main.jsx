@@ -93,6 +93,36 @@ const initialCardPurchases = [
 
 const money = n => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 
+// Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
+// o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
+// (ex.: Safari iOS mais antigo), cai para uma classe CSS que expande o elemento ocupando a tela toda.
+function useFullscreen(ref) {
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await ref.current?.requestFullscreen?.();
+      } else {
+        await document.exitFullscreen?.();
+      }
+    } catch (e) {
+      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
+    }
+  };
+
+  useEffect(() => () => { if (document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, []);
+
+  return [fullscreen, toggleFullscreen];
+}
+
+
 // dd/mm ou dd/mm/aaaa -> Date. Sem ano informado, usa o ano atual (ou o próximo, se a data já passou este ano).
 function parseReminderDate(dateStr){
   if(!dateStr) return null;
@@ -1013,7 +1043,6 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
   const [nightMode, setNightMode] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
 
   const [favoritePages, setFavoritePages] = useState(book.favorite_pages || []);
   const [importantPages, setImportantPages] = useState(book.important_pages || []);
@@ -1028,6 +1057,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
@@ -1176,24 +1206,6 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     if (searchToken.current === token) {
       setSearchResults(found);
       setSearching(false);
-    }
-  };
-
-  useEffect(() => {
-    const handler = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
-
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) {
-        await modalRef.current?.requestFullscreen?.();
-      } else {
-        await document.exitFullscreen?.();
-      }
-    } catch (e) {
-      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
     }
   };
 
@@ -1650,7 +1662,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
   const [nightMode, setNightMode] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
 
   const [favoritePages, setFavoritePages] = useState(pdfDoc.favorite_pages || []);
@@ -1703,6 +1714,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
   const textLayerRef = useRef(null);
   const pageWrapRef = useRef(null);
   const notesBodyRef = useRef(null);
@@ -2203,24 +2215,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     if (searchToken.current === token) {
       setSearchResults(found);
       setSearching(false);
-    }
-  };
-
-  useEffect(() => {
-    const handler = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
-
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) {
-        await modalRef.current?.requestFullscreen?.();
-      } else {
-        await document.exitFullscreen?.();
-      }
-    } catch (e) {
-      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
     }
   };
 
@@ -3238,12 +3232,15 @@ function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
   const [tab, setTab] = useState("cards");
   const cards = list.cards || [];
   const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
+  const fullRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(fullRef);
 
   return (
-    <div className="content">
+    <div className={"content flashStudyRoot"+(fullscreen?" flashStudyRootFull":"")} ref={fullRef}>
       <div className="flashFormHead">
         <div><h2>{list.title || "Lista sem título"}</h2><small className="flashListMeta">{cards.length} cartão{cards.length===1?"":"s"}</small></div>
         <div className="flashHeadActions">
+          <button className="ghost" title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={15}/>:<Maximize2 size={15}/>}</button>
           <button className="ghost" onClick={onEdit}><Pencil size={15}/> Editar</button>
           <button className="ghost" onClick={onBack}><ChevronLeft size={16}/> Voltar</button>
         </div>
@@ -4087,14 +4084,19 @@ function NoteEditor({ note, onClose, onSave }) {
   const handleClose = () => {
     clearTimeout(saveTimer.current);
     onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
   };
 
+  const modalRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+
   return (
     <div className="readerBack">
-      <div className="readerModal noteModal">
+      <div ref={modalRef} className={"readerModal noteModal"+(fullscreen?" readerModalFull":"")}>
         <div className="readerHead">
           <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Título da nota" autoFocus/>
+          <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           <button onClick={handleClose}><X/></button>
         </div>
         <div className="noteToolbar" onMouseDown={keepFocus}>
