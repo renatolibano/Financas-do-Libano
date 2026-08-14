@@ -463,13 +463,17 @@ h1{font-size:23px}
 @media (max-width:720px){.flashTabs{grid-template-columns:1fr}}
 
 .flashStudyArea{display:flex;flex-direction:column;align-items:center;gap:18px}
-.flashFlipCard{width:100%;max-width:640px;cursor:pointer}
+.flashFlipCard{width:100%;max-width:640px;cursor:pointer;position:relative}
 .flashFlipInner{position:relative;height:280px;transition:transform .4s;transform-style:preserve-3d}
 .flashFlipInner.flipped{transform:rotateY(180deg)}
 .flashFlipFace{position:absolute;inset:0;backface-visibility:hidden;border:1px solid var(--border);background:var(--bg-surface-2);border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
 .flashFlipFace small{color:var(--accent);font-weight:700;letter-spacing:.05em;font-size:11px;position:absolute;top:16px;left:20px}
 .flashFlipFace span{font-size:20px;font-weight:700;color:var(--text-1)}
 .flashFlipBack{transform:rotateY(180deg)}
+.flashFlipFeedback{position:absolute;inset:0;border-radius:16px;border:1px solid var(--border);background:var(--bg-surface-2);display:grid;place-items:center;font-size:26px;font-weight:800;z-index:2;animation:flashFeedbackPop .18s ease}
+.flashFlipFeedback.know{color:#3ecf6a}
+.flashFlipFeedback.learning{color:#ff9d43}
+@keyframes flashFeedbackPop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
 .flashFlipHint{text-align:center;color:var(--text-3);font-size:12px;margin-top:10px}
 .flashFlipActions{display:flex;gap:12px;width:100%;max-width:640px}
 .flashFlipNo,.flashFlipYes{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border-radius:12px;padding:13px;font-weight:700;font-size:13px;border:1px solid var(--border);background:var(--bg-surface)}
@@ -478,6 +482,19 @@ h1{font-size:23px}
 .flashPager{display:flex;align-items:center;gap:16px;color:var(--text-2);font-size:13px}
 .flashPager button{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);display:grid;place-items:center;color:var(--text-1)}
 .flashPager button:disabled{opacity:.35}
+
+.flashFlipDone{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:20px}
+.flashFlipDoneIcon{width:76px;height:76px;border-radius:20px;background:#3ecf6a22;color:#3ecf6a;display:grid;place-items:center}
+.flashFlipDone h3{margin:0;font-size:19px;color:var(--text-1)}
+.flashFlipDoneStats{display:flex;gap:14px}
+.flashFlipDoneStat{border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:16px 26px;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:110px}
+.flashFlipDoneStat strong{font-size:24px}
+.flashFlipDoneStat span{color:var(--text-2);font-size:12px}
+.flashFlipDoneStat.know strong{color:#3ecf6a}
+.flashFlipDoneStat.learning strong{color:#ff9d43}
+.flashFlipDoneActions{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.flashFlipDoneBtn{display:flex;align-items:center;gap:6px}
+.flashFlipRetryBtn{display:flex;align-items:center;gap:6px;background:#7a4a1e;color:#ffb877;border-radius:9px;padding:9px 14px;font-weight:700;font-size:12.5px}
 
 .flashLearnQuestion{text-align:center}
 .flashLearnQuestion small{color:var(--accent);font-weight:700;letter-spacing:.05em;font-size:11px}

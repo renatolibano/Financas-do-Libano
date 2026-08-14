@@ -9,7 +9,7 @@ import {
   GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
-  ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles
+  ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -2483,36 +2483,86 @@ function FlashcardListStudy({ list, onBack, onEdit }) {
 }
 
 function FlashcardFlipMode({ cards }) {
+  const [deck, setDeck] = useState(cards);
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
-  const card = cards[index];
+  const [feedback, setFeedback] = useState(null); // null | "know" | "learning"
+  const [results, setResults] = useState([]); // [{id, know}]
+  const [finished, setFinished] = useState(false);
+  const card = deck[index];
 
-  const go = (dir) => { setFlipped(false); setIndex(i => Math.max(0, Math.min(cards.length-1, i+dir))); };
-  const next = () => { if (index < cards.length-1) go(1); };
+  const go = (dir) => { setFlipped(false); setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir))); };
+
+  const respond = (type) => {
+    if (feedback) return;
+    setFeedback(type);
+    setTimeout(() => {
+      setFeedback(null);
+      setResults(r => [...r, { id: card.id, know: type==="know" }]);
+      if (index < deck.length-1) { setIndex(i => i+1); setFlipped(false); }
+      else setFinished(true);
+    }, 700);
+  };
+
+  const restartAll = () => { setDeck(cards); setIndex(0); setResults([]); setFinished(false); setFlipped(false); };
+  const restartFailed = () => {
+    const failedIds = new Set(results.filter(r => !r.know).map(r => r.id));
+    const failedCards = cards.filter(c => failedIds.has(c.id));
+    if (failedCards.length === 0) return;
+    setDeck(failedCards); setIndex(0); setResults([]); setFinished(false); setFlipped(false);
+  };
 
   useEffect(() => {
-    const onKey = (e) => { if (e.code==="Space") { e.preventDefault(); setFlipped(f=>!f); } };
+    const onKey = (e) => { if (e.code==="Space" && !finished) { e.preventDefault(); setFlipped(f=>!f); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [finished]);
+
+  if (finished) {
+    const knowCount = results.filter(r => r.know).length;
+    const learningCount = results.filter(r => !r.know).length;
+    return (
+      <div className="flashStudyArea">
+        <div className="flashFlipDone">
+          <div className="flashFlipDoneIcon"><Trophy size={32}/></div>
+          <h3>Boa! Você revisou os {deck.length} cartão{deck.length===1?"":"s"} 🎉</h3>
+          <div className="flashFlipDoneStats">
+            <div className="flashFlipDoneStat know"><strong>{knowCount}</strong><span>Já sei</span></div>
+            <div className="flashFlipDoneStat learning"><strong>{learningCount}</strong><span>Ainda aprendendo</span></div>
+          </div>
+          <div className="flashFlipDoneActions">
+            <button className="ghost flashFlipDoneBtn" onClick={restartAll}><RotateCcw size={15}/> Estudar tudo de novo</button>
+            {learningCount > 0 && (
+              <button className="flashFlipRetryBtn" onClick={restartFailed}><Zap size={15}/> Só os que falta aprender ({learningCount})</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flashStudyArea">
-      <div className="flashFlipCard" onClick={()=>setFlipped(f=>!f)}>
+      <div className="flashFlipCard" onClick={()=>{ if(!feedback) setFlipped(f=>!f); }}>
         <div className={"flashFlipInner"+(flipped?" flipped":"")}>
           <div className="flashFlipFace flashFlipFront"><small>TERMO</small><span>{card.term || "(sem termo)"}</span></div>
           <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small><span>{card.definition || "(sem definição)"}</span></div>
         </div>
+        {feedback && (
+          <div className={"flashFlipFeedback"+(feedback==="know"?" know":" learning")}>
+            {feedback==="know" ? "Já sei" : "Ainda aprendendo"}
+          </div>
+        )}
         <p className="flashFlipHint">Clique ou aperte espaço para virar</p>
       </div>
       <div className="flashFlipActions">
-        <button className="flashFlipNo" onClick={next}><X size={16}/> Ainda aprendendo</button>
-        <button className="flashFlipYes" onClick={next}><Check size={16}/> Já sei</button>
+        <button className="flashFlipNo" disabled={!!feedback} onClick={()=>respond("learning")}><X size={16}/> Ainda aprendendo</button>
+        <button className="flashFlipYes" disabled={!!feedback} onClick={()=>respond("know")}><Check size={16}/> Já sei</button>
       </div>
       <div className="flashPager">
         <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>
-        <span>{index+1} / {cards.length}</span>
-        <button disabled={index===cards.length-1} onClick={()=>go(1)}><ArrowRight size={16}/></button>
+        <span>{index+1} / {deck.length}</span>
+        <button disabled={index===deck.length-1} onClick={()=>go(1)}><ArrowRight size={16}/></button>
       </div>
     </div>
   );
