@@ -101,6 +101,11 @@ alter table books add column if not exists notes text;
 alter table books add column if not exists sort_order int;
 alter table notes add column if not exists sort_order int;
 
+-- Atualização: leitor de livros ganha zoom, busca, tela cheia, modo escuro e
+-- páginas favoritas/importantes (mesmas ferramentas do Leitor de PDF de estudo)
+alter table books add column if not exists favorite_pages int[] not null default '{}';
+alter table books add column if not exists important_pages int[] not null default '{}';
+
 insert into storage.buckets (id, name, public)
 values ('books', 'books', false)
 on conflict (id) do nothing;
@@ -200,6 +205,44 @@ create table if not exists study_pdfs (
 );
 alter table study_pdfs enable row level security;
 
+-- Atualização: Ferramentas de estudo (selecionar texto no PDF)
+-- Trechos destacados e trechos favoritados, cada um com a página e o texto selecionado.
+alter table study_pdfs add column if not exists highlights jsonb not null default '[]'::jsonb;
+alter table study_pdfs add column if not exists favorite_excerpts jsonb not null default '[]'::jsonb;
+
+-- Atualização: Anotações no Leitor de PDF da Área de Estudos (mesmo conceito já usado em "Livros")
+alter table study_pdfs add column if not exists notes text;
+
+-- Atualização: Metas vinculadas a um PDF (Área de Estudos ou Livros)
+-- Quando vinculada, o progresso da meta é atualizado automaticamente conforme a leitura avança.
+alter table study_goals add column if not exists link_source text not null default 'none' check (link_source in ('none','estudo','livro'));
+alter table study_goals add column if not exists link_pdf_id uuid;
+alter table study_goals add column if not exists link_page_start int;
+alter table study_goals add column if not exists link_page_end int;
+
+-- Atualização: Grupos (pastas) para organizar os PDFs de estudo, ex.: "Matemática", "Física"
+create table if not exists study_pdf_groups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table study_pdf_groups enable row level security;
+alter table study_pdfs add column if not exists group_id uuid references study_pdf_groups(id) on delete set null;
+
+-- Flashcards criados a partir de um trecho selecionado no Leitor de PDF (ou manualmente, no futuro)
+create table if not exists study_flashcards (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  front text not null,
+  back text,
+  source_title text,
+  source_page int,
+  created_at timestamptz not null default now()
+);
+alter table study_flashcards enable row level security;
+
 insert into storage.buckets (id, name, public)
 values ('study_pdfs', 'study_pdfs', false)
 on conflict (id) do nothing;
@@ -218,7 +261,7 @@ create policy "update_own_study_pdf_files" on storage.objects for update
 create policy "delete_own_study_pdf_files" on storage.objects for delete
   using (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
 
-do $$ declare t text; begin foreach t in array array['study_pdfs'] loop
+do $$ declare t text; begin foreach t in array array['study_pdfs','study_flashcards','study_pdf_groups'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);

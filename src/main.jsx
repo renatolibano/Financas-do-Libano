@@ -8,7 +8,7 @@ import {
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
-  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight
+  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -207,6 +207,62 @@ function useDismissedToday(){
   return [dismissed, dismissAll];
 }
 
+// Notificações rápidas (toast) — usadas, por ex., quando uma Meta vinculada a um PDF é concluída automaticamente.
+function toast(message, type = "success") {
+  window.dispatchEvent(new CustomEvent("app:toast", { detail: { message, type } }));
+}
+
+function ToastHost() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const handler = (e) => {
+      const id = crypto.randomUUID();
+      const { message, type } = e.detail || {};
+      setItems(prev => [...prev, { id, message, type }]);
+      setTimeout(() => setItems(prev => prev.filter(t => t.id !== id)), 6000);
+    };
+    window.addEventListener("app:toast", handler);
+    return () => window.removeEventListener("app:toast", handler);
+  }, []);
+  if (items.length === 0) return null;
+  return (
+    <div className="toastHost">
+      {items.map(t => (
+        <div key={t.id} className="toastItem">
+          <div className="toastItemIcon"><CheckCircle2 size={16}/></div>
+          <span>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Faz o progresso de uma Meta (modo "Quantidade") vinculada a um PDF conversar automaticamente
+// com o Leitor de PDF: conforme a página atual avança, a meta é atualizada e, ao concluir o
+// intervalo de páginas definido, marca a meta como concluída e dispara uma notificação.
+function syncLinkedGoalsProgress(studyGoalsEntity, source, pdfId, pdfTitle, currentPage) {
+  if (!studyGoalsEntity) return;
+  const { data, update } = studyGoalsEntity;
+  data.forEach(g => {
+    if (g.mode !== "count" || g.link_source !== source || g.link_pdf_id !== pdfId) return;
+    if (g.status !== "andamento") return;
+    const start = Number(g.link_page_start) || 1;
+    const target = Number(g.target_value) || 0;
+    if (!target) return;
+    const done = Math.max(0, Math.min(target, currentPage - start + 1));
+    if (done === Number(g.current_value || 0)) return;
+    const patch = { current_value: done };
+    const justCompleted = done >= target;
+    if (justCompleted) patch.status = "concluida";
+    update(g.id, patch);
+    if (justCompleted) {
+      const label = source === "livro" ? "Leitura concluída" : "Estudo concluído";
+      const verb = source === "livro" ? "lidas" : "estudadas";
+      toast(`${label} — ${pdfTitle} · ${target} página${target === 1 ? "" : "s"} ${verb}`);
+    }
+  });
+}
+
 function notifIcon(kind, size=16){
   if(kind==="Aniversário") return <Cake size={size}/>;
   if(kind==="Dívida") return <CircleDollarSign size={size}/>;
@@ -287,6 +343,8 @@ function App({session,theme,setTheme}){
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
   const books = useEntity("books", initialBooks, session, "asc", {orderable:true});
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true});
+  const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
+  const studyFlashcards = useEntity("study_flashcards", [], session);
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
@@ -502,13 +560,15 @@ function App({session,theme,setTheme}){
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
-      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session}/>}
-      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session}/>}
-      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals}/>}
-      {page==="Flashcards" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
+      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
+      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data}/>}
+      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards}/>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
-      {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session}/>}
+      {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
+
+      <ToastHost/>
 
       {showOverviewEdit && <OverviewEditModal
         overview={overview}
@@ -819,14 +879,15 @@ function BookCoverThumb({ book }) {
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
         const page = await pdf.getPage(1);
         const baseViewport = page.getViewport({ scale: 1 });
-        const scale = 260 / baseViewport.width;
+        const dpr = Math.min(3, window.devicePixelRatio || 1);
+        const scale = (260 * dpr) / baseViewport.width;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         coverCache.set(book.file_path, dataUrl);
         if (active) setSrc(dataUrl);
       } catch (e) {
@@ -840,6 +901,8 @@ function BookCoverThumb({ book }) {
 
 function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete, dragProps }) {
   const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
+  const favCount = book.favorite_pages?.length || 0;
+  const impCount = book.important_pages?.length || 0;
   return (
     <div className={"bookTile"+(dragProps?.dragging?" dragging":"")} {...dragProps}>
       <div className="bookCoverWrap" onClick={onOpen}>
@@ -854,22 +917,41 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
       </div>}
       <b className="bookTitle">{book.title}</b>
       <div className="progress"><i style={{width:progress+"%"}}/></div>
-      <small className="bookProgressLabel">{progress}%</small>
+      <small className="bookProgressLabel">
+        {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
+      </small>
     </div>
   );
 }
 
-function PdfReader({ book, onClose, onProgress, onNotesChange }) {
+function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
   const [numPages, setNumPages] = useState(book.total_pages || 0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
-  const [notesOpen, setNotesOpen] = useState(false);
+
+  const [zoom, setZoom] = useState(1);
+  const [fitWidth, setFitWidth] = useState(true);
+  const [nightMode, setNightMode] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const [favoritePages, setFavoritePages] = useState(book.favorite_pages || []);
+  const [importantPages, setImportantPages] = useState(book.important_pages || []);
+
+  const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores"
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+  const [jumpValue, setJumpValue] = useState("");
+
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const modalRef = useRef(null);
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
+  const searchToken = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -898,17 +980,27 @@ function PdfReader({ book, onClose, onProgress, onNotesChange }) {
       const page = await pdf.getPage(pageNum);
       const containerWidth = containerRef.current?.clientWidth || 800;
       const baseViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(2.2, Math.max(0.3, (containerWidth - 24) / baseViewport.width));
+      const scale = fitWidth
+        ? Math.min(2.2, Math.max(0.3, (containerWidth - 24) / baseViewport.width))
+        : zoom;
+      if (fitWidth) setZoom(scale);
       const viewport = page.getViewport({ scale });
       const canvas = canvasRef.current;
       if (!canvas || !active) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+      // Renderiza na resolução real da tela (DPR) e só então reduz via CSS,
+      // pra não ficar borrado em telas retina/celular.
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = Math.floor(viewport.width) + "px";
+      canvas.style.height = Math.floor(viewport.height) + "px";
       const ctx = canvas.getContext("2d");
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+      await page.render({ canvasContext: ctx, viewport, transform }).promise;
     })();
     return () => { active = false; };
-  }, [pdf, pageNum]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdf, pageNum, fitWidth, zoom]);
 
   const goTo = (n) => {
     const clamped = Math.max(1, Math.min(numPages || 1, n));
@@ -916,12 +1008,88 @@ function PdfReader({ book, onClose, onProgress, onNotesChange }) {
     onProgress(book.id, clamped);
   };
 
+  const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
+  const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
+  const resetZoom = () => setFitWidth(true);
+
+  const handleJump = (e) => {
+    e.preventDefault();
+    const n = parseInt(jumpValue, 10);
+    if (!isNaN(n)) goTo(n);
+    setJumpValue("");
+  };
+
+  const toggleFavorite = () => {
+    setFavoritePages(prev => {
+      const has = prev.includes(pageNum);
+      const next = has ? prev.filter(p=>p!==pageNum) : [...prev, pageNum].sort((a,b)=>a-b);
+      onFavoritesChange(book.id, next);
+      return next;
+    });
+  };
+
+  const toggleImportant = () => {
+    setImportantPages(prev => {
+      const has = prev.includes(pageNum);
+      const next = has ? prev.filter(p=>p!==pageNum) : [...prev, pageNum].sort((a,b)=>a-b);
+      onImportantChange(book.id, next);
+      return next;
+    });
+  };
+
+  const runSearch = async (e) => {
+    e?.preventDefault();
+    if (!pdf || !searchQuery.trim()) { setSearchResults([]); return; }
+    const token = ++searchToken.current;
+    setSearching(true);
+    setSearchResults([]);
+    const q = searchQuery.trim().toLowerCase();
+    const found = [];
+    for (let n = 1; n <= numPages; n++) {
+      if (searchToken.current !== token) return; // uma busca nova começou / leitor fechou
+      setSearchProgress(n);
+      try {
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        const text = content.items.map(it => it.str).join(" ");
+        const idx = text.toLowerCase().indexOf(q);
+        if (idx !== -1) {
+          const start = Math.max(0, idx - 30);
+          const snippet = (start>0?"…":"") + text.slice(start, idx+q.length+30).trim() + "…";
+          found.push({ page: n, snippet });
+        }
+      } catch (e) { /* página sem texto extraível, ignora */ }
+    }
+    if (searchToken.current === token) {
+      setSearchResults(found);
+      setSearching(false);
+    }
+  };
+
+  useEffect(() => {
+    const handler = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await modalRef.current?.requestFullscreen?.();
+      } else {
+        await document.exitFullscreen?.();
+      }
+    } catch (e) {
+      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
+    }
+  };
+
   // Carrega a nota salva desse livro sempre que o painel de notas é aberto
   useEffect(() => {
-    if (notesOpen && notesBodyRef.current) {
+    if (panel==="notas" && notesBodyRef.current) {
       notesBodyRef.current.innerHTML = book.notes || "";
     }
-  }, [notesOpen]);
+  }, [panel]);
 
   const flushNotes = () => {
     clearTimeout(notesSaveTimer.current);
@@ -941,48 +1109,123 @@ function PdfReader({ book, onClose, onProgress, onNotesChange }) {
     scheduleNotesSave();
   };
 
-  const handleClose = () => {
-    if (notesOpen) flushNotes();
-    onClose();
+  const togglePanel = (name) => {
+    setPanel(p => {
+      if (p==="notas" && name!=="notas") flushNotes(); // fechando notas ao trocar de painel
+      return p===name ? null : name;
+    });
   };
 
-  const toggleNotes = () => {
-    setNotesOpen((o) => {
-      if (o) flushNotes(); // fechando o painel: salva o que estiver pendente
-      return !o;
-    });
+  const handleClose = () => {
+    if (panel==="notas") flushNotes();
+    searchToken.current++;
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
+    onClose();
   };
 
   useEffect(() => {
     const handler = (e) => {
-      if (e.key === "ArrowRight" && !notesOpen) goTo(pageNum + 1);
-      if (e.key === "ArrowLeft" && !notesOpen) goTo(pageNum - 1);
+      if (panel==="notas") return; // não interfere na digitação das notas
+      if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.key === "ArrowRight") goTo(pageNum + 1);
+      if (e.key === "ArrowLeft") goTo(pageNum - 1);
       if (e.key === "Escape") handleClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages, notesOpen]);
+  }, [pageNum, numPages, panel]);
+
+  const isFav = favoritePages.includes(pageNum);
+  const isImp = importantPages.includes(pageNum);
 
   return (
     <div className="readerBack" onClick={handleClose}>
-      <div className={`readerModal${notesOpen ? " readerModalWide" : ""}`} onClick={(e)=>e.stopPropagation()}>
+      <div ref={modalRef} className={`readerModal${panel ? " readerModalWide" : ""}${fullscreen ? " readerModalFull" : ""}`} onClick={(e)=>e.stopPropagation()}>
         <div className="readerHead">
           <b>{book.title}</b>
           <div className="readerHeadActions">
-            <button className={`ghost${notesOpen ? " active" : ""}`} onClick={toggleNotes}>
-              <StickyNote size={15}/> <span>{notesOpen ? "Fechar notas" : "Notas"}</span>
+            <button className={`ghost${panel==="busca" ? " active" : ""}`} onClick={()=>togglePanel("busca")}>
+              <Search size={15}/> <span>Buscar</span>
+            </button>
+            <button className={`ghost${panel==="marcadores" ? " active" : ""}`} onClick={()=>togglePanel("marcadores")}>
+              <Bookmark size={15}/> <span>Marcadores</span>
+            </button>
+            <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
+              <StickyNote size={15}/> <span>Notas</span>
             </button>
             <button onClick={handleClose}><X size={18}/></button>
           </div>
         </div>
+
+        <div className="pdfToolbar">
+          <div className="pdfToolbarGroup">
+            <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
+            <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
+            <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
+          </div>
+          <form className="pdfToolbarGroup pdfJumpForm" onSubmit={handleJump}>
+            <input type="number" min="1" max={numPages||undefined} placeholder={`Ir p/ página (1-${numPages||"?"})`} value={jumpValue} onChange={e=>setJumpValue(e.target.value)}/>
+            <button type="submit" title="Ir para a página"><ArrowRight size={15}/></button>
+          </form>
+          <div className="pdfToolbarGroup">
+            <button title={isFav?"Remover dos favoritos":"Favoritar esta página"} className={isFav?"active":""} onClick={toggleFavorite}><Star size={16} fill={isFav?"currentColor":"none"}/></button>
+            <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
+            <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
+            <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+          </div>
+        </div>
+
         <div className="readerMain">
-          <div className="readerBody" ref={containerRef}>
+          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
-            {!loading && !err && <canvas ref={canvasRef} className="readerCanvas" onClick={()=>goTo(pageNum+1)}/>}
+            {!loading && !err && <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>goTo(pageNum+1)}/>}
           </div>
-          {notesOpen && (
+
+          {panel==="busca" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Buscar no PDF</b><span>em "{book.title}"</span></div>
+              <form className="pdfSearchForm" onSubmit={runSearch}>
+                <input autoFocus value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Digite uma palavra..."/>
+                <button type="submit" disabled={searching}><Search size={15}/></button>
+              </form>
+              <div className="notesPaneBody pdfSearchResults">
+                {searching && <p className="readerHint">Buscando... página {searchProgress} de {numPages}</p>}
+                {!searching && searchResults.length===0 && searchQuery && <p className="emptyHint">Nenhum resultado encontrado.</p>}
+                {!searching && searchResults.map(r => (
+                  <button key={r.page} className="pdfSearchResultItem" onClick={()=>{goTo(r.page); setPanel(null);}}>
+                    <b>Página {r.page}</b>
+                    <small>{r.snippet}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {panel==="marcadores" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Marcadores</b><span>em "{book.title}"</span></div>
+              <div className="notesPaneBody pdfBookmarksBody">
+                <div className="pdfBookmarksSection">
+                  <small><Star size={12}/> Páginas favoritas</small>
+                  {favoritePages.length===0 && <p className="emptyHint">Nenhuma página favoritada ainda.</p>}
+                  <div className="pdfBookmarksChips">
+                    {favoritePages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
+                  </div>
+                </div>
+                <div className="pdfBookmarksSection">
+                  <small><Flag size={12}/> Páginas importantes</small>
+                  {importantPages.length===0 && <p className="emptyHint">Nenhuma página marcada ainda.</p>}
+                  <div className="pdfBookmarksChips">
+                    {importantPages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {panel==="notas" && (
             <div className="notesPane">
               <div className="notesPaneHead"><b>Minhas anotações</b><span>sobre "{book.title}"</span></div>
               <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
@@ -1017,7 +1260,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange }) {
   );
 }
 
-function BookShelf({ entity, status, session }) {
+function BookShelf({ entity, status, session, studyGoals }) {
   const { data, add, remove, update, cloud, reorder } = entity;
   const filtered = data.filter(x => x.status === status);
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -1041,7 +1284,7 @@ function BookShelf({ entity, status, session }) {
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
       const title = window.prompt("Título do livro:", defaultTitle) || defaultTitle;
       const filePath = await uploadBookFile(session.user.id, id, file);
-      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1 });
+      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [] });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -1052,12 +1295,19 @@ function BookShelf({ entity, status, session }) {
 
   const onProgress = (bookId, page) => {
     clearTimeout(progressTimer.current);
-    progressTimer.current = setTimeout(() => { update(bookId, { current_page: page }); }, 400);
+    progressTimer.current = setTimeout(() => {
+      update(bookId, { current_page: page });
+      const b = data.find(x => x.id === bookId);
+      syncLinkedGoalsProgress(studyGoals, "livro", bookId, b?.title || "", page);
+    }, 400);
   };
 
   const onNotesChange = (bookId, content) => {
     update(bookId, { notes: content });
   };
+
+  const onFavoritesChange = (bookId, favorite_pages) => update(bookId, { favorite_pages });
+  const onImportantChange = (bookId, important_pages) => update(bookId, { important_pages });
 
   const handleDelete = async (book) => {
     if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
@@ -1111,7 +1361,7 @@ function BookShelf({ entity, status, session }) {
       </div>
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
       {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
-      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange}/>}
+      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange} onFavoritesChange={onFavoritesChange} onImportantChange={onImportantChange}/>}
     </div>
   );
 }
@@ -1130,14 +1380,15 @@ function StudyPdfCoverThumb({ pdfDoc }) {
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
         const page = await pdf.getPage(1);
         const baseViewport = page.getViewport({ scale: 1 });
-        const scale = 260 / baseViewport.width;
+        const dpr = Math.min(3, window.devicePixelRatio || 1);
+        const scale = (260 * dpr) / baseViewport.width;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         studyPdfCoverCache.set(pdfDoc.file_path, dataUrl);
         if (active) setSrc(dataUrl);
       } catch (e) {
@@ -1149,7 +1400,7 @@ function StudyPdfCoverThumb({ pdfDoc }) {
   return <div className="bookCoverImg">{src ? <img src={src} alt={pdfDoc.title}/> : <div className="bookCoverPlaceholder"><FileText size={28}/></div>}</div>;
 }
 
-function StudyPdfTile({ pdfDoc, menuOpen, onToggleMenu, onOpen, onDelete, dragProps }) {
+function StudyPdfTile({ pdfDoc, groups, menuOpen, onToggleMenu, onOpen, onDelete, onMoveToGroup, dragProps }) {
   const progress = pdfDoc.total_pages ? Math.min(100, Math.round((pdfDoc.current_page / pdfDoc.total_pages) * 100)) : 0;
   const favCount = pdfDoc.favorite_pages?.length || 0;
   const impCount = pdfDoc.important_pages?.length || 0;
@@ -1160,6 +1411,15 @@ function StudyPdfTile({ pdfDoc, menuOpen, onToggleMenu, onOpen, onDelete, dragPr
       </div>
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        {groups.length>0 && <>
+          <small className="bookMenuLabel">Mover para pasta</small>
+          {groups.map(g => (
+            <button key={g.id} className={pdfDoc.group_id===g.id?"active":""} onClick={()=>onMoveToGroup(g.id)}>
+              <Folder size={13}/> {g.name}
+            </button>
+          ))}
+          {pdfDoc.group_id && <button onClick={()=>onMoveToGroup(null)}><X size={13}/> Remover da pasta</button>}
+        </>}
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
       <b className="bookTitle">{pdfDoc.title}</b>
@@ -1171,7 +1431,22 @@ function StudyPdfTile({ pdfDoc, menuOpen, onToggleMenu, onOpen, onDelete, dragPr
   );
 }
 
-function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImportantChange }) {
+function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete }) {
+  return (
+    <div className="bookTile groupTile" onClick={onOpen}>
+      <div className="bookCoverWrap groupCover"><Folder size={34}/></div>
+      <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        <button onClick={onRename}><Pencil size={13}/> Renomear</button>
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir pasta</button>
+      </div>}
+      <b className="bookTitle">{group.name}</b>
+      <small className="bookProgressLabel">{count} PDF{count===1?"":"s"}</small>
+    </div>
+  );
+}
+
+function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onHighlightsChange, onFavoriteExcerptsChange, onCreateFlashcard }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
   const [numPages, setNumPages] = useState(pdfDoc.total_pages || 0);
@@ -1182,11 +1457,15 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
   const [fitWidth, setFitWidth] = useState(true);
   const [nightMode, setNightMode] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
 
   const [favoritePages, setFavoritePages] = useState(pdfDoc.favorite_pages || []);
   const [importantPages, setImportantPages] = useState(pdfDoc.important_pages || []);
+  const [highlights, setHighlights] = useState(pdfDoc.highlights || []);
+  const [favoriteExcerpts, setFavoriteExcerpts] = useState(pdfDoc.favorite_excerpts || []);
+  const [selection, setSelection] = useState(null); // {text, top, left}
 
-  const [panel, setPanel] = useState(null); // null | "busca" | "marcadores"
+  const [panel, setPanel] = useState(null); // null | "busca" | "marcadores" | "notas"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -1196,6 +1475,10 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
+  const textLayerRef = useRef(null);
+  const pageWrapRef = useRef(null);
+  const notesBodyRef = useRef(null);
+  const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
 
   useEffect(() => {
@@ -1232,14 +1515,43 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
       const viewport = page.getViewport({ scale });
       const canvas = canvasRef.current;
       if (!canvas || !active) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+      // Renderiza na resolução real da tela (DPR) e só então reduz via CSS,
+      // pra não ficar borrado em telas retina/celular.
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = Math.floor(viewport.width) + "px";
+      canvas.style.height = Math.floor(viewport.height) + "px";
       const ctx = canvas.getContext("2d");
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+      await page.render({ canvasContext: ctx, viewport, transform }).promise;
+      if (!active) return;
+      setPageSize({ width: viewport.width, height: viewport.height });
+
+      // Camada de texto invisível, alinhada sobre o canvas, para permitir
+      // selecionar trechos e usar as ferramentas de estudo (destacar, flashcard, favoritar).
+      const textLayerDiv = textLayerRef.current;
+      if (textLayerDiv) {
+        textLayerDiv.innerHTML = "";
+        textLayerDiv.style.setProperty("--total-scale-factor", String(scale));
+        textLayerDiv.style.setProperty("--scale-round-x", "1px");
+        textLayerDiv.style.setProperty("--scale-round-y", "1px");
+        try {
+          const textContent = await page.getTextContent();
+          if (!active) return;
+          await new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport }).render();
+        } catch (e) { /* página sem texto extraível (ex.: PDF escaneado) */ }
+      }
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdf, pageNum, fitWidth, zoom]);
+
+  // Troca de página: fecha qualquer seleção pendente da página anterior
+  useEffect(() => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  }, [pageNum]);
 
   const goTo = (n) => {
     const clamped = Math.max(1, Math.min(numPages || 1, n));
@@ -1274,6 +1586,76 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
       onImportantChange(pdfDoc.id, next);
       return next;
     });
+  };
+
+  // Ferramentas de estudo: aparecem ao selecionar um trecho de texto no PDF
+  const handleTextMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) { setSelection(null); return; }
+    if (!textLayerRef.current || !textLayerRef.current.contains(sel.anchorNode)) { setSelection(null); return; }
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setSelection(null); return; }
+    setSelection({ text: sel.toString().trim(), top: rect.top, left: rect.left + rect.width / 2 });
+  };
+
+  const clearSelection = () => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  };
+
+  const applyHighlight = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !pageWrapRef.current) return;
+    const range = sel.getRangeAt(0);
+    const wrapRect = pageWrapRef.current.getBoundingClientRect();
+    const rects = Array.from(range.getClientRects())
+      .filter(r => r.width > 0 && r.height > 0)
+      .map(r => ({
+        x: (r.left - wrapRect.left) / wrapRect.width,
+        y: (r.top - wrapRect.top) / wrapRect.height,
+        w: r.width / wrapRect.width,
+        h: r.height / wrapRect.height,
+      }));
+    const text = sel.toString().trim();
+    if (!text || rects.length === 0) return;
+    const entry = { id: crypto.randomUUID(), page: pageNum, rects, text, createdAt: Date.now() };
+    const next = [...highlights, entry];
+    setHighlights(next);
+    onHighlightsChange(pdfDoc.id, next);
+    clearSelection();
+  };
+
+  const createFlashcardFromSelection = () => {
+    const text = selection?.text || window.getSelection()?.toString().trim();
+    if (!text) return;
+    const preview = text.length > 140 ? text.slice(0, 140) + "…" : text;
+    const back = window.prompt(`Frente do flashcard:\n"${preview}"\n\nQual é a resposta / definição?`, "");
+    if (back === null) { clearSelection(); return; } // cancelou
+    onCreateFlashcard({ front: text, back: back.trim(), source_title: pdfDoc.title, source_page: pageNum });
+    clearSelection();
+  };
+
+  const addFavoriteExcerpt = () => {
+    const text = selection?.text || window.getSelection()?.toString().trim();
+    if (!text) return;
+    const entry = { id: crypto.randomUUID(), page: pageNum, text, createdAt: Date.now() };
+    const next = [...favoriteExcerpts, entry];
+    setFavoriteExcerpts(next);
+    onFavoriteExcerptsChange(pdfDoc.id, next);
+    clearSelection();
+  };
+
+  const removeHighlight = (id) => {
+    const next = highlights.filter(h => h.id !== id);
+    setHighlights(next);
+    onHighlightsChange(pdfDoc.id, next);
+  };
+
+  const removeFavoriteExcerpt = (id) => {
+    const next = favoriteExcerpts.filter(h => h.id !== id);
+    setFavoriteExcerpts(next);
+    onFavoriteExcerptsChange(pdfDoc.id, next);
   };
 
   const runSearch = async (e) => {
@@ -1323,7 +1705,40 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
     }
   };
 
+  // Carrega a anotação salva desse PDF sempre que o painel de notas é aberto
+  useEffect(() => {
+    if (panel==="notas" && notesBodyRef.current) {
+      notesBodyRef.current.innerHTML = pdfDoc.notes || "";
+    }
+  }, [panel]);
+
+  const flushNotes = () => {
+    clearTimeout(notesSaveTimer.current);
+    if (notesBodyRef.current) onNotesChange(pdfDoc.id, notesBodyRef.current.innerHTML || "");
+  };
+
+  const scheduleNotesSave = () => {
+    clearTimeout(notesSaveTimer.current);
+    notesSaveTimer.current = setTimeout(() => {
+      onNotesChange(pdfDoc.id, notesBodyRef.current?.innerHTML || "");
+    }, 600);
+  };
+
+  const execNote = (command) => {
+    notesBodyRef.current?.focus();
+    document.execCommand(command, false, null);
+    scheduleNotesSave();
+  };
+
+  const togglePanel = (name) => {
+    setPanel(p => {
+      if (p==="notas" && name!=="notas") flushNotes(); // fechando notas ao trocar de painel
+      return p===name ? null : name;
+    });
+  };
+
   const handleClose = () => {
+    if (panel==="notas") flushNotes();
     searchToken.current++;
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
@@ -1331,6 +1746,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
 
   useEffect(() => {
     const handler = (e) => {
+      if (panel==="notas") return; // não interfere na digitação das notas
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
       if (e.key === "ArrowRight") goTo(pageNum + 1);
       if (e.key === "ArrowLeft") goTo(pageNum - 1);
@@ -1339,7 +1755,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages]);
+  }, [pageNum, numPages, panel]);
 
   const isFav = favoritePages.includes(pageNum);
   const isImp = importantPages.includes(pageNum);
@@ -1350,11 +1766,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
         <div className="readerHead">
           <b>{pdfDoc.title}</b>
           <div className="readerHeadActions">
-            <button className={`ghost${panel==="busca" ? " active" : ""}`} onClick={()=>setPanel(p=>p==="busca"?null:"busca")}>
+            <button className={`ghost${panel==="busca" ? " active" : ""}`} onClick={()=>togglePanel("busca")}>
               <Search size={15}/> <span>Buscar</span>
             </button>
-            <button className={`ghost${panel==="marcadores" ? " active" : ""}`} onClick={()=>setPanel(p=>p==="marcadores"?null:"marcadores")}>
+            <button className={`ghost${panel==="marcadores" ? " active" : ""}`} onClick={()=>togglePanel("marcadores")}>
               <Bookmark size={15}/> <span>Marcadores</span>
+            </button>
+            <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
+              <StickyNote size={15}/> <span>Anotações</span>
             </button>
             <button onClick={handleClose}><X size={18}/></button>
           </div>
@@ -1382,7 +1801,26 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
           <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
-            {!loading && !err && <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>goTo(pageNum+1)}/>}
+            {!loading && !err && (
+              <div ref={pageWrapRef} className="pdfPageWrap" style={{width:pageSize.width||undefined, height:pageSize.height||undefined}}>
+                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`}/>
+                {highlights.filter(h=>h.page===pageNum).map(h => (
+                  <div key={h.id} className="pdfHighlightGroup" title={h.text}>
+                    {h.rects.map((r,i) => (
+                      <span key={i} className="pdfHighlightRect" style={{left:(r.x*100)+"%", top:(r.y*100)+"%", width:(r.w*100)+"%", height:(r.h*100)+"%"}}/>
+                    ))}
+                  </div>
+                ))}
+                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
+              </div>
+            )}
+            {selection && (
+              <div className="pdfSelectionToolbar" style={{top:selection.top, left:selection.left}} onMouseDown={e=>e.preventDefault()}>
+                <button onClick={applyHighlight}><span className="pdfHighlightSwatch"/> Destacar</button>
+                <button onClick={createFlashcardFromSelection}><Layers size={13}/> Criar flashcard</button>
+                <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar aos favoritos</button>
+              </div>
+            )}
           </div>
 
           {panel==="busca" && (
@@ -1423,6 +1861,61 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
                     {importantPages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
                   </div>
                 </div>
+                <div className="pdfBookmarksSection">
+                  <small><span className="pdfHighlightSwatch"/> Trechos destacados</small>
+                  {highlights.length===0 && <p className="emptyHint">Nenhum trecho destacado ainda.</p>}
+                  <div className="pdfExcerptList">
+                    {highlights.map(h => (
+                      <div key={h.id} className="pdfExcerptItem">
+                        <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
+                          <b>Página {h.page}</b>
+                          <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
+                        </button>
+                        <button className="pdfExcerptDelete" title="Remover destaque" onClick={()=>removeHighlight(h.id)}><Trash2 size={13}/></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="pdfBookmarksSection">
+                  <small><Star size={12}/> Trechos favoritos</small>
+                  {favoriteExcerpts.length===0 && <p className="emptyHint">Nenhum trecho favoritado ainda.</p>}
+                  <div className="pdfExcerptList">
+                    {favoriteExcerpts.map(h => (
+                      <div key={h.id} className="pdfExcerptItem">
+                        <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
+                          <b>Página {h.page}</b>
+                          <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
+                        </button>
+                        <button className="pdfExcerptDelete" title="Remover dos favoritos" onClick={()=>removeFavoriteExcerpt(h.id)}><Trash2 size={13}/></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {panel==="notas" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Minhas anotações</b><span>sobre "{pdfDoc.title}"</span></div>
+              <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
+                <button title="Negrito" onClick={() => execNote("bold")}><Bold size={16}/></button>
+                <button title="Itálico" onClick={() => execNote("italic")}><Italic size={16}/></button>
+                <button title="Sublinhado" onClick={() => execNote("underline")}><Underline size={16}/></button>
+                <span className="noteToolDivider"/>
+                <button title="Lista com marcadores" onClick={() => execNote("insertUnorderedList")}><List size={16}/></button>
+                <button title="Lista numerada (1, 2, 3)" onClick={() => execNote("insertOrderedList")}><ListOrdered size={16}/></button>
+              </div>
+              <div className="notesPaneBody">
+                <div
+                  ref={notesBodyRef}
+                  className="noteTextarea noteRichBody"
+                  contentEditable
+                  suppressContentEditableWarning
+                  onInput={scheduleNotesSave}
+                  onBlur={flushNotes}
+                  data-placeholder="Escreva suas anotações sobre este PDF..."
+                />
               </div>
             </div>
           )}
@@ -1438,14 +1931,19 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onFavoritesChange, onImpo
   );
 }
 
-function StudyPdfShelf({ entity, session }) {
+function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }) {
   const { data, add, remove, update, cloud, reorder } = entity;
+  const groups = groupsEntity.data;
+  const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
   const fileInputRef = useRef(null);
   const progressTimer = useRef(null);
+
+  const currentGroup = currentGroupId ? groups.find(g => g.id === currentGroupId) : null;
+  const visiblePdfs = currentGroupId ? data.filter(p => p.group_id === currentGroupId) : data.filter(p => !p.group_id);
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
@@ -1461,7 +1959,7 @@ function StudyPdfShelf({ entity, session }) {
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
       const title = window.prompt("Título do PDF:", defaultTitle) || defaultTitle;
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
-      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [] });
+      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], highlights: [], favorite_excerpts: [], notes: "", group_id: currentGroupId });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -1472,17 +1970,33 @@ function StudyPdfShelf({ entity, session }) {
 
   const onProgress = (id, page) => {
     clearTimeout(progressTimer.current);
-    progressTimer.current = setTimeout(() => { update(id, { current_page: page }); }, 400);
+    progressTimer.current = setTimeout(() => {
+      update(id, { current_page: page });
+      const d = data.find(x => x.id === id);
+      syncLinkedGoalsProgress(studyGoals, "estudo", id, d?.title || "", page);
+    }, 400);
   };
 
+  const onNotesChange = (id, notes) => update(id, { notes });
   const onFavoritesChange = (id, favorite_pages) => update(id, { favorite_pages });
   const onImportantChange = (id, important_pages) => update(id, { important_pages });
+  const onHighlightsChange = (id, highlights) => update(id, { highlights });
+  const onFavoriteExcerptsChange = (id, favorite_excerpts) => update(id, { favorite_excerpts });
+  const onCreateFlashcard = (card) => {
+    flashcards.add(card);
+    alert('Flashcard criado! Confira na aba "Flashcards".');
+  };
 
   const handleDelete = async (pdfDoc) => {
     if (!confirm(`Excluir "${pdfDoc.title}"? Isso também apaga o PDF.`)) return;
     setOpenMenuId(null);
     await remove(pdfDoc.id);
     if (pdfDoc.file_path) deleteStudyPdfFile(pdfDoc.file_path);
+  };
+
+  const handleMoveToGroup = (pdfDoc, groupId) => {
+    setOpenMenuId(null);
+    update(pdfDoc.id, { group_id: groupId });
   };
 
   const handleDrop = (targetId) => {
@@ -1497,21 +2011,71 @@ function StudyPdfShelf({ entity, session }) {
     reorder(newList);
   };
 
+  const handleNewGroup = () => {
+    const name = window.prompt("Nome da pasta (ex.: Matemática):");
+    if (!name || !name.trim()) return;
+    groupsEntity.add({ id: crypto.randomUUID(), name: name.trim() });
+  };
+
+  const handleRenameGroup = (group) => {
+    setOpenMenuId(null);
+    const name = window.prompt("Novo nome da pasta:", group.name);
+    if (!name || !name.trim() || name.trim()===group.name) return;
+    groupsEntity.update(group.id, { name: name.trim() });
+  };
+
+  const handleDeleteGroup = async (group) => {
+    setOpenMenuId(null);
+    const count = data.filter(p => p.group_id === group.id).length;
+    const msg = count>0
+      ? `Excluir a pasta "${group.name}"? Os ${count} PDF(s) dela voltam para fora da pasta (não são apagados).`
+      : `Excluir a pasta "${group.name}"?`;
+    if (!confirm(msg)) return;
+    await Promise.all(data.filter(p => p.group_id === group.id).map(p => update(p.id, { group_id: null })));
+    await groupsEntity.remove(group.id);
+    if (currentGroupId === group.id) setCurrentGroupId(null);
+  };
+
   return (
     <div className="content">
+      {currentGroup && (
+        <div className="groupBreadcrumb">
+          <button className="ghost" onClick={()=>setCurrentGroupId(null)}>‹ Pastas</button>
+          <Folder size={14}/> <b>{currentGroup.name}</b>
+        </div>
+      )}
       <div className="shelf" onClick={()=>setOpenMenuId(null)}>
         <div className="bookTile addTile" onClick={()=>fileInputRef.current?.click()}>
           <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
           <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
         </div>
-        {data.map(pdfDoc => (
+        {!currentGroup && (
+          <div className="bookTile addTile" onClick={handleNewGroup}>
+            <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Nova pasta</span></div>
+          </div>
+        )}
+        {!currentGroup && groups.map(group => (
+          <StudyPdfGroupTile
+            key={group.id}
+            group={group}
+            count={data.filter(p => p.group_id === group.id).length}
+            menuOpen={openMenuId==="g:"+group.id}
+            onToggleMenu={(e)=>{e?.stopPropagation?.(); setOpenMenuId(id=>id==="g:"+group.id?null:"g:"+group.id);}}
+            onOpen={()=>setCurrentGroupId(group.id)}
+            onRename={()=>handleRenameGroup(group)}
+            onDelete={()=>handleDeleteGroup(group)}
+          />
+        ))}
+        {visiblePdfs.map(pdfDoc => (
           <StudyPdfTile
             key={pdfDoc.id}
             pdfDoc={pdfDoc}
+            groups={groups}
             menuOpen={openMenuId===pdfDoc.id}
             onToggleMenu={()=>setOpenMenuId(id=>id===pdfDoc.id?null:pdfDoc.id)}
             onOpen={()=>setReadingPdf(pdfDoc)}
             onDelete={()=>handleDelete(pdfDoc)}
+            onMoveToGroup={(groupId)=>handleMoveToGroup(pdfDoc, groupId)}
             dragProps={{
               draggable:true,
               dragging: dragId===pdfDoc.id,
@@ -1524,14 +2088,45 @@ function StudyPdfShelf({ entity, session }) {
         ))}
       </div>
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
-      {data.length===0 && cloud && <p className="emptyHint">Nenhum PDF de estudo por aqui ainda.</p>}
+      {visiblePdfs.length===0 && groups.length===0 && cloud && !currentGroup && <p className="emptyHint">Nenhum PDF de estudo por aqui ainda.</p>}
+      {currentGroup && visiblePdfs.length===0 && <p className="emptyHint">Nenhum PDF nessa pasta ainda.</p>}
       {readingPdf && <StudyPdfReader
         pdfDoc={readingPdf}
         onClose={()=>setReadingPdf(null)}
         onProgress={onProgress}
+        onNotesChange={onNotesChange}
         onFavoritesChange={onFavoritesChange}
         onImportantChange={onImportantChange}
+        onHighlightsChange={onHighlightsChange}
+        onFavoriteExcerptsChange={onFavoriteExcerptsChange}
+        onCreateFlashcard={onCreateFlashcard}
       />}
+    </div>
+  );
+}
+
+function FlashcardTile({ card, onDelete }) {
+  const [flipped, setFlipped] = useState(false);
+  return (
+    <div className={"flashcardTile"+(flipped?" flipped":"")} onClick={()=>setFlipped(f=>!f)}>
+      <button className="flashcardDelete" onClick={(e)=>{e.stopPropagation(); onDelete();}}><Trash2 size={13}/></button>
+      <div className="flashcardInner">
+        <div className="flashcardFace flashcardFront"><span>{card.front}</span></div>
+        <div className="flashcardFace flashcardBack"><span>{card.back || "(sem resposta)"}</span></div>
+      </div>
+      {card.source_title && <small className="flashcardSource">{card.source_title}{card.source_page ? ` · pág. ${card.source_page}` : ""}</small>}
+    </div>
+  );
+}
+
+function StudyFlashcards({ entity }) {
+  const { data, remove } = entity;
+  return (
+    <div className="content">
+      {data.length===0 && <p className="emptyHint">Nenhum flashcard ainda. Crie um selecionando um trecho de texto no Leitor de PDF.</p>}
+      <div className="flashcardGrid">
+        {data.map(card => <FlashcardTile key={card.id} card={card} onDelete={()=>remove(card.id)}/>)}
+      </div>
     </div>
   );
 }
@@ -1576,7 +2171,7 @@ function studyGoalBadge(g){
   return {label:"Em andamento", color: colorHex(g.color)};
 }
 
-function StudyGoals({entity}){
+function StudyGoals({entity, studyPdfsList=[], booksList=[]}){
   const {data,add,remove,update} = entity;
   const [filter,setFilter] = useState("todas");
   const [openMenuId,setOpenMenuId] = useState(null);
@@ -1631,11 +2226,19 @@ function StudyGoals({entity}){
               <span className="studyGoalPct" style={{color:hex}}>{pct}%</span>
             </div>
             <div className="studyGoalFoot">
-              <span className="studyGoalFootInfo">
-                {g.mode==="count"
-                  ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
-                  : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : "")}
-              </span>
+              <div className="studyGoalFootInfoStack">
+                <span className="studyGoalFootInfo">
+                  {g.mode==="count"
+                    ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
+                    : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : "")}
+                </span>
+                {g.link_source && g.link_source!=="none" && (
+                  <span className="studyGoalFootInfo studyGoalFootLink">
+                    <FileText size={13}/> Vinculada ao {g.link_source==="livro"?"livro":"PDF de estudo"}
+                    {g.link_page_start ? ` · pág. ${g.link_page_start}–${g.link_page_end}` : ""} (atualiza sozinha)
+                  </span>
+                )}
+              </div>
               <span className="studyGoalBadge" style={{color:badge.color, borderColor:badge.color}}>{badge.label}</span>
             </div>
           </div>
@@ -1651,14 +2254,14 @@ function StudyGoals({entity}){
       {filtered.length===0 && <p className="emptyHint">{data.length===0 ? "Crie sua primeira meta de estudo." : "Nenhuma meta nesse filtro."}</p>}
     </div>
 
-    {modal && <StudyGoalModal goal={modal==="new"?null:modal} onClose={()=>setModal(null)} onSave={(payload)=>{
+    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} onClose={()=>setModal(null)} onSave={(payload)=>{
       if(modal==="new") add(payload); else update(modal.id, payload);
       setModal(null);
     }}/>}
   </div>;
 }
 
-function StudyGoalModal({goal, onClose, onSave}){
+function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave}){
   const [title,setTitle] = useState(goal?.title||"");
   const [description,setDescription] = useState(goal?.description||"");
   const [icon,setIcon] = useState(goal?.icon||"target");
@@ -1670,20 +2273,51 @@ function StudyGoalModal({goal, onClose, onSave}){
   const [unit,setUnit] = useState(goal?.unit || "");
   const [dueDate,setDueDate] = useState(goal?.due_date || "");
   const [status,setStatus] = useState(goal?.status || "andamento");
+  const [linkSource,setLinkSource] = useState(goal?.link_source || "none");
+  const [linkPdfId,setLinkPdfId] = useState(goal?.link_pdf_id || "");
+  const [linkPageStart,setLinkPageStart] = useState(goal?.link_page_start ?? "");
+  const [linkPageEnd,setLinkPageEnd] = useState(goal?.link_page_end ?? "");
+
+  const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
+  const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
 
   const submit = (e) => {
     e.preventDefault();
     if(!title.trim()) return;
-    onSave({
+
+    const isLinked = mode==="count" && linkSource!=="none" && linkPdfId && linkPageStart && linkPageEnd;
+
+    const payload = {
       title: title.trim(),
       description: description.trim(),
       icon, color, mode, status,
       percent: mode==="percent" ? Math.min(100,Math.max(0,Number(percent)||0)) : 0,
-      current_value: mode==="count" ? Number(currentValue)||0 : 0,
-      target_value: mode==="count" ? Number(targetValue)||0 : 0,
-      unit: mode==="count" ? unit.trim() : "",
       due_date: dueDate || null,
-    });
+      link_source: "none",
+      link_pdf_id: null,
+      link_page_start: null,
+      link_page_end: null,
+    };
+
+    if (isLinked) {
+      const start = Number(linkPageStart), end = Number(linkPageEnd);
+      const target = Math.max(0, end - start + 1);
+      const current = Math.max(0, Math.min(target, (linkedDoc?.current_page||1) - start + 1));
+      payload.current_value = current;
+      payload.target_value = target;
+      payload.unit = "páginas";
+      payload.link_source = linkSource;
+      payload.link_pdf_id = linkPdfId;
+      payload.link_page_start = start;
+      payload.link_page_end = end;
+      if (target>0 && current>=target) payload.status = "concluida";
+    } else {
+      payload.current_value = mode==="count" ? Number(currentValue)||0 : 0;
+      payload.target_value = mode==="count" ? Number(targetValue)||0 : 0;
+      payload.unit = mode==="count" ? unit.trim() : "";
+    }
+
+    onSave(payload);
   };
 
   return <div className="modalBack" onClick={onClose}>
@@ -1714,16 +2348,40 @@ function StudyGoalModal({goal, onClose, onSave}){
         </div>
       </label>
 
-      {mode==="percent"
-        ? <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>
-        : <>
-            <div className="fieldRow">
-              <label>Valor atual<input type="number" min="0" value={currentValue} onChange={e=>setCurrentValue(e.target.value)} placeholder="0"/></label>
-              <label>Meta<input type="number" min="0" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="10"/></label>
-            </div>
-            <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: livros, questões"/></label>
-          </>
-      }
+      {mode==="percent" && <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>}
+
+      {mode==="count" && <>
+        <label>Vincular a um PDF (opcional)
+          <div className="modeToggle">
+            <button type="button" className={linkSource==="none"?"active":""} onClick={()=>{setLinkSource("none"); setLinkPdfId("");}}>Nenhum</button>
+            <button type="button" className={linkSource==="estudo"?"active":""} onClick={()=>{setLinkSource("estudo"); setLinkPdfId("");}}>PDF de estudo</button>
+            <button type="button" className={linkSource==="livro"?"active":""} onClick={()=>{setLinkSource("livro"); setLinkPdfId("");}}>Livro (PDF)</button>
+          </div>
+        </label>
+
+        {linkSource==="none" && <>
+          <div className="fieldRow">
+            <label>Valor atual<input type="number" min="0" value={currentValue} onChange={e=>setCurrentValue(e.target.value)} placeholder="0"/></label>
+            <label>Meta<input type="number" min="0" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="10"/></label>
+          </div>
+          <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: livros, questões"/></label>
+        </>}
+
+        {linkSource!=="none" && <>
+          <label>{linkSource==="livro" ? "Livro" : "PDF de estudo"}
+            <select value={linkPdfId} onChange={e=>setLinkPdfId(e.target.value)} required>
+              <option value="">Selecione...</option>
+              {linkOptions.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
+            </select>
+          </label>
+          {linkOptions.length===0 && <p className="fieldHint">Nenhum PDF cadastrado ainda em {linkSource==="livro"?"Livros":"Leitor de PDF"}.</p>}
+          <div className="fieldRow">
+            <label>Página inicial<input type="number" min="1" max={linkedDoc?.total_pages||undefined} value={linkPageStart} onChange={e=>setLinkPageStart(e.target.value)} placeholder="Ex.: 40" required/></label>
+            <label>Página final<input type="number" min="1" max={linkedDoc?.total_pages||undefined} value={linkPageEnd} onChange={e=>setLinkPageEnd(e.target.value)} placeholder="Ex.: 55" required/></label>
+          </div>
+          <p className="fieldHint">O progresso é atualizado sozinho conforme você avança a leitura desse PDF, e a meta conclui automaticamente ao chegar na página final.</p>
+        </>}
+      </>}
 
       <label>Data de conclusão (opcional)<input type="date" value={dueDate||""} onChange={e=>setDueDate(e.target.value)}/></label>
 
