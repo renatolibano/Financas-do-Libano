@@ -401,6 +401,15 @@ h1{font-size:23px}
 .penDeleteBtn:hover{background:var(--bg-surface-3)}
 
 .pdfDrawLayer{z-index:3}
+.penCursorDot{
+  position:absolute;
+  top:0; left:0;
+  border-radius:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
+  z-index:5;
+  box-shadow:0 0 0 1px rgba(0,0,0,.35), 0 0 0 2.5px rgba(255,255,255,.9);
+}
 .pdfTextAnn{position:absolute;z-index:4;white-space:pre-wrap;max-width:60%;line-height:1.25;cursor:default;font-weight:600}
 .pdfTextAnn textarea{background:#fffbe6cc;color:#1f2937;border:1px dashed #0007;border-radius:4px;padding:2px 5px;font:inherit;font-size:inherit;min-width:140px;min-height:1.4em;resize:both}
 .pdfSelectionBox{position:absolute;z-index:5;border:1.5px dashed var(--accent);border-radius:3px;pointer-events:none}

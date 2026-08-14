@@ -1070,6 +1070,24 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
   const resetZoom = () => setFitWidth(true);
 
+  // Zoom com o gesto de pinça no touchpad: navegadores reportam esse gesto
+  // como um evento "wheel" com ctrlKey=true (mesmo sem a tecla Ctrl estar
+  // pressionada de verdade). Precisa ser um listener nativo (não onWheel do
+  // React) porque o React registra wheel como passivo por padrão, o que
+  // impede o preventDefault e deixaria a página inteira dando zoom junto.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleWheelZoom = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setFitWidth(false);
+      setZoom(z => Math.min(3, Math.max(0.3, +(z - e.deltaY * 0.01).toFixed(2))));
+    };
+    el.addEventListener("wheel", handleWheelZoom, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheelZoom);
+  }, []);
+
   const handleJump = (e) => {
     e.preventDefault();
     const n = parseInt(jumpValue, 10);
@@ -1632,6 +1650,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [editingTextId, setEditingTextId] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
+  // Cursor customizado: uma bolinha da cor/espessura da ferramenta atual,
+  // que segue o ponteiro (mouse/caneta) e some enquanto o traço está sendo feito.
+  const [showPenCursor, setShowPenCursor] = useState(false);
 
   const drawSvgRef = useRef(null);
   const isDrawingRef = useRef(false);
@@ -1640,6 +1661,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const dragRef = useRef(null);
   const eraseGestureRef = useRef(false);
   const drawSaveTimer = useRef(null);
+  const penCursorRef = useRef(null);
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -1748,6 +1770,26 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
   const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
   const resetZoom = () => setFitWidth(true);
+
+  // Zoom com o gesto de pinça no touchpad: navegadores reportam esse gesto
+  // como um evento "wheel" com ctrlKey=true (mesmo sem a tecla Ctrl estar
+  // pressionada de verdade). Precisa ser um listener nativo (não onWheel do
+  // React) porque o React registra wheel como passivo por padrão, o que
+  // impede o preventDefault e deixaria a página inteira dando zoom junto.
+  // Aqui também evitamos ativar durante o Modo Caneta, pra não atrapalhar quem
+  // estiver desenhando com dois dedos no touchpad.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleWheelZoom = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      setFitWidth(false);
+      setZoom(z => Math.min(3, Math.max(0.3, +(z - e.deltaY * 0.01).toFixed(2))));
+    };
+    el.addEventListener("wheel", handleWheelZoom, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheelZoom);
+  }, []);
 
   const handleJump = (e) => {
     e.preventDefault();
@@ -1877,6 +1919,23 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     return { x: (clientX - rect.left) * scale, y: (clientY - rect.top) * scale };
   };
 
+  // Move a bolinha do cursor customizado direto no DOM (sem re-render) para
+  // acompanhar o ponteiro com fluidez.
+  const movePenCursor = (clientX, clientY) => {
+    const el = penCursorRef.current;
+    const wrap = pageWrapRef.current;
+    if (!el || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    el.style.left = (clientX - rect.left) + "px";
+    el.style.top = (clientY - rect.top) + "px";
+  };
+
+  // Some com a bolinha sempre que sair do modo caneta ou trocar para uma
+  // ferramenta que não desenha traço (borracha, seleção, texto, forma).
+  useEffect(() => {
+    if (!penMode || (tool !== "pen" && tool !== "highlighter")) setShowPenCursor(false);
+  }, [penMode, tool]);
+
   const addTextAnnotation = (x, y) => {
     const id = crypto.randomUUID();
     const ann = { id, type: "text", x, y, fontSize: 16, color, content: "" };
@@ -1984,6 +2043,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const handleDrawPointerDown = (e) => {
     if (!penMode || !basePageSize.width) return;
     e.preventDefault();
+    // A bolinha de cursor some assim que o traço começa (o próprio traço já
+    // aparece embaixo do dedo/caneta, então o indicador só atrapalharia).
+    if (tool === "pen" || tool === "highlighter") setShowPenCursor(false);
     try { drawSvgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
     const { x, y } = toPageCoords(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
@@ -2012,6 +2074,16 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
 
   const handleDrawPointerMove = (e) => {
     if (!penMode || !basePageSize.width) return;
+    // Atualiza a bolinha de cursor (só para mouse/caneta com hover — no toque
+    // com o dedo não existe "passar por cima", então ela nunca aparece).
+    if ((tool === "pen" || tool === "highlighter") && (e.pointerType === "mouse" || e.pointerType === "pen")) {
+      if (!isDrawingRef.current) {
+        movePenCursor(e.clientX, e.clientY);
+        setShowPenCursor(true);
+      }
+    } else if (showPenCursor) {
+      setShowPenCursor(false);
+    }
     if (tool === "select") {
       if (!dragRef.current) return;
       const { x, y } = toPageCoords(e.clientX, e.clientY);
@@ -2315,18 +2387,37 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                       position:"absolute", inset:0, width:"100%", height:"100%",
                       pointerEvents: penMode?"auto":"none",
                       touchAction: penMode?"none":undefined,
-                      cursor: penMode ? (tool==="eraser"?"cell":tool==="select"?"default":tool==="text"?"text":"crosshair") : undefined,
+                      cursor: penMode ? (tool==="eraser"?"cell":tool==="select"?"default":tool==="text"?"text":(tool==="pen"||tool==="highlighter")?"none":"crosshair") : undefined,
                     }}
                     onPointerDown={handleDrawPointerDown}
                     onPointerMove={handleDrawPointerMove}
                     onPointerUp={handleDrawPointerUp}
-                    onPointerLeave={handleDrawPointerUp}
+                    onPointerEnter={(e)=>{
+                      if (penMode && (tool==="pen"||tool==="highlighter") && (e.pointerType==="mouse"||e.pointerType==="pen")) {
+                        movePenCursor(e.clientX, e.clientY);
+                        setShowPenCursor(true);
+                      }
+                    }}
+                    onPointerLeave={(e)=>{ setShowPenCursor(false); handleDrawPointerUp(e); }}
                   >
                     {annotationsVisible && (drawings[pageNum]||[]).filter(a=>a.type!=="text").map(ann => (
                       <AnnotationShape key={ann.id} ann={ann}/>
                     ))}
                     {liveAnn && liveAnn.type!=="text" && <AnnotationShape ann={liveAnn} preview/>}
                   </svg>
+                )}
+                {penMode && (tool==="pen"||tool==="highlighter") && (
+                  <div
+                    ref={penCursorRef}
+                    className="penCursorDot"
+                    style={{
+                      display: showPenCursor ? "block" : "none",
+                      width: Math.min(60, Math.max(6, (tool==="highlighter"?hlThickness:thickness) * zoom)) + "px",
+                      height: Math.min(60, Math.max(6, (tool==="highlighter"?hlThickness:thickness) * zoom)) + "px",
+                      background: tool==="highlighter" ? hlColor : color,
+                      opacity: tool==="highlighter" ? Math.max(0.5, hlOpacity) : 1,
+                    }}
+                  />
                 )}
                 {annotationsVisible && basePageSize.width>0 && (drawings[pageNum]||[]).filter(a=>a.type==="text").map(a => (
                   <div

@@ -7,6 +7,25 @@ import { jsPDF } from "jspdf";
 // <svg> que desenha por cima usa viewBox nessas mesmas unidades.
 // ---------------------------------------------------------------------------
 
+// Suaviza a linha central do traço com uma média móvel simples (kernel
+// 1-2-1) antes de calcular o contorno. Reduz o tremido natural da captura
+// do ponteiro sem afastar a curva dos pontos originais (usado só pra
+// desenhar; os pontos crus continuam intactos para apagar/selecionar).
+function smoothCenterline(points, passes = 2) {
+  let pts = points;
+  for (let pass = 0; pass < passes; pass++) {
+    if (pts.length < 3) break;
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+      out.push({ x: (p0.x + 2 * p1.x + p2.x) / 4, y: (p0.y + 2 * p1.y + p2.y) / 4, p: p1.p });
+    }
+    out.push(pts[pts.length - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
 // Converte os pontos de um traço à mão livre (com pressão opcional em cada
 // ponto) em uma lista de pontos do contorno preenchido (uma "fita" de
 // largura variável, mais fina onde a pressão foi menor).
@@ -23,12 +42,13 @@ export function getStrokeOutlinePoints(points, baseWidth, { uniform = false } = 
     }
     return circle;
   }
+  const smoothed = smoothCenterline(points);
   const left = [];
   const right = [];
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    const prev = points[i - 1] || p;
-    const next = points[i + 1] || p;
+  for (let i = 0; i < smoothed.length; i++) {
+    const p = smoothed[i];
+    const prev = smoothed[i - 1] || p;
+    const next = smoothed[i + 1] || p;
     const dx = next.x - prev.x;
     const dy = next.y - prev.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -41,10 +61,29 @@ export function getStrokeOutlinePoints(points, baseWidth, { uniform = false } = 
   return [...left, ...right.reverse()];
 }
 
+// Monta o "d" do <path> conectando os pontos do contorno com curvas de
+// Bézier quadráticas (técnica clássica: cada ponto vira o controle de uma
+// curva até o meio do próximo ponto) em vez de linhas retas — é isso que
+// tira o aspecto "quadradão" e deixa o traço fluido, como numa lousa digital.
+function smoothClosedOutlinePath(pts) {
+  const n = pts.length;
+  if (n < 3) return "M" + pts.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" L") + " Z";
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const start = mid(pts[n - 1], pts[0]);
+  let d = `M ${start.x.toFixed(2)},${start.y.toFixed(2)}`;
+  for (let i = 0; i < n; i++) {
+    const cur = pts[i];
+    const next = pts[(i + 1) % n];
+    const m = mid(cur, next);
+    d += ` Q ${cur.x.toFixed(2)},${cur.y.toFixed(2)} ${m.x.toFixed(2)},${m.y.toFixed(2)}`;
+  }
+  return d + " Z";
+}
+
 export function strokeOutlinePath(points, baseWidth, opts) {
   const pts = getStrokeOutlinePoints(points, baseWidth, opts);
   if (!pts.length) return "";
-  return "M" + pts.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" L") + " Z";
+  return smoothClosedOutlinePath(pts);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +277,23 @@ function drawAnnotationOnCanvas(ctx, ann) {
       if (ann.tool === "highlighter") ctx.globalCompositeOperation = "multiply";
       ctx.fillStyle = ann.color;
       ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      // Mesma curva suave (Bézier quadrática ponto-a-ponto) usada na tela,
+      // pra o PDF exportado sair com o traço igualzinho ao que foi desenhado.
+      if (pts.length < 3) {
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      } else {
+        const n = pts.length;
+        const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        const start = mid(pts[n - 1], pts[0]);
+        ctx.moveTo(start.x, start.y);
+        for (let i = 0; i < n; i++) {
+          const cur = pts[i];
+          const next = pts[(i + 1) % n];
+          const m = mid(cur, next);
+          ctx.quadraticCurveTo(cur.x, cur.y, m.x, m.y);
+        }
+      }
       ctx.closePath();
       ctx.fill();
     }
