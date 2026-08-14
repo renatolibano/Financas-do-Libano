@@ -6,7 +6,7 @@
 create table if not exists transactions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  desc text not null,
+  "desc" text not null,
   cat text,
   value numeric not null,
   type text not null check (type in ('in','out')),
