@@ -6,12 +6,12 @@ import {
   WalletCards, Clock3, Trash2, X, LogOut, Cloud, CloudOff,
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
-  GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
+  GraduationCap, Layers, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
-  Upload
+  Upload, Popcorn, Clapperboard, Play, Pause
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -559,9 +559,12 @@ function App({session,theme,setTheme}){
     { type:"group", key:"estudos", label:"Área de Estudos", icon:GraduationCap, children:[
       { key:"Metas de Estudo", label:"Metas", icon:Target },
       { key:"Flashcards", icon:Layers },
-      { key:"Desafios", icon:Swords },
       { key:"Nivelamento", icon:BarChart3 },
       { key:"Leitor de PDF", icon:FileText },
+    ]},
+    { type:"group", key:"lazer", label:"Área de Lazer", icon:Popcorn, children:[
+      { key:"Treino", icon:Dumbbell },
+      { key:"Filmes e Séries", icon:Clapperboard },
     ]},
   ];
   const [openGroups,setOpenGroups] = useState({});
@@ -643,9 +646,10 @@ function App({session,theme,setTheme}){
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data}/>}
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals}/>}
-      {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
-      {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
+      {page==="Treino" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Filmes e Séries" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       <ToastHost/>
 
@@ -3556,6 +3560,161 @@ function studyGoalBadge(g){
   if(g.status==="concluida") return {label:"Concluída", color:"#3ecf6a"};
   if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
   return {label:"Em andamento", color: colorHex(g.color)};
+}
+
+function levelParsePattern(str){
+  const m = String(str||"").trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+  if(!m) return null;
+  const need = parseInt(m[1],10), win = parseInt(m[2],10);
+  if(!need || !win || need>win) return null;
+  return {need, win};
+}
+function levelFmtTime(totalSeconds){
+  const s = Math.max(0, Math.floor(totalSeconds||0));
+  const m = Math.floor(s/60), r = s%60;
+  return String(m).padStart(2,"0")+":"+String(r).padStart(2,"0");
+}
+
+function Nivelamento(){
+  const [pattern,setPattern] = usePersistentState("nivelamento_padrao","4/5");
+  const [sessions,setSessions] = usePersistentState("nivelamento_historico",[]);
+  const [phase,setPhase] = useState("config"); // config | running | done
+  const [history,setHistory] = useState([]); // array de booleans
+  const [seconds,setSeconds] = useState(0);
+  const [paused,setPaused] = useState(false);
+  const [lastResult,setLastResult] = useState(null);
+  const timerRef = useRef(null);
+
+  const parsed = levelParsePattern(pattern);
+
+  useEffect(()=>{
+    if(phase==="running" && !paused){
+      timerRef.current = setInterval(()=>setSeconds(s=>s+1), 1000);
+      return ()=>clearInterval(timerRef.current);
+    }
+  },[phase,paused]);
+
+  const start = ()=>{
+    if(!parsed){ toast("Use o formato acertos/total, ex: 4/5", "error"); return; }
+    setHistory([]); setSeconds(0); setPaused(false); setLastResult(null); setPhase("running");
+  };
+
+  const finishSession = (finalHistory)=>{
+    clearInterval(timerRef.current);
+    const corrects = finalHistory.filter(Boolean).length;
+    const pct = Math.round((corrects/finalHistory.length)*100);
+    const result = {pattern, solved:finalHistory.length, pct, seconds, date:new Date().toISOString()};
+    setLastResult(result);
+    setSessions(list=>[result, ...list].slice(0,20));
+    setPhase("done");
+  };
+
+  const answer = (correct)=>{
+    if(phase!=="running" || paused || !parsed) return;
+    const nh = [...history, correct];
+    setHistory(nh);
+    if(nh.length>=parsed.win){
+      const inWindow = nh.slice(-parsed.win).filter(Boolean).length;
+      if(inWindow>=parsed.need){ finishSession(nh); }
+    }
+  };
+  const undo = ()=>{ if(history.length===0) return; setHistory(h=>h.slice(0,-1)); };
+  const restart = ()=>{ setHistory([]); setSeconds(0); setPaused(false); };
+  const exitRunning = ()=>{
+    if(confirm("Sair do nivelamento em andamento? O progresso desta sessão não será salvo.")){
+      clearInterval(timerRef.current);
+      setPhase("config");
+    }
+  };
+
+  const windowSlice = parsed ? history.slice(-parsed.win) : [];
+  const inWindowCorrect = windowSlice.filter(Boolean).length;
+  const progressPct = parsed && parsed.need>0 ? Math.min(100, Math.round((inWindowCorrect/parsed.need)*100)) : 0;
+
+  return <div className="content levelWrap">
+    <div className="studyGoalsHead">
+      <div><h2>Nivelamento</h2><p>Treine questões e descubra se você já está nivelado no padrão desejado.</p></div>
+    </div>
+
+    {phase==="config" && <>
+      <div className="levelConfigCard">
+        <div className="levelConfigIcon"><BarChart3 size={22}/></div>
+        <h3>Configuração do Nivelamento</h3>
+        <label className="levelConfigLabel">Padrão de nivelamento
+          <input value={pattern} onChange={e=>setPattern(e.target.value)} placeholder="Ex: 4/5, 5/5, 9/10"/>
+        </label>
+        <p className="levelConfigHint">Formato: acertos/total (ex: 4/5 significa 4 acertos nas últimas 5 questões)</p>
+        {!parsed && pattern.trim()!=="" && <p className="levelConfigError">Padrão inválido. Use o formato acertos/total.</p>}
+        <button className="add levelStartBtn" onClick={start} disabled={!parsed}><Play size={16}/> Iniciar Nivelamento</button>
+      </div>
+
+      {sessions.length>0 && <div className="levelHistorySection">
+        <h3>Histórico</h3>
+        <div className="levelHistoryList">
+          {sessions.map((s,i)=>(
+            <div className="levelHistoryItem" key={i}>
+              <div className="levelHistoryItemIcon"><Target size={16}/></div>
+              <div className="levelHistoryItemBody">
+                <b>Padrão {s.pattern}</b>
+                <span>{s.solved} questões · {s.pct}% de acerto · {levelFmtTime(s.seconds)}</span>
+              </div>
+              <span className="levelHistoryDate">{new Date(s.date).toLocaleDateString("pt-BR")}</span>
+            </div>
+          ))}
+        </div>
+      </div>}
+    </>}
+
+    {phase==="running" && parsed && <div className="levelRunCard">
+      <div className="levelRunHead">
+        <div><h3>Nivelamento em progresso</h3><small>Padrão: {parsed.need}/{parsed.win}</small></div>
+        <button className="levelExitBtn" onClick={exitRunning} title="Sair"><X size={18}/></button>
+      </div>
+
+      <div className="levelHistoryRow">
+        {history.length===0 && <span className="emptyHint">Nenhuma questão respondida ainda.</span>}
+        {history.map((c,i)=><div key={i} className={"levelDot "+(c?"correct":"wrong")}>{i+1}</div>)}
+      </div>
+
+      <div className="levelProgressBlock">
+        <div className="levelProgressLabelRow">
+          <span>Questão {history.length+1}</span>
+          <span>Progresso: {inWindowCorrect}/{parsed.win} acertos nas últimas {parsed.win} questões</span>
+        </div>
+        <div className="progress levelProgressBar"><i style={{width:progressPct+"%"}}/></div>
+      </div>
+
+      <div className="levelQuestionCard">
+        <b>Questão {history.length+1}</b>
+        <p>Clique no botão correto ou errado para registrar sua resposta.</p>
+      </div>
+
+      <div className="levelAnswerBtns">
+        <button className="levelBtn correct" onClick={()=>answer(true)} disabled={paused}><CheckCircle2 size={17}/> Correta</button>
+        <button className="levelBtn wrong" onClick={()=>answer(false)} disabled={paused}><X size={17}/> Errada</button>
+        <button className="levelBtn back" onClick={undo} disabled={history.length===0}><Undo2 size={17}/> Voltar</button>
+      </div>
+
+      <div className="levelTimerRow">
+        <div className="levelTimer"><Clock3 size={15}/> <span>{levelFmtTime(seconds)}</span><small>Tempo decorrido</small></div>
+        <div className="levelTimerBtns">
+          <button className="ghost" onClick={()=>setPaused(p=>!p)}>{paused? <><Play size={14}/> Continuar</> : <><Pause size={14}/> Pausar</>}</button>
+          <button className="ghost" onClick={restart}><RotateCcw size={14}/> Reiniciar</button>
+        </div>
+      </div>
+    </div>}
+
+    {phase==="done" && lastResult && <div className="levelDoneWrap">
+      <div className="levelDoneIcon"><img src="/icons/icon-192.png" alt="Libano"/></div>
+      <h3>Nivelamento concluído! 🎉</h3>
+      <div className="levelDoneStats">
+        <div className="levelDoneStat"><Trophy size={17}/><strong>{lastResult.solved}</strong><span>Questões resolvidas</span></div>
+        <div className="levelDoneStat"><Target size={17}/><strong>{lastResult.pct}%</strong><span>Porcentagem de acerto</span></div>
+        <div className="levelDoneStat"><Clock3 size={17}/><strong>{levelFmtTime(lastResult.seconds)}</strong><span>Tempo total</span></div>
+      </div>
+      <button className="add" onClick={()=>setPhase("config")}>Continuar</button>
+    </div>}
+  </div>;
 }
 
 function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=[]}){

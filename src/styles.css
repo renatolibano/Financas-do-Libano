@@ -754,3 +754,66 @@ h1{font-size:23px}
 .studyGoalCard{padding:15px}
 }
 @media(max-width:430px){.studyStats{grid-template-columns:1fr 1fr}}
+
+/* Nivelamento */
+.levelConfigCard{background:var(--bg-surface);border:1px solid var(--border);border-radius:16px;padding:26px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;max-width:520px;margin:0 auto}
+.levelConfigIcon{width:52px;height:52px;border-radius:14px;background:var(--accent-soft-bg);color:var(--accent);display:grid;place-items:center;margin-bottom:2px}
+.levelConfigCard h3{margin:0;font-size:18px}
+.levelConfigLabel{width:100%;text-align:left;font-size:12px;color:var(--text-2);display:grid;gap:6px;margin-top:8px}
+.levelConfigLabel input{background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);padding:12px;border-radius:10px;outline:none;font-size:14px}
+.levelConfigLabel input:focus{border-color:var(--accent)}
+.levelConfigHint{margin:0;color:var(--text-3);font-size:12px}
+.levelConfigError{margin:0;color:#ff9d9d;font-size:12px}
+.levelStartBtn{width:100%;justify-content:center;margin-top:6px;padding:13px}
+
+.levelHistorySection{max-width:520px;margin:26px auto 0}
+.levelHistorySection h3{font-size:14px;color:var(--text-2);margin:0 0 10px}
+.levelHistoryList{display:flex;flex-direction:column;gap:8px}
+.levelHistoryItem{display:flex;align-items:center;gap:12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.levelHistoryItemIcon{width:34px;height:34px;border-radius:10px;background:var(--accent-soft-bg);color:var(--accent);display:grid;place-items:center;flex:0 0 auto}
+.levelHistoryItemBody{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.levelHistoryItemBody b{font-size:13px}
+.levelHistoryItemBody span{font-size:12px;color:var(--text-2)}
+.levelHistoryDate{font-size:11px;color:var(--text-3);white-space:nowrap}
+
+.levelRunCard{background:var(--bg-surface);border:1px solid var(--border);border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:18px;max-width:640px;margin:0 auto}
+.levelRunHead{display:flex;align-items:flex-start;justify-content:space-between}
+.levelRunHead h3{margin:0 0 3px;font-size:17px}
+.levelRunHead small{color:var(--text-2);font-size:12px}
+.levelExitBtn{width:34px;height:34px;border-radius:10px;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-2);display:grid;place-items:center}
+.levelExitBtn:hover{color:#ff9d9d;border-color:var(--border-danger)}
+.levelHistoryRow{display:flex;flex-wrap:wrap;gap:8px}
+.levelDot{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff}
+.levelDot.correct{background:#3ecf6a}
+.levelDot.wrong{background:var(--accent)}
+.levelProgressBlock{display:flex;flex-direction:column;gap:8px}
+.levelProgressLabelRow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--text-2);flex-wrap:wrap}
+.levelProgressBar{height:9px}
+.levelQuestionCard{border:1px solid var(--border);background:var(--bg-surface-2);border-radius:12px;padding:16px;text-align:center}
+.levelQuestionCard b{font-size:15px;color:var(--accent)}
+.levelQuestionCard p{margin:6px 0 0;font-size:12.5px;color:var(--text-2)}
+.levelAnswerBtns{display:grid;grid-template-columns:1fr 1fr auto;gap:10px}
+.levelBtn{display:flex;align-items:center;justify-content:center;gap:7px;padding:12px;border-radius:11px;font-weight:750;font-size:13.5px;color:#fff}
+.levelBtn.correct{background:linear-gradient(135deg,#3ecf6a,#2fa856)}
+.levelBtn.wrong{background:linear-gradient(135deg,var(--accent),var(--accent-2))}
+.levelBtn.back{background:var(--bg-surface-3);color:var(--text-1);border:1px solid var(--border)}
+.levelBtn:disabled{opacity:.5}
+.levelTimerRow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding-top:14px;border-top:1px solid var(--border)}
+.levelTimer{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:800;color:var(--text-1)}
+.levelTimer small{font-size:11px;font-weight:500;color:var(--text-3);margin-left:2px}
+.levelTimerBtns{display:flex;gap:8px}
+.levelTimerBtns .ghost{display:flex;align-items:center;gap:6px}
+
+.levelDoneWrap{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:40px 20px;max-width:480px;margin:0 auto}
+.levelDoneIcon{width:80px;height:80px;border-radius:22px;background:var(--accent-soft-bg);display:grid;place-items:center;overflow:hidden}
+.levelDoneIcon img{width:48px;height:48px;border-radius:12px}
+.levelDoneWrap h3{margin:0;font-size:19px;color:var(--text-1)}
+.levelDoneStats{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+.levelDoneStat{border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:16px 22px;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:120px;color:var(--accent)}
+.levelDoneStat strong{font-size:22px;color:var(--text-1)}
+.levelDoneStat span{color:var(--text-2);font-size:11.5px}
+
+@media(max-width:640px){
+  .levelAnswerBtns{grid-template-columns:1fr 1fr}
+  .levelAnswerBtns .levelBtn.back{grid-column:1/-1}
+}
