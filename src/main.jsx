@@ -10,7 +10,8 @@ import {
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
-  PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff
+  PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
+  Upload
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -2965,16 +2966,63 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
   const [title, setTitle] = useState(list?.title || "");
   const [description, setDescription] = useState(list?.description || "");
   const [rows, setRows] = useState(
-    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "" }))
-      : [{ id: rid(), term: "", definition: "" }, { id: rid(), term: "", definition: "" }]
+    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null }))
+      : [{ id: rid(), term: "", definition: "", image: null }, { id: rid(), term: "", definition: "", image: null }]
   );
+  const [uploadingId, setUploadingId] = useState(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
 
   const setRow = (id, field, value) => setRows(rs => rs.map(r => r.id===id ? {...r, [field]: value} : r));
   const removeRow = (id) => setRows(rs => rs.filter(r => r.id !== id));
-  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "" }]);
+  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null }]);
+
+  const parseImportText = (text) => {
+    return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
+      let term, definition;
+      if (line.includes("\t")) {
+        const idx = line.indexOf("\t");
+        term = line.slice(0, idx); definition = line.slice(idx + 1);
+      } else if (/\s-\s/.test(line)) {
+        const idx = line.search(/\s-\s/);
+        term = line.slice(0, idx); definition = line.slice(idx + 3);
+      } else if (line.includes(",")) {
+        const idx = line.indexOf(",");
+        term = line.slice(0, idx); definition = line.slice(idx + 1);
+      } else {
+        term = line; definition = "";
+      }
+      return { id: rid(), term: term.trim(), definition: definition.trim(), image: null };
+    });
+  };
+
+  const confirmImport = () => {
+    const imported = parseImportText(importText);
+    if (imported.length === 0) { alert("Cole o texto exportado do Quizlet antes de importar."); return; }
+    setRows(rs => {
+      const kept = rs.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image);
+      return [...kept, ...imported];
+    });
+    setImportText("");
+    setShowImport(false);
+  };
+
+  const handleRowImage = async (id, file) => {
+    if (!file) return;
+    setUploadingId(id);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 640, 640, 0.82);
+      setRow(id, "image", dataUrl);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    } finally {
+      setUploadingId(null);
+    }
+  };
 
   const submit = () => {
-    const cards = rows.filter(r => r.term.trim() || r.definition.trim()).map(r => ({ id: r.id, term: r.term.trim(), definition: r.definition.trim() }));
+    const cards = rows.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image).map(r => ({ id: r.id, term: r.term, definition: r.definition, image: r.image || null }));
     if (cards.length === 0) { alert("Adicione pelo menos um cartão com termo ou definição."); return; }
     onSave({
       title: title.trim() || "Lista sem título",
@@ -2989,6 +3037,7 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
       <div className="flashFormHead">
         <h2>{list ? "Editar lista de cartões" : "Criar lista de cartões"}</h2>
         <div className="flashHeadActions">
+          <button className="ghost" onClick={()=>setShowImport(s=>!s)}><Upload size={15}/> Importar do Quizlet</button>
           <button className="ghost" onClick={onCancel}>Cancelar</button>
           <button className="add" onClick={submit}><Check size={16}/> {list ? "Salvar" : "Criar"}</button>
         </div>
@@ -3000,23 +3049,114 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
         <input className="flashFormDescInput" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Adicione uma descrição (opcional)"/>
       </div>
 
-      {rows.map((r, i) => (
-        <div className="flashFormRow" key={r.id}>
-          <div className="flashFormRowHead"><span>{i+1}</span><button onClick={()=>removeRow(r.id)}><Trash2 size={14}/></button></div>
-          <div className="flashFormRowFields">
-            <div>
-              <input value={r.term} onChange={e=>setRow(r.id,"term",e.target.value)} placeholder="Digite o termo"/>
-              <label>TERMO</label>
-            </div>
-            <div>
-              <input value={r.definition} onChange={e=>setRow(r.id,"definition",e.target.value)} placeholder="Digite a definição"/>
-              <label>DEFINIÇÃO</label>
-            </div>
+      {showImport && (
+        <div className="flashImportPanel">
+          <p className="flashImportHelp">
+            No Quizlet, abra o set, toque em <strong>"..."</strong> → <strong>Exportar</strong>, escolha "TAB entre termo e definição" e "Nova linha entre cartões", copie o texto e cole abaixo.
+          </p>
+          <textarea
+            className="flashImportTextarea"
+            value={importText}
+            onChange={e=>setImportText(e.target.value)}
+            placeholder={"gato\tanimal doméstico felino\ncachorro\tanimal doméstico canino"}
+            rows={8}
+          />
+          <div className="flashImportActions">
+            <button className="ghost" onClick={()=>{ setShowImport(false); setImportText(""); }}>Cancelar</button>
+            <button className="add" onClick={confirmImport}><Upload size={15}/> Importar cartões</button>
           </div>
         </div>
+      )}
+
+      {rows.map((r, i) => (
+        <FlashFormRow
+          key={r.id}
+          row={r}
+          index={i}
+          uploading={uploadingId===r.id}
+          onChangeField={setRow}
+          onRemove={removeRow}
+          onImage={handleRowImage}
+        />
       ))}
 
       <button className="flashAddRowBtn" onClick={addRow}><Plus size={15}/> Adicionar cartão</button>
+    </div>
+  );
+}
+
+const FLASH_HIGHLIGHT_COLOR = "#997700";
+
+function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage }) {
+  const termRef = useRef(null);
+  const defRef = useRef(null);
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.innerHTML = row.term || "";
+    if (defRef.current) defRef.current.innerHTML = row.definition || "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.id]);
+
+  // Impede que o clique num botão da barra tire o foco/seleção do texto
+  const keepFocus = (e) => e.preventDefault();
+
+  const exec = (command, value = null) => {
+    document.execCommand(command, false, value);
+    if (termRef.current) onChangeField(row.id, "term", termRef.current.innerHTML);
+    if (defRef.current) onChangeField(row.id, "definition", defRef.current.innerHTML);
+  };
+
+  return (
+    <div className="flashFormRow">
+      <div className="flashFormRowHead">
+        <span>{index+1}</span>
+        <div className="flashFormToolbar" onMouseDown={keepFocus}>
+          <button title="Negrito" onClick={()=>exec("bold")}><Bold size={14}/></button>
+          <button title="Itálico" onClick={()=>exec("italic")}><Italic size={14}/></button>
+          <button title="Sublinhado" onClick={()=>exec("underline")}><Underline size={14}/></button>
+          <span className="noteToolDivider"/>
+          <button title="Marcador de texto amarelo" onClick={()=>exec("hiliteColor", FLASH_HIGHLIGHT_COLOR)}><Highlighter size={14}/></button>
+        </div>
+        <button onClick={()=>onRemove(row.id)}><Trash2 size={14}/></button>
+      </div>
+      <div className="flashFormRowFields">
+        <div>
+          <div
+            ref={termRef}
+            className="flashRichField"
+            contentEditable
+            suppressContentEditableWarning
+            data-placeholder="Digite o termo"
+            onInput={()=>onChangeField(row.id, "term", termRef.current.innerHTML)}
+          />
+          <label>TERMO</label>
+        </div>
+        <div>
+          <div
+            ref={defRef}
+            className="flashRichField"
+            contentEditable
+            suppressContentEditableWarning
+            data-placeholder="Digite a definição"
+            onInput={()=>onChangeField(row.id, "definition", defRef.current.innerHTML)}
+          />
+          <label>DEFINIÇÃO</label>
+        </div>
+        <div className="flashFormImageField">
+          <label className="flashFormImageBtn">
+            {uploading ? (
+              <span>Enviando...</span>
+            ) : row.image ? (
+              <img src={row.image} alt="Imagem do cartão"/>
+            ) : (
+              <><ImagePlus size={16}/><span>Imagem</span></>
+            )}
+            <input type="file" accept="image/*" hidden onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if (f) onImage(row.id, f); }}/>
+          </label>
+          {row.image && <button className="flashFormImageRemove" onClick={()=>onChangeField(row.id,"image",null)}><X size={12}/></button>}
+          <label>IMAGEM</label>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3122,8 +3262,12 @@ function FlashcardFlipMode({ cards }) {
     <div className="flashStudyArea">
       <div className="flashFlipCard" onClick={()=>{ if(!feedback) setFlipped(f=>!f); }}>
         <div className={"flashFlipInner"+(flipped?" flipped":"")}>
-          <div className="flashFlipFace flashFlipFront"><small>TERMO</small><span>{card.term || "(sem termo)"}</span></div>
-          <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small><span>{card.definition || "(sem definição)"}</span></div>
+          <div className="flashFlipFace flashFlipFront">
+            <small>TERMO</small>
+            {card.image && <img className="flashFlipImage" src={card.image} alt=""/>}
+            {stripHtml(card.term).trim() ? <span dangerouslySetInnerHTML={{__html: card.term}}/> : <span>(sem termo)</span>}
+          </div>
+          <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small>{stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}</div>
         </div>
         {feedback && (
           <div className={"flashFlipFeedback"+(feedback==="know"?" know":" learning")}>
@@ -3146,10 +3290,12 @@ function FlashcardFlipMode({ cards }) {
 }
 
 function FlashcardLearnMode({ cards }) {
-  const [order] = useState(() => shuffleArr(cards));
+  const [deck, setDeck] = useState(cards);
+  const [order, setOrder] = useState(() => shuffleArr(cards));
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState(null);
   const [correctCount, setCorrectCount] = useState(0);
+  const [wrongIds, setWrongIds] = useState([]);
 
   const finished = index >= order.length;
   const card = finished ? null : order[index];
@@ -3163,14 +3309,33 @@ function FlashcardLearnMode({ cards }) {
 
   if (cards.length < 2) return <p className="emptyHint">Adicione pelo menos 2 cartões para usar o modo Aprender.</p>;
 
+  const restartAll = () => {
+    setDeck(cards); setOrder(shuffleArr(cards)); setIndex(0); setSelected(null); setCorrectCount(0); setWrongIds([]);
+  };
+  const restartFailed = () => {
+    const failedIds = new Set(wrongIds);
+    const failedCards = cards.filter(c => failedIds.has(c.id));
+    if (failedCards.length === 0) return;
+    setDeck(failedCards); setOrder(shuffleArr(failedCards)); setIndex(0); setSelected(null); setCorrectCount(0); setWrongIds([]);
+  };
+
   if (finished) {
+    const learningCount = order.length - correctCount;
     return (
       <div className="flashStudyArea">
-        <div className="flashLearnDone">
-          <CheckCircle2 size={36}/>
-          <h3>Você concluiu esta lista!</h3>
-          <p>{correctCount} de {order.length} respostas corretas.</p>
-          <button className="add" onClick={()=>{ setIndex(0); setSelected(null); setCorrectCount(0); }}><RotateCcw size={15}/> Estudar de novo</button>
+        <div className="flashFlipDone">
+          <div className="flashFlipDoneIcon"><Trophy size={32}/></div>
+          <h3>Boa! Você revisou os {order.length} cartão{order.length===1?"":"s"} 🎉</h3>
+          <div className="flashFlipDoneStats">
+            <div className="flashFlipDoneStat know"><strong>{correctCount}</strong><span>Já sei</span></div>
+            <div className="flashFlipDoneStat learning"><strong>{learningCount}</strong><span>Ainda aprendendo</span></div>
+          </div>
+          <div className="flashFlipDoneActions">
+            <button className="ghost flashFlipDoneBtn" onClick={restartAll}><RotateCcw size={15}/> Estudar tudo de novo</button>
+            {learningCount > 0 && (
+              <button className="flashFlipRetryBtn" onClick={restartFailed}><Zap size={15}/> Só os que falta aprender ({learningCount})</button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -3180,12 +3345,17 @@ function FlashcardLearnMode({ cards }) {
     if (selected) return;
     setSelected(opt);
     if (opt === card.definition) setCorrectCount(c => c+1);
+    else setWrongIds(ids => [...ids, card.id]);
   };
   const next = () => { setSelected(null); setIndex(i => i+1); };
 
   return (
     <div className="flashStudyArea">
-      <div className="flashLearnQuestion"><small>TERMO</small><h3>{card.term}</h3></div>
+      <div className="flashLearnQuestion">
+        <small>TERMO</small>
+        {card.image && <img className="flashLearnImage" src={card.image} alt=""/>}
+        <h3 dangerouslySetInnerHTML={{__html: card.term}}/>
+      </div>
       <div className="flashLearnOptions">
         {options.map((opt, i) => {
           let cls = "flashLearnOpt";
@@ -3193,7 +3363,7 @@ function FlashcardLearnMode({ cards }) {
             if (opt === card.definition) cls += " correct";
             else if (opt === selected) cls += " wrong";
           }
-          return <button key={i} className={cls} onClick={()=>choose(opt)}>{opt}</button>;
+          return <button key={i} className={cls} onClick={()=>choose(opt)} dangerouslySetInnerHTML={{__html: opt}}/>;
         })}
       </div>
       {selected && <button className="add flashLearnNext" onClick={next}>Próxima <ArrowRight size={15}/></button>}
@@ -3205,7 +3375,7 @@ function FlashcardLearnMode({ cards }) {
 function FlashcardMatchMode({ cards }) {
   const pairCards = cards.slice(0, 8);
   const makeTiles = () => shuffleArr(pairCards.flatMap(c => [
-    { key: c.id+"-t", pairId: c.id, text: c.term },
+    { key: c.id+"-t", pairId: c.id, text: c.term, image: c.image || null },
     { key: c.id+"-d", pairId: c.id, text: c.definition }
   ]));
   const [tiles, setTiles] = useState(makeTiles);
@@ -3248,7 +3418,12 @@ function FlashcardMatchMode({ cards }) {
             if (isMatched) cls += " matched";
             else if (selected?.key === t.key) cls += " selected";
             else if (wrongFlash.includes(t.key)) cls += " wrong";
-            return <button key={t.key} className={cls} disabled={isMatched} onClick={()=>onTap(t)}>{t.text}</button>;
+            return (
+              <button key={t.key} className={cls} disabled={isMatched} onClick={()=>onTap(t)}>
+                {t.image && <img className="flashMatchImage" src={t.image} alt=""/>}
+                <span dangerouslySetInnerHTML={{__html: t.text}}/>
+              </button>
+            );
           })}
         </div>
       )}
