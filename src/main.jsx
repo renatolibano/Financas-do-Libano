@@ -2374,7 +2374,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && (
-              <div ref={pageWrapRef} className="pdfPageWrap" style={{width:pageSize.width||undefined, height:pageSize.height||undefined}}>
+              <div ref={pageWrapRef} className={`pdfPageWrap${penMode?" pdfPageWrapPenMode":""}`} style={{width:pageSize.width||undefined, height:pageSize.height||undefined}} onContextMenu={(e)=>{ if (penMode) e.preventDefault(); }}>
                 <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!penMode) goTo(pageNum+1); }}/>
                 <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
                 {basePageSize.width>0 && (
@@ -2391,6 +2391,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                     onPointerDown={handleDrawPointerDown}
                     onPointerMove={handleDrawPointerMove}
                     onPointerUp={handleDrawPointerUp}
+                    onContextMenu={(e)=>{ if (penMode) e.preventDefault(); }}
                     onPointerEnter={(e)=>{
                       if (penMode && (tool==="pen"||tool==="highlighter") && (e.pointerType==="mouse"||e.pointerType==="pen")) {
                         movePenCursor(e.clientX, e.clientY);

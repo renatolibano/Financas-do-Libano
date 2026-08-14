@@ -364,6 +364,7 @@ h1{font-size:23px}
 
 .pdfPageWrap{position:relative;line-height:0}
 .pdfPageWrap .readerCanvas{display:block}
+.pdfPageWrapPenMode{touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 
 /* Camada de texto selecionável do pdf.js, alinhada exatamente sobre o canvas */
 .textLayer{position:absolute;inset:0;overflow:clip;opacity:1;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;z-index:2}
