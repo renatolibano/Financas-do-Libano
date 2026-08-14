@@ -2978,22 +2978,55 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
   const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null }]);
 
   const parseImportText = (text) => {
-    return text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
-      let term, definition;
-      if (line.includes("\t")) {
-        const idx = line.indexOf("\t");
-        term = line.slice(0, idx); definition = line.slice(idx + 1);
-      } else if (/\s-\s/.test(line)) {
-        const idx = line.search(/\s-\s/);
-        term = line.slice(0, idx); definition = line.slice(idx + 3);
-      } else if (line.includes(",")) {
-        const idx = line.indexOf(",");
-        term = line.slice(0, idx); definition = line.slice(idx + 1);
-      } else {
-        term = line; definition = "";
+    const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const toHtml = (s) => escapeHtml(s.trim()).replace(/\n+/g, "<br>");
+
+    const lines = text.split(/\r?\n/);
+    const hasTabFormat = lines.some(l => l.includes("\t"));
+
+    const cards = [];
+
+    if (hasTabFormat) {
+      // Formato padrão do Quizlet: cada cartão começa numa linha "termo<TAB>definição".
+      // Linhas seguintes sem TAB são continuação da definição do cartão anterior
+      // (ex.: frases de exemplo que o Quizlet exporta em linhas separadas).
+      let current = null;
+      for (const rawLine of lines) {
+        if (rawLine.trim() === "") {
+          if (current) current.definition += "\n";
+          continue;
+        }
+        if (rawLine.includes("\t")) {
+          const idx = rawLine.indexOf("\t");
+          current = { id: rid(), term: rawLine.slice(0, idx).trim(), definition: rawLine.slice(idx + 1).trim() + "\n" };
+          cards.push(current);
+        } else if (current) {
+          current.definition += rawLine.trim() + "\n";
+        }
+        // linhas sem TAB antes de qualquer cartão começar são ignoradas
       }
-      return { id: rid(), term: term.trim(), definition: definition.trim(), image: null };
-    });
+    } else {
+      // Sem TAB no texto: assume um cartão por linha, separado por " - " ou ",".
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        let term, definition;
+        if (/\s-\s/.test(line)) {
+          const idx = line.search(/\s-\s/);
+          term = line.slice(0, idx); definition = line.slice(idx + 3);
+        } else if (line.includes(",")) {
+          const idx = line.indexOf(",");
+          term = line.slice(0, idx); definition = line.slice(idx + 1);
+        } else {
+          term = line; definition = "";
+        }
+        cards.push({ id: rid(), term: term.trim(), definition: definition.trim() + "\n" });
+      }
+    }
+
+    return cards
+      .filter(c => c.term.trim() || c.definition.trim())
+      .map(c => ({ id: c.id, term: toHtml(c.term), definition: toHtml(c.definition), image: null }));
   };
 
   const confirmImport = () => {
