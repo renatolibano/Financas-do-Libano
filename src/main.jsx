@@ -2286,9 +2286,10 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
           </div>
         </div>
 
+        <div className="readerMain">
         {penMode && (
           <div className="penOptionsBar">
-            <div className="penToolGroup">
+            <div className="penToolGroup penToolGroupMain">
               <button title="Caneta" className={tool==="pen"?"active":""} onClick={()=>{setTool("pen"); setSelectedAnnId(null);}}><PenTool size={16}/></button>
               <button title="Marca-texto" className={tool==="highlighter"?"active":""} onClick={()=>{setTool("highlighter"); setSelectedAnnId(null);}}><Highlighter size={16}/></button>
               <button title="Borracha" className={tool==="eraser"?"active":""} onClick={()=>{setTool("eraser"); setSelectedAnnId(null);}}><Eraser size={16}/></button>
@@ -2369,8 +2370,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             </div>
           </div>
         )}
-
-        <div className="readerMain">
           <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}

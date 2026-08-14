@@ -380,7 +380,14 @@ h1{font-size:23px}
 .pdfSelectionToolbar button:hover{background:var(--bg-hover-2)}
 
 /* Modo Caneta ------------------------------------------------------------ */
-.penOptionsBar{display:flex;flex-direction:column;gap:8px;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar)}
+.penOptionsBar{display:flex;flex-direction:column;align-items:stretch;gap:10px;width:210px;flex:0 0 210px;align-self:stretch;padding:12px 10px;border-bottom:none;border-right:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow-y:auto}
+.penOptionsBar .penToolGroupMain{flex-direction:column;align-items:stretch;gap:3px}
+.penOptionsBar .penToolGroupMain>button{width:100%;justify-content:flex-start}
+.penOptionsBar .penToolGroupMain>button span{display:none}
+.penOptionsBar .penToolDivider{width:auto;height:1px;align-self:stretch;margin:3px 0}
+.penOptionsBar .penOptionsRow{flex-direction:column;align-items:stretch;gap:10px}
+.penOptionsBar .penOptionsRow select{width:100%}
+.penOptionsBar .penSliderLabel input[type=range]{flex:1;width:auto}
 .penToolGroup{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .penToolGroup>button{min-width:32px;height:32px;padding:0 9px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text-2);font-size:11px;font-weight:700;border:1px solid transparent;white-space:nowrap}
 .penToolGroup>button:hover{background:var(--bg-surface-3);color:var(--text-1)}
@@ -580,6 +587,11 @@ h1{font-size:23px}
   .penSliderLabel input[type=range]{width:56px}
   .penOptionsRow{gap:8px}
   .pdfToolbarGroup button span{display:none}
+  .penOptionsBar{flex-direction:row;align-items:center;width:auto;flex:none;align-self:auto;border-right:none;border-bottom:1px solid var(--border-soft);overflow-x:auto;overflow-y:hidden;padding:8px 10px}
+  .penOptionsBar .penToolGroupMain{flex-direction:row;align-items:center;gap:4px}
+  .penOptionsBar .penToolGroupMain>button{width:auto;justify-content:center}
+  .penOptionsBar .penToolDivider{width:1px;height:auto;align-self:stretch;margin:0 3px}
+  .penOptionsBar .penOptionsRow{flex-direction:row;align-items:center}
 }
 
 .notesPane{width:360px;flex-shrink:0;border-left:1px solid var(--border-soft);background:var(--bg-reader-toolbar);display:flex;flex-direction:column;min-height:0}
