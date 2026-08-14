@@ -231,6 +231,9 @@ create table if not exists study_pdf_groups (
 alter table study_pdf_groups enable row level security;
 alter table study_pdfs add column if not exists group_id uuid references study_pdf_groups(id) on delete set null;
 
+-- Atualização: foto de capa personalizada para cada pasta (salva como imagem em base64)
+alter table study_pdf_groups add column if not exists cover_image text;
+
 -- Flashcards criados a partir de um trecho selecionado no Leitor de PDF (ou manualmente, no futuro)
 create table if not exists study_flashcards (
   id uuid primary key default gen_random_uuid(),
@@ -242,6 +245,29 @@ create table if not exists study_flashcards (
   created_at timestamptz not null default now()
 );
 alter table study_flashcards enable row level security;
+
+-- Atualização: Listas de flashcards criadas manualmente na aba Flashcards (estilo "Quizlet"),
+-- organizadas em pastas, com cartões de termo/definição e modos de estudo (cartões, aprender, combinar)
+create table if not exists study_flashcard_folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table study_flashcard_folders enable row level security;
+
+create table if not exists study_flashcard_lists (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  description text,
+  folder_id uuid references study_flashcard_folders(id) on delete set null,
+  cards jsonb not null default '[]'::jsonb,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table study_flashcard_lists enable row level security;
 
 insert into storage.buckets (id, name, public)
 values ('study_pdfs', 'study_pdfs', false)
@@ -261,7 +287,7 @@ create policy "update_own_study_pdf_files" on storage.objects for update
 create policy "delete_own_study_pdf_files" on storage.objects for delete
   using (bucket_id = 'study_pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
 
-do $$ declare t text; begin foreach t in array array['study_pdfs','study_flashcards','study_pdf_groups'] loop
+do $$ declare t text; begin foreach t in array array['study_pdfs','study_flashcards','study_pdf_groups','study_flashcard_folders','study_flashcard_lists'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);

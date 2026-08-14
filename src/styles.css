@@ -233,8 +233,8 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .aiErrorMsg{background:var(--bg-danger-soft);border:1px solid var(--border-danger);color:#ff9d9d;border-radius:9px;padding:10px;font-size:12px}
 .ghost:disabled{opacity:.6;cursor:default}
 .modalBack{position:fixed;inset:0;background:#000a;backdrop-filter:blur(5px);z-index:50;display:grid;place-items:center;padding:20px}
-.modal{width:min(450px,100%);background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:22px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
-.modalHead{display:flex;justify-content:space-between;align-items:center}
+.modal{width:min(450px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:22px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
+.modalHead{display:flex;justify-content:space-between;align-items:center;position:sticky;top:-22px;margin:-22px -22px 0;padding:22px 22px 12px;background:var(--bg-modal);z-index:1}
 .modal h2{margin:0;font-size:18px}
 .modal label{font-size:12px;color:var(--text-2);display:grid;gap:6px}
 .modal input,.modal select{background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);padding:11px;border-radius:9px;outline:none}
@@ -311,8 +311,12 @@ h1{font-size:23px}
 .bookMenuLabel{display:block;padding:6px 10px 2px;color:var(--text-3);font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
 
 .groupCover{display:flex;align-items:center;justify-content:center;color:var(--accent-2);background:var(--bg-surface-2)}
-.groupBreadcrumb{display:flex;align-items:center;gap:8px;margin-bottom:14px;color:var(--text-2);font-size:12.5px}
+.groupBreadcrumb{display:flex;align-items:center;gap:8px;margin-bottom:14px;color:var(--text-2);font-size:12.5px;border-radius:10px;padding:4px 6px;transition:background .12s ease,box-shadow .12s ease}
 .groupBreadcrumb b{color:var(--text-1)}
+.groupTile{transition:transform .12s ease}
+.groupTile.dropTarget{transform:translateY(-2px)}
+.groupTile.dropTarget .groupCover{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset;background:color-mix(in srgb, var(--accent) 14%, var(--bg-surface-2))}
+.groupBreadcrumb.dropTarget{background:color-mix(in srgb, var(--accent) 14%, transparent);box-shadow:0 0 0 1.5px var(--accent) inset}
 .bookTitle{font-size:12.5px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.5em}
 .bookProgressLabel{color:var(--text-2);font-size:11px}
 
@@ -387,6 +391,113 @@ h1{font-size:23px}
 .flashcardFront{color:var(--text-1);font-weight:700}
 .flashcardBack{transform:rotateY(180deg);background:var(--bg-surface-2);color:var(--text-1)}
 .flashcardSource{display:block;margin-top:6px;color:var(--text-2);font-size:10.5px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ===== Flashcards: pastas, listas e modos de estudo ===== */
+.flashHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+.flashHeadInfo{display:flex;gap:14px;align-items:flex-start}
+.flashHeadIcon{width:48px;height:48px;border-radius:14px;background:var(--accent-soft-bg);color:var(--accent);display:grid;place-items:center;flex-shrink:0}
+.flashHeadInfo small{color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.04em}
+.flashHeadInfo h2{margin:2px 0 4px;font-size:22px}
+.flashHeadInfo p{margin:0;color:var(--text-2);font-size:13px;max-width:480px}
+.flashHeadActions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.flashHeadActions .ghost{display:flex;align-items:center;gap:6px}
+
+.flashEmpty{border:1px solid var(--border);background:var(--bg-surface);border-radius:16px;padding:60px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}
+.flashEmptyIcon{width:64px;height:64px;border-radius:16px;background:var(--accent-soft-bg);color:var(--accent);display:grid;place-items:center;margin-bottom:10px}
+.flashEmpty h3{margin:0;font-size:17px}
+.flashEmpty p{margin:6px 0 16px;color:var(--text-2);font-size:13px;max-width:420px}
+
+.flashSection{margin-top:26px}
+.flashSection h3{font-size:14px;margin:0 0 12px;color:var(--text-1)}
+
+.flashFolderGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.flashFolderTile{position:relative;display:flex;align-items:center;gap:12px;border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:14px;cursor:pointer}
+.flashFolderTile:hover{background:var(--bg-hover-2)}
+.flashFolderIcon{width:38px;height:38px;border-radius:10px;background:var(--accent-soft-bg);color:var(--accent);display:grid;place-items:center;flex-shrink:0}
+.flashFolderTile b{display:block;font-size:13.5px}
+.flashFolderTile small{color:var(--text-2);font-size:11.5px}
+
+.flashTileMenuBtn{margin-left:auto;color:var(--text-2);flex-shrink:0}
+.flashMenuPop{position:absolute;top:44px;right:10px;background:var(--bg-surface-2);border:1px solid var(--border);border-radius:10px;padding:6px;display:grid;gap:2px;min-width:180px;z-index:5;box-shadow:0 12px 30px #000a}
+.flashMenuPop button,.flashMenuPop select{padding:9px 10px;border-radius:7px;font-size:12.5px;text-align:left;color:var(--text-1);display:flex;align-items:center;gap:6px;width:100%;background:none;border:0}
+.flashMenuPop button:hover{background:var(--bg-hover-2)}
+.flashMenuPop button.danger{color:#ff9d9d}
+.flashMenuPop select{background:var(--bg-surface-3);border:1px solid var(--border)}
+
+.flashListGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.flashListTile{position:relative;border:1px solid var(--border);background:var(--bg-surface);border-radius:16px;padding:18px}
+.flashListBadge{display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft-bg);color:var(--accent);font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px}
+.flashListTile h4{margin:12px 0 4px;font-size:15px}
+.flashListTile p{margin:0;color:var(--text-2);font-size:12.5px;min-height:18px}
+.flashListTileFoot{display:flex;gap:8px;align-items:center;margin-top:16px}
+.flashStudyBtn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--accent);color:var(--accent-text-on);border-radius:10px;padding:10px;font-weight:700;font-size:13px}
+
+.flashFormHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.flashFormHead h2{margin:0;font-size:20px}
+.flashListMeta{color:var(--text-2);font-size:12.5px}
+.flashFormPanel{border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:18px;margin-bottom:16px;display:grid;gap:14px}
+.flashFormLabel{font-size:11px;color:var(--text-2);letter-spacing:.04em}
+.flashFormTitleInput{background:none;border:0;border-bottom:1px solid var(--border);color:var(--text-1);font-size:17px;font-weight:700;padding:6px 0;outline:none}
+.flashFormDescInput{background:none;border:0;border-bottom:1px solid var(--border-soft);color:var(--text-1);font-size:13px;padding:6px 0;outline:none}
+.flashFormRow{border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:14px 16px;margin-bottom:12px}
+.flashFormRowHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.flashFormRowHead span{color:var(--text-2);font-size:12px;font-weight:700}
+.flashFormRowHead button{width:26px;height:26px;border-radius:8px;background:var(--bg-danger-soft);color:#ff9d9d;display:grid;place-items:center}
+.flashFormRowFields{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.flashFormRowFields input{width:100%;background:none;border:0;border-bottom:1px solid var(--border);color:var(--text-1);font-size:13.5px;padding:6px 0;outline:none;margin-bottom:6px}
+.flashFormRowFields label{font-size:10px;color:var(--text-3);letter-spacing:.04em}
+.flashAddRowBtn{width:100%;border:1.5px dashed var(--accent);color:var(--accent);border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700;font-size:13px}
+@media (max-width:640px){.flashFormRowFields{grid-template-columns:1fr}}
+
+.modalActions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+
+.flashTabs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}
+.flashTab{display:flex;align-items:center;gap:10px;border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:14px;cursor:pointer}
+.flashTab.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.flashTab b{display:block;font-size:13.5px}
+.flashTab small{color:var(--text-2);font-size:11.5px}
+.flashTabIcon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex-shrink:0}
+.flashTabIconOrange{background:var(--accent-soft-bg);color:var(--accent)}
+.flashTabIconPurple{background:#a06bff22;color:#a06bff}
+.flashTabIconGreen{background:#3ecf6a22;color:#3ecf6a}
+@media (max-width:720px){.flashTabs{grid-template-columns:1fr}}
+
+.flashStudyArea{display:flex;flex-direction:column;align-items:center;gap:18px}
+.flashFlipCard{width:100%;max-width:640px;cursor:pointer}
+.flashFlipInner{position:relative;height:280px;transition:transform .4s;transform-style:preserve-3d}
+.flashFlipInner.flipped{transform:rotateY(180deg)}
+.flashFlipFace{position:absolute;inset:0;backface-visibility:hidden;border:1px solid var(--border);background:var(--bg-surface-2);border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
+.flashFlipFace small{color:var(--accent);font-weight:700;letter-spacing:.05em;font-size:11px;position:absolute;top:16px;left:20px}
+.flashFlipFace span{font-size:20px;font-weight:700;color:var(--text-1)}
+.flashFlipBack{transform:rotateY(180deg)}
+.flashFlipHint{text-align:center;color:var(--text-3);font-size:12px;margin-top:10px}
+.flashFlipActions{display:flex;gap:12px;width:100%;max-width:640px}
+.flashFlipNo,.flashFlipYes{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border-radius:12px;padding:13px;font-weight:700;font-size:13px;border:1px solid var(--border);background:var(--bg-surface)}
+.flashFlipNo{color:#ff9d43}
+.flashFlipYes{color:#3ecf6a}
+.flashPager{display:flex;align-items:center;gap:16px;color:var(--text-2);font-size:13px}
+.flashPager button{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);display:grid;place-items:center;color:var(--text-1)}
+.flashPager button:disabled{opacity:.35}
+
+.flashLearnQuestion{text-align:center}
+.flashLearnQuestion small{color:var(--accent);font-weight:700;letter-spacing:.05em;font-size:11px}
+.flashLearnQuestion h3{margin:8px 0 0;font-size:22px}
+.flashLearnOptions{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:640px}
+.flashLearnOpt{border:1px solid var(--border);background:var(--bg-surface);border-radius:12px;padding:16px;text-align:left;font-size:13.5px;color:var(--text-1)}
+.flashLearnOpt.correct{border-color:#3ecf6a;background:#3ecf6a1a;color:#3ecf6a}
+.flashLearnOpt.wrong{border-color:#ff5c5c;background:#ff5c5c1a;color:#ff8a8a}
+.flashLearnNext{display:flex;align-items:center;gap:6px}
+.flashLearnDone{display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;color:var(--accent);padding:40px 20px}
+.flashLearnDone h3{color:var(--text-1);margin:6px 0 0}
+.flashLearnDone p{color:var(--text-2);margin:0 0 10px;font-size:13px}
+@media (max-width:640px){.flashLearnOptions{grid-template-columns:1fr}}
+
+.flashMatchGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:100%}
+.flashMatchTile{border:1px solid var(--border);background:var(--bg-surface);border-radius:12px;padding:14px 10px;font-size:12.5px;color:var(--text-1);min-height:70px;display:flex;align-items:center;justify-content:center;text-align:center}
+.flashMatchTile.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.flashMatchTile.wrong{border-color:#ff5c5c;background:#ff5c5c1a}
+.flashMatchTile.matched{opacity:0;pointer-events:none}
+@media (max-width:720px){.flashMatchGrid{grid-template-columns:repeat(2,1fr)}}
 
 .pdfSearchForm{display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid var(--border-soft)}
 .pdfSearchForm input{flex:1;height:34px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);font-size:12.5px}

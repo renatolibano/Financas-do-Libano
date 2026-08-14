@@ -8,7 +8,8 @@ import {
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, Swords, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
-  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus
+  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
+  ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -345,6 +346,8 @@ function App({session,theme,setTheme}){
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
   const studyFlashcards = useEntity("study_flashcards", [], session);
+  const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {orderable:true});
+  const studyFlashcardFolders = useEntity("study_flashcard_folders", [], session, "asc", {orderable:true});
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
@@ -563,7 +566,7 @@ function App({session,theme,setTheme}){
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data}/>}
-      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards}/>}
+      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders}/>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
@@ -865,6 +868,32 @@ function Birthdays({entity}){
   </div>
 }
 
+// Lê uma foto escolhida pelo usuário e devolve um data URL já redimensionado/comprimido
+// (evita salvar fotos gigantes no localStorage ou no banco).
+function resizeImageToDataUrl(file, maxWidth, maxHeight, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Arquivo não é uma imagem válida"));
+      img.onload = () => {
+        let { width, height } = img;
+        const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 const coverCache = new Map();
 
 function BookCoverThumb({ book }) {
@@ -916,7 +945,7 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
       <b className="bookTitle">{book.title}</b>
-      <div className="progress"><i style={{width:progress+"%"}}/></div>
+      {book.total_pages !== 1 && <div className="progress"><i style={{width:progress+"%"}}/></div>}
       <small className="bookProgressLabel">
         {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
       </small>
@@ -1423,7 +1452,7 @@ function StudyPdfTile({ pdfDoc, groups, menuOpen, onToggleMenu, onOpen, onDelete
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
       <b className="bookTitle">{pdfDoc.title}</b>
-      <div className="progress"><i style={{width:progress+"%"}}/></div>
+      {pdfDoc.total_pages !== 1 && <div className="progress"><i style={{width:progress+"%"}}/></div>}
       <small className="bookProgressLabel">
         {progress}%{favCount>0 && <> · <Star size={10}/> {favCount}</>}{impCount>0 && <> · <Flag size={10}/> {impCount}</>}
       </small>
@@ -1431,12 +1460,37 @@ function StudyPdfTile({ pdfDoc, groups, menuOpen, onToggleMenu, onOpen, onDelete
   );
 }
 
-function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete }) {
+function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover, dropActive, onDragEnterZone, onDragLeaveZone, onDropZone }) {
+  const coverInputRef = useRef(null);
   return (
-    <div className="bookTile groupTile" onClick={onOpen}>
-      <div className="bookCoverWrap groupCover"><Folder size={34}/></div>
+    <div
+      className={"bookTile groupTile"+(dropActive?" dropTarget":"")}
+      onClick={onOpen}
+      onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
+      onDragEnter={(e)=>{ e.preventDefault(); onDragEnterZone?.(); }}
+      onDragLeave={onDragLeaveZone}
+      onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); onDropZone?.(); }}
+    >
+      <div className="bookCoverWrap groupCover">
+        {group.cover_image
+          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
+          : <Folder size={34}/>}
+      </div>
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/*"
+        style={{display:"none"}}
+        onChange={(e)=>{
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) onSetCover(file);
+        }}
+      />
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        <button onClick={()=>coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
+        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
         <button onClick={onRename}><Pencil size={13}/> Renomear</button>
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir pasta</button>
       </div>}
@@ -1939,6 +1993,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const [readingPdf, setReadingPdf] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
+  const [dragOverGroupId, setDragOverGroupId] = useState(null);
   const fileInputRef = useRef(null);
   const progressTimer = useRef(null);
 
@@ -1999,6 +2054,14 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
     update(pdfDoc.id, { group_id: groupId });
   };
 
+  const handleDropOnGroup = (groupId) => {
+    setDragOverGroupId(null);
+    if (dragId === null) return;
+    const draggedId = dragId;
+    setDragId(null);
+    update(draggedId, { group_id: groupId });
+  };
+
   const handleDrop = (targetId) => {
     if (dragId === null || dragId === targetId) { setDragId(null); return; }
     const newList = [...data];
@@ -2036,10 +2099,32 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
     if (currentGroupId === group.id) setCurrentGroupId(null);
   };
 
+  const handleSetGroupCover = async (group, file) => {
+    setOpenMenuId(null);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
+      await groupsEntity.update(group.id, { cover_image: dataUrl });
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    }
+  };
+
+  const handleRemoveGroupCover = async (group) => {
+    setOpenMenuId(null);
+    await groupsEntity.update(group.id, { cover_image: null });
+  };
+
   return (
     <div className="content">
       {currentGroup && (
-        <div className="groupBreadcrumb">
+        <div
+          className={"groupBreadcrumb"+(dragOverGroupId==="__root__"?" dropTarget":"")}
+          onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
+          onDragEnter={(e)=>{ e.preventDefault(); setDragOverGroupId("__root__"); }}
+          onDragLeave={()=>setDragOverGroupId(id=>id==="__root__"?null:id)}
+          onDrop={(e)=>{ e.preventDefault(); handleDropOnGroup(null); }}
+        >
           <button className="ghost" onClick={()=>setCurrentGroupId(null)}>‹ Pastas</button>
           <Folder size={14}/> <b>{currentGroup.name}</b>
         </div>
@@ -2064,6 +2149,12 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
             onOpen={()=>setCurrentGroupId(group.id)}
             onRename={()=>handleRenameGroup(group)}
             onDelete={()=>handleDeleteGroup(group)}
+            onSetCover={(file)=>handleSetGroupCover(group, file)}
+            onRemoveCover={()=>handleRemoveGroupCover(group)}
+            dropActive={dragOverGroupId===group.id}
+            onDragEnterZone={()=>setDragOverGroupId(group.id)}
+            onDragLeaveZone={()=>setDragOverGroupId(id=>id===group.id?null:id)}
+            onDropZone={()=>handleDropOnGroup(group.id)}
           />
         ))}
         {visiblePdfs.map(pdfDoc => (
@@ -2119,14 +2210,421 @@ function FlashcardTile({ card, onDelete }) {
   );
 }
 
-function StudyFlashcards({ entity }) {
-  const { data, remove } = entity;
+const rid = () => Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+const shuffleArr = (arr) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
+
+function StudyFlashcards({ entity, listsEntity, foldersEntity }) {
+  const { data: pdfCards, remove: removePdfCard } = entity;
+  const { data: lists, add: addList, remove: removeList, update: updateList } = listsEntity;
+  const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
+
+  const [openFolderId, setOpenFolderId] = useState(null);
+  const [folderModal, setFolderModal] = useState(null); // null | "new" | folder being renamed
+  const [listForm, setListForm] = useState(null); // null | "new" | list being edited
+  const [viewingListId, setViewingListId] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null); // "list:<id>" | "folder:<id>"
+
+  const viewingList = viewingListId ? lists.find(l => l.id === viewingListId) : null;
+  const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
+  const visibleLists = lists.filter(l => (l.folder_id || null) === openFolderId);
+
+  const confirmDeleteList = (id) => { setOpenMenuId(null); if (confirm("Excluir esta lista de cartões?")) removeList(id); };
+  const confirmDeleteFolder = (id) => {
+    setOpenMenuId(null);
+    if (confirm("Excluir esta pasta? As listas dentro dela não serão apagadas.")) {
+      lists.filter(l => l.folder_id === id).forEach(l => updateList(l.id, { folder_id: null }));
+      removeFolder(id);
+    }
+  };
+
+  if (viewingList) {
+    return <FlashcardListStudy
+      list={viewingList}
+      onBack={() => setViewingListId(null)}
+      onEdit={() => { setListForm(viewingList); setViewingListId(null); }}
+    />;
+  }
+
+  if (listForm !== null) {
+    return <FlashcardListForm
+      list={listForm === "new" ? null : listForm}
+      defaultFolderId={openFolderId}
+      onCancel={() => setListForm(null)}
+      onSave={(payload) => {
+        if (listForm === "new") addList(payload); else updateList(listForm.id, payload);
+        setListForm(null);
+      }}
+    />;
+  }
+
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><Layers size={22}/></div>
+          <div>
+            <small>{currentFolder ? currentFolder.name.toUpperCase() : "FERRAMENTAS"}</small>
+            <h2>{currentFolder ? currentFolder.name : "Flashcards"}</h2>
+            <p>{currentFolder ? `${visibleLists.length} lista(s) nesta pasta.` : "Crie listas de cartões, organize em pastas e estude do seu jeito."}</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          {currentFolder
+            ? <button className="ghost" onClick={() => setOpenFolderId(null)}><ChevronLeft size={16}/> Voltar</button>
+            : <button className="ghost" onClick={(e) => { e.stopPropagation(); setFolderModal("new"); }}><FolderPlus size={16}/> Criar pasta</button>}
+          <button className="add" onClick={(e) => { e.stopPropagation(); setListForm("new"); }}><Plus size={16}/> Criar lista</button>
+        </div>
+      </div>
+
+      {!currentFolder && folders.length === 0 && visibleLists.length === 0 && pdfCards.length === 0 ? (
+        <div className="flashEmpty">
+          <div className="flashEmptyIcon"><Sparkles size={30}/></div>
+          <h3>Nenhuma lista ainda</h3>
+          <p>Monte sua primeira lista de cartões com termos e definições. Depois é só estudar do jeito que combina com você.</p>
+          <button className="add" onClick={(e) => { e.stopPropagation(); setListForm("new"); }}><Plus size={16}/> Criar minha primeira lista</button>
+        </div>
+      ) : (
+        <>
+          {!currentFolder && folders.length > 0 && (
+            <div className="flashSection">
+              <h3>Pastas</h3>
+              <div className="flashFolderGrid">
+                {folders.map(f => {
+                  const count = lists.filter(l => l.folder_id === f.id).length;
+                  return (
+                    <div key={f.id} className="flashFolderTile" onClick={() => setOpenFolderId(f.id)}>
+                      <div className="flashFolderIcon"><Folder size={18}/></div>
+                      <div><b>{f.name}</b><small>{count} lista{count===1?"":"s"}</small></div>
+                      <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id===`folder:${f.id}`?null:`folder:${f.id}`); }}><MoreVertical size={16}/></button>
+                      {openMenuId===`folder:${f.id}` && (
+                        <div className="flashMenuPop" onClick={e=>e.stopPropagation()}>
+                          <button onClick={()=>{ setOpenMenuId(null); setFolderModal(f); }}><Pencil size={13}/> Renomear</button>
+                          <button className="danger" onClick={()=>confirmDeleteFolder(f.id)}><Trash2 size={13}/> Excluir</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flashSection">
+            <h3>{currentFolder ? "Listas" : "Minhas listas"}</h3>
+            {visibleLists.length === 0 ? (
+              <p className="emptyHint">Nenhuma lista {currentFolder ? "nesta pasta" : "por aqui"} ainda.</p>
+            ) : (
+              <div className="flashListGrid">
+                {visibleLists.map(l => (
+                  <div key={l.id} className="flashListTile">
+                    <span className="flashListBadge"><Layers size={12}/> {l.cards.length} termo{l.cards.length===1?"":"s"}</span>
+                    <h4>{l.title || "Lista sem título"}</h4>
+                    <p>{l.description || "Sem descrição"}</p>
+                    <div className="flashListTileFoot">
+                      <button className="flashStudyBtn" onClick={() => setViewingListId(l.id)}><Zap size={14}/> Estudar</button>
+                      <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id===`list:${l.id}`?null:`list:${l.id}`); }}><MoreVertical size={16}/></button>
+                    </div>
+                    {openMenuId===`list:${l.id}` && (
+                      <div className="flashMenuPop" onClick={e=>e.stopPropagation()}>
+                        <button onClick={()=>{ setOpenMenuId(null); setListForm(l); }}><Pencil size={13}/> Editar</button>
+                        {folders.length>0 && (
+                          <select defaultValue="__placeholder__" onClick={e=>e.stopPropagation()} onChange={(e)=>{ const v=e.target.value; updateList(l.id, {folder_id: v==="__none__" ? null : v}); setOpenMenuId(null); }}>
+                            <option value="__placeholder__" disabled>Mover para pasta...</option>
+                            <option value="__none__">Sem pasta</option>
+                            {folders.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+                          </select>
+                        )}
+                        <button className="danger" onClick={()=>confirmDeleteList(l.id)}><Trash2 size={13}/> Excluir</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!currentFolder && pdfCards.length > 0 && (
+            <div className="flashSection">
+              <h3>Cartões extraídos de PDFs</h3>
+              <div className="flashcardGrid">
+                {pdfCards.map(card => <FlashcardTile key={card.id} card={card} onDelete={() => removePdfCard(card.id)}/>)}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {folderModal && (
+        <FolderModal
+          folder={folderModal === "new" ? null : folderModal}
+          onClose={() => setFolderModal(null)}
+          onSave={(name) => {
+            if (folderModal === "new") addFolder({ name }); else updateFolder(folderModal.id, { name });
+            setFolderModal(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function FolderModal({ folder, onClose, onSave }) {
+  const [name, setName] = useState(folder?.name || "");
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{folder ? "Renomear pasta" : "Nova pasta"}</h2><button type="button" onClick={onClose}><X/></button></div>
+        <label>Nome da pasta<input autoFocus value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Português" onKeyDown={e=>{ if(e.key==="Enter" && name.trim()) onSave(name.trim()); }}/></label>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!name.trim()} onClick={()=>onSave(name.trim())}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
+  const [title, setTitle] = useState(list?.title || "");
+  const [description, setDescription] = useState(list?.description || "");
+  const [rows, setRows] = useState(
+    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "" }))
+      : [{ id: rid(), term: "", definition: "" }, { id: rid(), term: "", definition: "" }]
+  );
+
+  const setRow = (id, field, value) => setRows(rs => rs.map(r => r.id===id ? {...r, [field]: value} : r));
+  const removeRow = (id) => setRows(rs => rs.filter(r => r.id !== id));
+  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "" }]);
+
+  const submit = () => {
+    const cards = rows.filter(r => r.term.trim() || r.definition.trim()).map(r => ({ id: r.id, term: r.term.trim(), definition: r.definition.trim() }));
+    if (cards.length === 0) { alert("Adicione pelo menos um cartão com termo ou definição."); return; }
+    onSave({
+      title: title.trim() || "Lista sem título",
+      description: description.trim(),
+      folder_id: list ? (list.folder_id ?? null) : (defaultFolderId ?? null),
+      cards
+    });
+  };
+
   return (
     <div className="content">
-      {data.length===0 && <p className="emptyHint">Nenhum flashcard ainda. Crie um selecionando um trecho de texto no Leitor de PDF.</p>}
-      <div className="flashcardGrid">
-        {data.map(card => <FlashcardTile key={card.id} card={card} onDelete={()=>remove(card.id)}/>)}
+      <div className="flashFormHead">
+        <h2>{list ? "Editar lista de cartões" : "Criar lista de cartões"}</h2>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onCancel}>Cancelar</button>
+          <button className="add" onClick={submit}><Check size={16}/> {list ? "Salvar" : "Criar"}</button>
+        </div>
       </div>
+
+      <div className="flashFormPanel">
+        <label className="flashFormLabel">Título</label>
+        <input className="flashFormTitleInput" value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ex.: Conjunções — Português"/>
+        <input className="flashFormDescInput" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Adicione uma descrição (opcional)"/>
+      </div>
+
+      {rows.map((r, i) => (
+        <div className="flashFormRow" key={r.id}>
+          <div className="flashFormRowHead"><span>{i+1}</span><button onClick={()=>removeRow(r.id)}><Trash2 size={14}/></button></div>
+          <div className="flashFormRowFields">
+            <div>
+              <input value={r.term} onChange={e=>setRow(r.id,"term",e.target.value)} placeholder="Digite o termo"/>
+              <label>TERMO</label>
+            </div>
+            <div>
+              <input value={r.definition} onChange={e=>setRow(r.id,"definition",e.target.value)} placeholder="Digite a definição"/>
+              <label>DEFINIÇÃO</label>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <button className="flashAddRowBtn" onClick={addRow}><Plus size={15}/> Adicionar cartão</button>
+    </div>
+  );
+}
+
+function FlashcardListStudy({ list, onBack, onEdit }) {
+  const [tab, setTab] = useState("cards");
+  const cards = list.cards || [];
+
+  return (
+    <div className="content">
+      <div className="flashFormHead">
+        <div><h2>{list.title || "Lista sem título"}</h2><small className="flashListMeta">{cards.length} cartão{cards.length===1?"":"s"}</small></div>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onEdit}><Pencil size={15}/> Editar</button>
+          <button className="ghost" onClick={onBack}><ChevronLeft size={16}/> Voltar</button>
+        </div>
+      </div>
+
+      <div className="flashTabs">
+        <div className={"flashTab"+(tab==="cards"?" active":"")} onClick={()=>setTab("cards")}>
+          <div className="flashTabIcon flashTabIconOrange"><Zap size={18}/></div>
+          <div><b>Cartões</b><small>Vire e revise</small></div>
+        </div>
+        <div className={"flashTab"+(tab==="learn"?" active":"")} onClick={()=>setTab("learn")}>
+          <div className="flashTabIcon flashTabIconPurple"><Lightbulb size={18}/></div>
+          <div><b>Aprender</b><small>Quiz de múltipla escolha</small></div>
+        </div>
+        <div className={"flashTab"+(tab==="match"?" active":"")} onClick={()=>setTab("match")}>
+          <div className="flashTabIcon flashTabIconGreen"><LayoutGrid size={18}/></div>
+          <div><b>Combinar</b><small>Jogo de pares</small></div>
+        </div>
+      </div>
+
+      {cards.length === 0 ? (
+        <p className="emptyHint">Esta lista ainda não tem cartões. Clique em "Editar" para adicionar.</p>
+      ) : tab === "cards" ? <FlashcardFlipMode cards={cards}/>
+        : tab === "learn" ? <FlashcardLearnMode cards={cards}/>
+        : <FlashcardMatchMode cards={cards}/>}
+    </div>
+  );
+}
+
+function FlashcardFlipMode({ cards }) {
+  const [index, setIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const card = cards[index];
+
+  const go = (dir) => { setFlipped(false); setIndex(i => Math.max(0, Math.min(cards.length-1, i+dir))); };
+  const next = () => { if (index < cards.length-1) go(1); };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.code==="Space") { e.preventDefault(); setFlipped(f=>!f); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  return (
+    <div className="flashStudyArea">
+      <div className="flashFlipCard" onClick={()=>setFlipped(f=>!f)}>
+        <div className={"flashFlipInner"+(flipped?" flipped":"")}>
+          <div className="flashFlipFace flashFlipFront"><small>TERMO</small><span>{card.term || "(sem termo)"}</span></div>
+          <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small><span>{card.definition || "(sem definição)"}</span></div>
+        </div>
+        <p className="flashFlipHint">Clique ou aperte espaço para virar</p>
+      </div>
+      <div className="flashFlipActions">
+        <button className="flashFlipNo" onClick={next}><X size={16}/> Ainda aprendendo</button>
+        <button className="flashFlipYes" onClick={next}><Check size={16}/> Já sei</button>
+      </div>
+      <div className="flashPager">
+        <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>
+        <span>{index+1} / {cards.length}</span>
+        <button disabled={index===cards.length-1} onClick={()=>go(1)}><ArrowRight size={16}/></button>
+      </div>
+    </div>
+  );
+}
+
+function FlashcardLearnMode({ cards }) {
+  const [order] = useState(() => shuffleArr(cards));
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState(null);
+  const [correctCount, setCorrectCount] = useState(0);
+
+  const finished = index >= order.length;
+  const card = finished ? null : order[index];
+
+  const options = useMemo(() => {
+    if (!card) return [];
+    const wrong = shuffleArr(cards.filter(c => c.id !== card.id)).slice(0, 3).map(c => c.definition);
+    return shuffleArr([card.definition, ...wrong]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card?.id]);
+
+  if (cards.length < 2) return <p className="emptyHint">Adicione pelo menos 2 cartões para usar o modo Aprender.</p>;
+
+  if (finished) {
+    return (
+      <div className="flashStudyArea">
+        <div className="flashLearnDone">
+          <CheckCircle2 size={36}/>
+          <h3>Você concluiu esta lista!</h3>
+          <p>{correctCount} de {order.length} respostas corretas.</p>
+          <button className="add" onClick={()=>{ setIndex(0); setSelected(null); setCorrectCount(0); }}><RotateCcw size={15}/> Estudar de novo</button>
+        </div>
+      </div>
+    );
+  }
+
+  const choose = (opt) => {
+    if (selected) return;
+    setSelected(opt);
+    if (opt === card.definition) setCorrectCount(c => c+1);
+  };
+  const next = () => { setSelected(null); setIndex(i => i+1); };
+
+  return (
+    <div className="flashStudyArea">
+      <div className="flashLearnQuestion"><small>TERMO</small><h3>{card.term}</h3></div>
+      <div className="flashLearnOptions">
+        {options.map((opt, i) => {
+          let cls = "flashLearnOpt";
+          if (selected) {
+            if (opt === card.definition) cls += " correct";
+            else if (opt === selected) cls += " wrong";
+          }
+          return <button key={i} className={cls} onClick={()=>choose(opt)}>{opt}</button>;
+        })}
+      </div>
+      {selected && <button className="add flashLearnNext" onClick={next}>Próxima <ArrowRight size={15}/></button>}
+      <div className="flashPager"><span>{index+1} / {order.length}</span></div>
+    </div>
+  );
+}
+
+function FlashcardMatchMode({ cards }) {
+  const pairCards = cards.slice(0, 8);
+  const makeTiles = () => shuffleArr(pairCards.flatMap(c => [
+    { key: c.id+"-t", pairId: c.id, text: c.term },
+    { key: c.id+"-d", pairId: c.id, text: c.definition }
+  ]));
+  const [tiles, setTiles] = useState(makeTiles);
+  const [selected, setSelected] = useState(null);
+  const [matched, setMatched] = useState([]);
+  const [wrongFlash, setWrongFlash] = useState([]);
+
+  const restart = () => { setTiles(makeTiles()); setSelected(null); setMatched([]); setWrongFlash([]); };
+
+  if (cards.length < 2) return <p className="emptyHint">Adicione pelo menos 2 cartões para usar o modo Combinar.</p>;
+
+  const onTap = (tile) => {
+    if (matched.includes(tile.pairId) || wrongFlash.length) return;
+    if (!selected) { setSelected(tile); return; }
+    if (selected.key === tile.key) { setSelected(null); return; }
+    if (selected.pairId === tile.pairId) {
+      setMatched(m => [...m, tile.pairId]);
+      setSelected(null);
+    } else {
+      setWrongFlash([selected.key, tile.key]);
+      setTimeout(() => { setWrongFlash([]); setSelected(null); }, 500);
+    }
+  };
+
+  const done = matched.length === pairCards.length;
+
+  return (
+    <div className="flashStudyArea">
+      {done ? (
+        <div className="flashLearnDone">
+          <CheckCircle2 size={36}/>
+          <h3>Você encontrou todos os pares!</h3>
+          <button className="add" onClick={restart}><RotateCcw size={15}/> Jogar de novo</button>
+        </div>
+      ) : (
+        <div className="flashMatchGrid">
+          {tiles.map(t => {
+            const isMatched = matched.includes(t.pairId);
+            let cls = "flashMatchTile";
+            if (isMatched) cls += " matched";
+            else if (selected?.key === t.key) cls += " selected";
+            else if (wrongFlash.includes(t.key)) cls += " wrong";
+            return <button key={t.key} className={cls} disabled={isMatched} onClick={()=>onTap(t)}>{t.text}</button>;
+          })}
+        </div>
+      )}
     </div>
   );
 }
