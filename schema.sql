@@ -302,3 +302,11 @@ do $$ declare t text; begin foreach t in array array['study_pdfs','study_flashca
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Atualização: Metas vinculadas a Flashcards ("Fazer os flashcards 'Lista 1' 'Lista 2'").
+-- Cada lista marca sozinha "completed=true" assim que é estudada até o fim (em qualquer modo),
+-- e a meta soma quantas das listas vinculadas (link_list_ids) já estão concluídas.
+alter table study_flashcard_lists add column if not exists completed boolean not null default false;
+alter table study_goals add column if not exists link_list_ids uuid[];
+alter table study_goals drop constraint if exists study_goals_link_source_check;
+alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards'));

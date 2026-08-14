@@ -270,6 +270,42 @@ function syncLinkedGoalsProgress(studyGoalsEntity, source, pdfId, pdfTitle, curr
   });
 }
 
+// Mesmo princípio da função acima, mas para Metas (modo "Quantidade") vinculadas a Flashcards.
+// Como uma meta de flashcards pode reunir várias listas ("Card 1", "Card 2"...), o progresso é
+// recalculado toda vez contando quantas das listas vinculadas já foram estudadas até o fim
+// (campo "completed" de cada lista), e a meta conclui sozinha quando todas estiverem marcadas.
+function syncLinkedFlashcardGoalsProgress(studyGoalsEntity, listsData, listId, listTitle) {
+  if (!studyGoalsEntity) return;
+  const { data, update } = studyGoalsEntity;
+  data.forEach(g => {
+    if (g.mode !== "count" || g.link_source !== "flashcards") return;
+    if (g.status !== "andamento") return;
+    const linkedIds = Array.isArray(g.link_list_ids) ? g.link_list_ids : [];
+    if (!linkedIds.includes(listId)) return;
+    const target = Number(g.target_value) || linkedIds.length;
+    if (!target) return;
+    const done = linkedIds.filter(id => listsData.find(l => l.id === id)?.completed).length;
+    if (done === Number(g.current_value || 0)) return;
+    const patch = { current_value: done };
+    const justCompleted = done >= target;
+    if (justCompleted) patch.status = "concluida";
+    update(g.id, patch);
+    if (justCompleted) toast(`Meta concluída — todos os flashcards estudados 🎉`);
+    else toast(`Flashcards estudados — ${listTitle} · ${done}/${target} listas concluídas`);
+  });
+}
+
+// Marca uma lista de flashcards como estudada (assim que o usuário termina uma rodada completa
+// em qualquer um dos modos: Cartões, Aprender ou Combinar) e sincroniza as Metas vinculadas a ela.
+function markFlashcardListStudied(listsEntity, studyGoalsEntity, listId, listTitle) {
+  if (!listsEntity) return;
+  const list = listsEntity.data.find(l => l.id === listId);
+  if (list?.completed) return; // já estava contabilizada, evita atualizações repetidas
+  listsEntity.update(listId, { completed: true });
+  const updatedLists = listsEntity.data.map(l => l.id === listId ? { ...l, completed: true } : l);
+  syncLinkedFlashcardGoalsProgress(studyGoalsEntity, updatedLists, listId, listTitle);
+}
+
 function notifIcon(kind, size=16){
   if(kind==="Aniversário") return <Cake size={size}/>;
   if(kind==="Dívida") return <CircleDollarSign size={size}/>;
@@ -575,8 +611,8 @@ function App({session,theme,setTheme}){
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
-      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data}/>}
-      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders}/>}
+      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data}/>}
+      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals}/>}
       {page==="Desafios" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Nivelamento" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
@@ -2791,7 +2827,7 @@ function FlashcardTile({ card, onDelete }) {
 const rid = () => Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 const shuffleArr = (arr) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
 
-function StudyFlashcards({ entity, listsEntity, foldersEntity }) {
+function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
   const { data: pdfCards, remove: removePdfCard } = entity;
   const { data: lists, add: addList, remove: removeList, update: updateList } = listsEntity;
   const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
@@ -2820,6 +2856,7 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity }) {
       list={viewingList}
       onBack={() => setViewingListId(null)}
       onEdit={() => { setListForm(viewingList); setViewingListId(null); }}
+      onFinish={(listId, listTitle) => markFlashcardListStudied(listsEntity, studyGoals, listId, listTitle)}
     />;
   }
 
@@ -3061,7 +3098,10 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
       title: title.trim() || "Lista sem título",
       description: description.trim(),
       folder_id: list ? (list.folder_id ?? null) : (defaultFolderId ?? null),
-      cards
+      cards,
+      // Editar os cartões desmarca a lista como "estudada", já que o conteúdo revisado mudou —
+      // isso também recoloca a meta vinculada (se houver) em andamento na próxima sincronização.
+      ...(list ? { completed: false } : {})
     });
   };
 
@@ -3194,9 +3234,10 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage 
   );
 }
 
-function FlashcardListStudy({ list, onBack, onEdit }) {
+function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
   const [tab, setTab] = useState("cards");
   const cards = list.cards || [];
+  const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
 
   return (
     <div className="content">
@@ -3225,14 +3266,14 @@ function FlashcardListStudy({ list, onBack, onEdit }) {
 
       {cards.length === 0 ? (
         <p className="emptyHint">Esta lista ainda não tem cartões. Clique em "Editar" para adicionar.</p>
-      ) : tab === "cards" ? <FlashcardFlipMode cards={cards}/>
-        : tab === "learn" ? <FlashcardLearnMode cards={cards}/>
-        : <FlashcardMatchMode cards={cards}/>}
+      ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished}/>
+        : tab === "learn" ? <FlashcardLearnMode cards={cards} onComplete={notifyFinished}/>
+        : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
     </div>
   );
 }
 
-function FlashcardFlipMode({ cards }) {
+function FlashcardFlipMode({ cards, onComplete }) {
   const [deck, setDeck] = useState(cards);
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -3250,7 +3291,11 @@ function FlashcardFlipMode({ cards }) {
       setFeedback(null);
       setResults(r => [...r, { id: card.id, know: type==="know" }]);
       if (index < deck.length-1) { setIndex(i => i+1); setFlipped(false); }
-      else setFinished(true);
+      else {
+        setFinished(true);
+        // Só conta como "lista estudada" quando o baralho revisado é o completo (não a rodada de refazer só os que faltam).
+        if (deck.length === cards.length) onComplete && onComplete();
+      }
     }, 700);
   };
 
@@ -3322,7 +3367,7 @@ function FlashcardFlipMode({ cards }) {
   );
 }
 
-function FlashcardLearnMode({ cards }) {
+function FlashcardLearnMode({ cards, onComplete }) {
   const [deck, setDeck] = useState(cards);
   const [order, setOrder] = useState(() => shuffleArr(cards));
   const [index, setIndex] = useState(0);
@@ -3332,6 +3377,12 @@ function FlashcardLearnMode({ cards }) {
 
   const finished = index >= order.length;
   const card = finished ? null : order[index];
+
+  // Só conta como "lista estudada" quando o quiz percorreu todos os cartões (não a rodada de refazer só os errados).
+  useEffect(() => {
+    if (finished && order.length === cards.length) onComplete && onComplete();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished]);
 
   const options = useMemo(() => {
     if (!card) return [];
@@ -3405,7 +3456,7 @@ function FlashcardLearnMode({ cards }) {
   );
 }
 
-function FlashcardMatchMode({ cards }) {
+function FlashcardMatchMode({ cards, onComplete }) {
   const pairCards = cards.slice(0, 8);
   const makeTiles = () => shuffleArr(pairCards.flatMap(c => [
     { key: c.id+"-t", pairId: c.id, text: c.term, image: c.image || null },
@@ -3417,6 +3468,12 @@ function FlashcardMatchMode({ cards }) {
   const [wrongFlash, setWrongFlash] = useState([]);
 
   const restart = () => { setTiles(makeTiles()); setSelected(null); setMatched([]); setWrongFlash([]); };
+
+  // O jogo só usa os 8 primeiros pares, então só conta como "lista estudada" quando ela cabe inteira no jogo.
+  useEffect(() => {
+    if (matched.length > 0 && matched.length === pairCards.length && pairCards.length === cards.length) onComplete && onComplete();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matched.length]);
 
   if (cards.length < 2) return <p className="emptyHint">Adicione pelo menos 2 cartões para usar o modo Combinar.</p>;
 
@@ -3504,7 +3561,7 @@ function studyGoalBadge(g){
   return {label:"Em andamento", color: colorHex(g.color)};
 }
 
-function StudyGoals({entity, studyPdfsList=[], booksList=[]}){
+function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=[]}){
   const {data,add,remove,update} = entity;
   const [filter,setFilter] = useState("todas");
   const [openMenuId,setOpenMenuId] = useState(null);
@@ -3567,8 +3624,10 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[]}){
                 </span>
                 {g.link_source && g.link_source!=="none" && (
                   <span className="studyGoalFootInfo studyGoalFootLink">
-                    <FileText size={13}/> Vinculada ao {g.link_source==="livro"?"livro":"PDF de estudo"}
-                    {g.link_page_start ? ` · pág. ${g.link_page_start}–${g.link_page_end}` : ""} (atualiza sozinha)
+                    {g.link_source==="flashcards"
+                      ? <><Layers size={13}/> Vinculada aos flashcards · {(g.link_list_ids||[]).length} lista(s) (atualiza sozinha)</>
+                      : <><FileText size={13}/> Vinculada ao {g.link_source==="livro"?"livro":"PDF de estudo"}
+                          {g.link_page_start ? ` · pág. ${g.link_page_start}–${g.link_page_end}` : ""} (atualiza sozinha)</>}
                   </span>
                 )}
               </div>
@@ -3587,14 +3646,14 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[]}){
       {filtered.length===0 && <p className="emptyHint">{data.length===0 ? "Crie sua primeira meta de estudo." : "Nenhuma meta nesse filtro."}</p>}
     </div>
 
-    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} onClose={()=>setModal(null)} onSave={(payload)=>{
+    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} flashcardListsList={flashcardListsList} onClose={()=>setModal(null)} onSave={(payload)=>{
       if(modal==="new") add(payload); else update(modal.id, payload);
       setModal(null);
     }}/>}
   </div>;
 }
 
-function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave}){
+function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsList=[], onClose, onSave}){
   const [title,setTitle] = useState(goal?.title||"");
   const [description,setDescription] = useState(goal?.description||"");
   const [icon,setIcon] = useState(goal?.icon||"target");
@@ -3610,15 +3669,29 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave})
   const [linkPdfId,setLinkPdfId] = useState(goal?.link_pdf_id || "");
   const [linkPageStart,setLinkPageStart] = useState(goal?.link_page_start ?? "");
   const [linkPageEnd,setLinkPageEnd] = useState(goal?.link_page_end ?? "");
+  const [linkListIds,setLinkListIds] = useState(goal?.link_list_ids || []);
 
   const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
   const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
+
+  // Ao marcar/desmarcar uma lista de flashcards, o título da meta é preenchido sozinho no formato
+  // Fazer os flashcards "Lista 1" "Lista 2" — o usuário ainda pode reescrever o título depois se quiser.
+  const toggleLinkList = (id) => {
+    setLinkListIds(ids => {
+      const next = ids.includes(id) ? ids.filter(x=>x!==id) : [...ids, id];
+      const names = flashcardListsList.filter(l=>next.includes(l.id)).map(l=>`"${l.title||"Lista sem título"}"`).join(" ");
+      setTitle(next.length ? `Fazer os flashcards ${names}` : "");
+      return next;
+    });
+  };
 
   const submit = (e) => {
     e.preventDefault();
     if(!title.trim()) return;
 
-    const isLinked = mode==="count" && linkSource!=="none" && linkPdfId && linkPageStart && linkPageEnd;
+    const isLinked = mode==="count" && linkSource!=="none" && (
+      linkSource==="flashcards" ? linkListIds.length>0 : (linkPdfId && linkPageStart && linkPageEnd)
+    );
 
     const payload = {
       title: title.trim(),
@@ -3630,9 +3703,19 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave})
       link_pdf_id: null,
       link_page_start: null,
       link_page_end: null,
+      link_list_ids: null,
     };
 
-    if (isLinked) {
+    if (isLinked && linkSource==="flashcards") {
+      const target = linkListIds.length;
+      const done = linkListIds.filter(id => flashcardListsList.find(l=>l.id===id)?.completed).length;
+      payload.current_value = done;
+      payload.target_value = target;
+      payload.unit = "listas";
+      payload.link_source = "flashcards";
+      payload.link_list_ids = linkListIds;
+      if (target>0 && done>=target) payload.status = "concluida";
+    } else if (isLinked) {
       const start = Number(linkPageStart), end = Number(linkPageEnd);
       const target = Math.max(0, end - start + 1);
       const current = Math.max(0, Math.min(target, (linkedDoc?.current_page||1) - start + 1));
@@ -3684,11 +3767,12 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave})
       {mode==="percent" && <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>}
 
       {mode==="count" && <>
-        <label>Vincular a um PDF (opcional)
+        <label>Vincular a (opcional)
           <div className="modeToggle">
             <button type="button" className={linkSource==="none"?"active":""} onClick={()=>{setLinkSource("none"); setLinkPdfId("");}}>Nenhum</button>
             <button type="button" className={linkSource==="estudo"?"active":""} onClick={()=>{setLinkSource("estudo"); setLinkPdfId("");}}>PDF de estudo</button>
             <button type="button" className={linkSource==="livro"?"active":""} onClick={()=>{setLinkSource("livro"); setLinkPdfId("");}}>Livro (PDF)</button>
+            <button type="button" className={linkSource==="flashcards"?"active":""} onClick={()=>setLinkSource("flashcards")}>Flashcards</button>
           </div>
         </label>
 
@@ -3700,7 +3784,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave})
           <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: livros, questões"/></label>
         </>}
 
-        {linkSource!=="none" && <>
+        {(linkSource==="estudo" || linkSource==="livro") && <>
           <label>{linkSource==="livro" ? "Livro" : "PDF de estudo"}
             <select value={linkPdfId} onChange={e=>setLinkPdfId(e.target.value)} required>
               <option value="">Selecione...</option>
@@ -3713,6 +3797,22 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], onClose, onSave})
             <label>Página final<input type="number" min="1" max={linkedDoc?.total_pages||undefined} value={linkPageEnd} onChange={e=>setLinkPageEnd(e.target.value)} placeholder="Ex.: 55" required/></label>
           </div>
           <p className="fieldHint">O progresso é atualizado sozinho conforme você avança a leitura desse PDF, e a meta conclui automaticamente ao chegar na página final.</p>
+        </>}
+
+        {linkSource==="flashcards" && <>
+          <label>Listas de flashcards
+            <div className="flashLinkList">
+              {flashcardListsList.length===0 && <p className="fieldHint">Nenhuma lista de flashcards criada ainda.</p>}
+              {flashcardListsList.map(l => (
+                <label key={l.id} className="flashLinkCheckRow">
+                  <input type="checkbox" checked={linkListIds.includes(l.id)} onChange={()=>toggleLinkList(l.id)}/>
+                  <span>{l.title || "Lista sem título"}</span>
+                  {l.completed && <CheckCircle2 size={13} className="flashLinkDoneIcon"/>}
+                </label>
+              ))}
+            </div>
+          </label>
+          <p className="fieldHint">O título é preenchido sozinho com o nome das listas marcadas. A meta conclui automaticamente assim que todas elas forem estudadas (em qualquer modo: Cartões, Aprender ou Combinar).</p>
         </>}
       </>}
 
