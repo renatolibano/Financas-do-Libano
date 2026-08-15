@@ -267,7 +267,7 @@ export function eraseAnnotationAtPoint(ann, x, y, radius) {
 // anotações "queimadas" nas páginas, renderizando cada página num canvas.
 // ---------------------------------------------------------------------------
 
-function drawAnnotationOnCanvas(ctx, ann) {
+export function drawAnnotationOnCanvas(ctx, ann) {
   ctx.save();
   if (ann.type === "stroke") {
     const uniform = ann.style === "marker" || ann.tool === "highlighter";

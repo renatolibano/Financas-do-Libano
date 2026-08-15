@@ -441,6 +441,16 @@ h1{font-size:23px}
 .pdfCreatorPageActions button:hover:not(:disabled){background:var(--bg-surface-1);color:var(--text-1)}
 .pdfCreatorPageActions button:disabled{opacity:.35}
 
+.whiteboardBody{position:relative;overflow:hidden;padding:0;display:block}
+.whiteboardWhite{background:#f4f4f5}
+.whiteboardBlack{background:#0b0b0c}
+.whiteboardSvg{width:100%;height:100%;display:block;transition:box-shadow .2s ease}
+.whiteboardSvg.flash{box-shadow:inset 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent)}
+.whiteboardPasteHint{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:2;margin:0;font-size:11.5px;color:var(--text-3);background:var(--bg-surface-3);padding:5px 12px;border-radius:20px;pointer-events:none;opacity:.85}
+.whiteboardTextInput{background:transparent;border:1px dashed currentColor;border-radius:4px;padding:2px 5px;font:inherit;width:100%;height:100%;resize:none;outline:none}
+.whiteboardTextLabel{white-space:pre-wrap;line-height:1.25;font-weight:600;cursor:default}
+.whiteboardNav{justify-content:space-between}
+
 .pdfToolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar)}
 .pdfToolbarGroup{display:flex;align-items:center;gap:4px}
 .pdfToolbarGroup>button{min-width:32px;height:32px;padding:0 9px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text-2);font-size:11.5px;font-weight:700;border:1px solid transparent}

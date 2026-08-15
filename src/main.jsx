@@ -14,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -28,7 +28,7 @@ import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
-  translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf,
+  translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
 } from "./lib/annotations";
 import Auth from "./Auth";
 
@@ -2845,6 +2845,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
   const [creatingPdf, setCreatingPdf] = useState(false);
+  const [whiteboardOpen, setWhiteboardOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [dragOverGroupId, setDragOverGroupId] = useState(null);
@@ -2991,6 +2992,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         <div className="bookTile addTile" onClick={()=>setCreatingPdf(true)}>
           <div className="bookCoverWrap addCover"><FilePlus2 size={26}/><span>Criar PDF</span></div>
         </div>
+        <div className="bookTile addTile" onClick={()=>setWhiteboardOpen(true)}>
+          <div className="bookCoverWrap addCover"><LayoutGrid size={26}/><span>Quadro infinito</span></div>
+        </div>
         {!currentGroup && (
           <div className="bookTile addTile" onClick={handleNewGroup}>
             <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Nova pasta</span></div>
@@ -3050,6 +3054,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onDrawingsChange={onDrawingsChange}
       />}
       {creatingPdf && <PdfCreator onClose={()=>setCreatingPdf(false)}/>}
+      {whiteboardOpen && <Whiteboard onClose={()=>setWhiteboardOpen(false)}/>}
     </div>
   );
 }
@@ -3196,6 +3201,623 @@ function PdfCreator({ onClose }) {
               ))}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Quadro infinito (whiteboard) ----------
+
+function hitTestElement(el, x, y, tol = 6) {
+  if (el.type === "image") {
+    return x >= el.x - tol && x <= el.x + el.width + tol && y >= el.y - tol && y <= el.y + el.height + tol;
+  }
+  return hitTestAnnotation(el, x, y, tol);
+}
+function findElementAt(list, x, y, tol = 6) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (hitTestElement(list[i], x, y, tol)) return list[i];
+  }
+  return null;
+}
+function elementBBox(el) {
+  if (el.type === "image") return { x: el.x, y: el.y, w: el.width, h: el.height };
+  return annotationBBox(el);
+}
+function translateElement(el, dx, dy) {
+  if (el.type === "image") return { ...el, x: el.x + dx, y: el.y + dy };
+  return translateAnnotation(el, dx, dy);
+}
+function resizeElementCorner(el, x, y) {
+  if (el.type === "image") {
+    const w = Math.max(24, x - el.x);
+    const ratio = el.height / el.width;
+    return { ...el, width: w, height: w * ratio };
+  }
+  return resizeShapeAnnotation(el, x, y);
+}
+function eraseElementAtPoint(el, x, y, radius) {
+  if (el.type === "image") {
+    const hit = x >= el.x - radius && x <= el.x + el.width + radius && y >= el.y - radius && y <= el.y + el.height + radius;
+    return hit ? [] : [el];
+  }
+  return eraseAnnotationAtPoint(el, x, y, radius);
+}
+
+function WhiteboardElementShape({ el, onPointerDown }) {
+  if (el.type === "image") {
+    return <image href={el.dataUrl} x={el.x} y={el.y} width={el.width} height={el.height} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} preserveAspectRatio="none"/>;
+  }
+  return <AnnotationShape ann={el} onPointerDown={onPointerDown}/>;
+}
+
+function Whiteboard({ onClose }) {
+  const [persisted, setPersisted] = usePersistentState("whiteboard_v1", { elements: [] });
+  const [elements, setElements] = useState(persisted.elements || []);
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => setPersisted({ elements }), 400);
+    return () => clearTimeout(saveTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elements]);
+
+  const [bg, setBg] = useState("black"); // "white" | "black"
+  const [tool, setTool] = useState("pen"); // pen|highlighter|eraser|shape|text|select|pan
+  const [shapeType, setShapeType] = useState("line");
+  const [penStyle, setPenStyle] = useState("normal");
+  const [eraserMode, setEraserMode] = useState("partial");
+  const [eraserRadius, setEraserRadius] = useState(14);
+  const [autoShape, setAutoShape] = useState(true);
+  const [color, setColor] = useState("#f5f5f5");
+  const [thickness, setThickness] = useState(3);
+  const [opacity, setOpacity] = useState(1);
+  const [hlColor, setHlColor] = useState("#ffd54a");
+  const [hlThickness, setHlThickness] = useState(16);
+  const [hlOpacity, setHlOpacity] = useState(0.4);
+
+  const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [selectedId, setSelectedId] = useState(null);
+  const [editingTextId, setEditingTextId] = useState(null);
+  const [liveEl, setLiveEl] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [flash, setFlash] = useState(false);
+
+  const svgRef = useRef(null);
+  const containerRef = useRef(null);
+  const modalRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+  const isDrawingRef = useRef(false);
+  const dragRef = useRef(null);
+  const panRef = useRef(null);
+  const eraseGestureRef = useRef(false);
+  const spaceDownRef = useRef(false);
+  const historyRef = useRef([]);
+  const redoRef = useRef([]);
+  const firstFit = useRef(false);
+
+  // Ajusta a visão pra caber tudo que já existe, na primeira abertura.
+  useEffect(() => {
+    if (firstFit.current || !elements.length || !containerRef.current) return;
+    firstFit.current = true;
+    const xs1 = elements.map(el => elementBBox(el).x);
+    const ys1 = elements.map(el => elementBBox(el).y);
+    const xs2 = elements.map(el => { const b = elementBBox(el); return b.x + b.w; });
+    const ys2 = elements.map(el => { const b = elementBBox(el); return b.y + b.h; });
+    const minX = Math.min(...xs1), minY = Math.min(...ys1), maxX = Math.max(...xs2), maxY = Math.max(...ys2);
+    const w = Math.max(40, maxX - minX), h = Math.max(40, maxY - minY);
+    const rect = containerRef.current.getBoundingClientRect();
+    const zoom = Math.min(2, Math.max(0.15, Math.min((rect.width - 60) / w, (rect.height - 60) / h)));
+    setView({ x: rect.width / 2 - (minX + w / 2) * zoom, y: rect.height / 2 - (minY + h / 2) * zoom, zoom });
+  }, [elements]);
+
+  const pushHistory = () => {
+    historyRef.current.push(JSON.stringify(elements));
+    if (historyRef.current.length > 60) historyRef.current.shift();
+    redoRef.current = [];
+  };
+  const undo = () => {
+    if (!historyRef.current.length) return;
+    redoRef.current.push(JSON.stringify(elements));
+    setElements(JSON.parse(historyRef.current.pop()));
+  };
+  const redo = () => {
+    if (!redoRef.current.length) return;
+    historyRef.current.push(JSON.stringify(elements));
+    setElements(JSON.parse(redoRef.current.pop()));
+  };
+  const commitElement = (el) => {
+    pushHistory();
+    setElements(prev => [...prev, el]);
+  };
+  const clearAll = () => {
+    if (!elements.length) return;
+    if (!confirm("Apagar tudo no quadro?")) return;
+    pushHistory();
+    setElements([]);
+    setSelectedId(null);
+  };
+
+  const toWorld = (clientX, clientY) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    return { x: (clientX - rect.left - view.x) / view.zoom, y: (clientY - rect.top - view.y) / view.zoom };
+  };
+
+  const handlePenStyleChange = (val) => {
+    setPenStyle(val);
+    if (val === "normal") { setThickness(3); setOpacity(1); }
+    else if (val === "pencil") { setThickness(1.8); setOpacity(0.85); }
+    else if (val === "marker") { setThickness(8); setOpacity(0.9); }
+  };
+
+  const addTextElement = (x, y) => {
+    const id = crypto.randomUUID();
+    commitElement({ id, type: "text", x, y, fontSize: 18, color, content: "" });
+    setEditingTextId(id);
+  };
+  const commitTextEdit = (id, value) => {
+    setEditingTextId(null);
+    setElements(prev => value.trim() ? prev.map(a => a.id === id ? { ...a, content: value } : a) : prev.filter(a => a.id !== id));
+  };
+
+  const eraseRadiusAt = (x, y) => {
+    if (!eraseGestureRef.current) { pushHistory(); eraseGestureRef.current = true; }
+    setElements(prev => prev.flatMap(el => eraseElementAtPoint(el, x, y, eraserRadius)));
+  };
+  const eraseObjectAt = (x, y) => {
+    const hit = findElementAt(elements, x, y, 8);
+    if (!hit) return;
+    pushHistory();
+    setElements(prev => prev.filter(a => a.id !== hit.id));
+  };
+  const deleteSelected = () => {
+    if (!selectedId) return;
+    pushHistory();
+    setElements(prev => prev.filter(a => a.id !== selectedId));
+    setSelectedId(null);
+  };
+
+  const handleSelectPointerDown = (x, y) => {
+    if (selectedId) {
+      const sel = elements.find(a => a.id === selectedId);
+      if (sel && (sel.type === "shape" || sel.type === "image")) {
+        const cx = sel.type === "image" ? sel.x + sel.width : sel.x2;
+        const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
+        if (Math.hypot(x - cx, y - cy) < 14 / view.zoom) {
+          pushHistory();
+          dragRef.current = { mode: "resize", id: sel.id };
+          return;
+        }
+      }
+    }
+    const hit = findElementAt(elements, x, y, 8);
+    if (hit) {
+      setSelectedId(hit.id);
+      pushHistory();
+      dragRef.current = { mode: "move", id: hit.id, lastX: x, lastY: y };
+    } else {
+      setSelectedId(null);
+    }
+  };
+  const handleSelectPointerMove = (x, y) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    setElements(prev => prev.map(a => {
+      if (a.id !== drag.id) return a;
+      if (drag.mode === "resize") return resizeElementCorner(a, x, y);
+      const dx = x - drag.lastX, dy = y - drag.lastY;
+      return translateElement(a, dx, dy);
+    }));
+    if (drag.mode === "move") { drag.lastX = x; drag.lastY = y; }
+  };
+
+  const addImageAt = (dataUrl, naturalW, naturalH, worldX, worldY) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const maxW = rect ? (rect.width * 0.6) / view.zoom : 480;
+    const width = Math.min(naturalW, maxW);
+    const height = width * (naturalH / naturalW);
+    commitElement({ id: crypto.randomUUID(), type: "image", dataUrl, x: worldX - width / 2, y: worldY - height / 2, width, height });
+    setFlash(true);
+    setTimeout(() => setFlash(false), 260);
+  };
+
+  const addImageFromFile = (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width; canvas.height = img.height;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        const dataUrl = canvas.toDataURL("image/png");
+        const rect = containerRef.current?.getBoundingClientRect();
+        const centerWorld = rect ? { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom } : { x: 0, y: 0 };
+        addImageAt(dataUrl, img.width, img.height, centerWorld.x, centerWorld.y);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  useEffect(() => {
+    const handlePaste = (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type?.startsWith("image/")) {
+          e.preventDefault();
+          addImageFromFile(item.getAsFile());
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.code === "Space") { spaceDownRef.current = true; e.preventDefault(); }
+      if (e.key === "Escape") { if (editingTextId) setEditingTextId(null); else onClose(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedId && tool === "select") deleteSelected();
+    };
+    const onKeyUp = (e) => { if (e.code === "Space") spaceDownRef.current = false; };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, tool, editingTextId, elements]);
+
+  const zoomAt = (factor, clientX, clientY) => {
+    const rect = svgRef.current.getBoundingClientRect();
+    const px = clientX - rect.left, py = clientY - rect.top;
+    setView(v => {
+      const newZoom = Math.min(4, Math.max(0.1, v.zoom * factor));
+      const ratio = newZoom / v.zoom;
+      return { zoom: newZoom, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio };
+    });
+  };
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      zoomAt(e.deltaY < 0 ? 1.08 : 0.93, e.clientX, e.clientY);
+    } else {
+      setView(v => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+    }
+  };
+
+  // onWheel do React é passivo por padrão (não dá pra bloquear o zoom nativo
+  // do navegador com preventDefault ali). Por isso o listener é registrado
+  // manualmente como non-passive direto no elemento.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isPanning = () => tool === "pan" || spaceDownRef.current;
+
+  const handlePointerDown = (e) => {
+    if (e.button === 1 || isPanning()) {
+      e.preventDefault();
+      panRef.current = { startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
+      try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+      return;
+    }
+    e.preventDefault();
+    try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    if (tool === "pen" || tool === "highlighter") {
+      isDrawingRef.current = true;
+      setLiveEl({
+        id: crypto.randomUUID(), type: "stroke", tool,
+        color: tool === "highlighter" ? hlColor : color,
+        width: tool === "highlighter" ? hlThickness : thickness,
+        opacity: tool === "highlighter" ? hlOpacity : opacity,
+        style: tool === "pen" ? penStyle : "marker",
+        points: [{ x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }],
+      });
+    } else if (tool === "shape") {
+      isDrawingRef.current = true;
+      setLiveEl({ id: crypto.randomUUID(), type: "shape", shape: shapeType, color, width: thickness, opacity, x1: x, y1: y, x2: x, y2: y });
+    } else if (tool === "eraser") {
+      isDrawingRef.current = true;
+      if (eraserMode === "object") eraseObjectAt(x, y); else eraseRadiusAt(x, y);
+    } else if (tool === "text") {
+      addTextElement(x, y);
+    } else if (tool === "select") {
+      handleSelectPointerDown(x, y);
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (panRef.current) {
+      const dx = e.clientX - panRef.current.startX, dy = e.clientY - panRef.current.startY;
+      setView(v => ({ ...v, x: panRef.current.viewX + dx, y: panRef.current.viewY + dy }));
+      return;
+    }
+    if (tool === "select") {
+      if (!dragRef.current) return;
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      handleSelectPointerMove(x, y);
+      return;
+    }
+    if (!isDrawingRef.current) return;
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    if (tool === "pen" || tool === "highlighter") {
+      setLiveEl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
+    } else if (tool === "shape") {
+      setLiveEl(prev => prev ? { ...prev, x2: x, y2: y } : prev);
+    } else if (tool === "eraser" && eraserMode === "partial") {
+      eraseRadiusAt(x, y);
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (panRef.current) { panRef.current = null; return; }
+    if (tool === "select") { dragRef.current = null; return; }
+    if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    if (!liveEl) return;
+    if ((tool === "pen" || tool === "highlighter") && liveEl.points.length > 1) {
+      let finalEl = liveEl;
+      if (tool === "pen" && autoShape && finalEl.points.length > 6) {
+        const detected = detectShapeFromPoints(finalEl.points);
+        if (detected) {
+          finalEl = {
+            id: finalEl.id, type: "shape", shape: detected.type,
+            color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
+            x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+            ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
+          };
+        }
+      }
+      commitElement(finalEl);
+    } else if (tool === "shape" && Math.hypot(liveEl.x2 - liveEl.x1, liveEl.y2 - liveEl.y1) > 2 / view.zoom) {
+      commitElement(liveEl);
+    }
+    setLiveEl(null);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith("image/"));
+    if (!files.length) return;
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    files.forEach(f => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => addImageAt(reader.result, img.width, img.height, x, y);
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(f);
+    });
+  };
+
+  const handleDownload = async () => {
+    if (!elements.length) { alert("O quadro está vazio."); return; }
+    try {
+      setDownloading(true);
+      const boxes = elements.map(elementBBox);
+      const minX = Math.min(...boxes.map(b => b.x));
+      const minY = Math.min(...boxes.map(b => b.y));
+      const maxX = Math.max(...boxes.map(b => b.x + b.w));
+      const maxY = Math.max(...boxes.map(b => b.y + b.h));
+      const margin = 32;
+      const scale = 2;
+      const w = (maxX - minX) + margin * 2, h = (maxY - minY) + margin * 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(w * scale);
+      canvas.height = Math.ceil(h * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = bg === "black" ? "#0b0b0c" : "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(scale, scale);
+      ctx.translate(-minX + margin, -minY + margin);
+      for (const el of elements) {
+        if (el.type === "image") {
+          const img = new Image();
+          img.src = el.dataUrl;
+          await new Promise(res => { img.onload = res; img.onerror = res; });
+          ctx.drawImage(img, el.x, el.y, el.width, el.height);
+        } else {
+          drawAnnotationOnCanvas(ctx, el);
+        }
+      }
+      const doc = new jsPDF({ unit: "pt", format: [w, h], orientation: w > h ? "landscape" : "portrait" });
+      doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, w, h);
+      doc.save(`quadro_${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível baixar o quadro: " + (e.message || e));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const zoomPct = Math.round(view.zoom * 100);
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <div ref={modalRef} className={`readerModal readerModalWide${fullscreen ? " readerModalFull" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <div className="readerHead">
+          <b>Quadro infinito</b>
+          <div className="readerHeadActions">
+            <button title="Fundo branco" className={"ghost" + (bg === "white" ? " active" : "")} onClick={() => setBg("white")}><Sun size={15}/> <span>Fundo branco</span></button>
+            <button title="Fundo preto" className={"ghost" + (bg === "black" ? " active" : "")} onClick={() => setBg("black")}><Moon size={15}/> <span>Fundo preto</span></button>
+            <button className="ghost" disabled={downloading || !elements.length} onClick={handleDownload}><Download size={15}/> <span>{downloading ? "Gerando..." : "Baixar PDF"}</span></button>
+            <button title={fullscreen ? "Sair da tela cheia" : "Tela cheia"} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
+            <button onClick={onClose}><X size={18}/></button>
+          </div>
+        </div>
+
+        <div className="readerMain">
+          <div className="penOptionsBar">
+            <div className="penToolGroup penToolGroupMain">
+              <button title="Caneta" className={tool === "pen" ? "active" : ""} onClick={() => { setTool("pen"); setSelectedId(null); }}><PenTool size={16}/><span>Caneta</span></button>
+              <button title="Marca-texto" className={tool === "highlighter" ? "active" : ""} onClick={() => { setTool("highlighter"); setSelectedId(null); }}><Highlighter size={16}/><span>Marca-texto</span></button>
+              <button title="Borracha" className={tool === "eraser" ? "active" : ""} onClick={() => { setTool("eraser"); setSelectedId(null); }}><Eraser size={16}/><span>Borracha</span></button>
+              <button title="Formas" className={tool === "shape" ? "active" : ""} onClick={() => { setTool("shape"); setSelectedId(null); }}><Square size={16}/><span>Formas</span></button>
+              <button title="Texto" className={tool === "text" ? "active" : ""} onClick={() => { setTool("text"); setSelectedId(null); }}><Type size={16}/><span>Texto</span></button>
+              <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/><span>Selecionar</span></button>
+              <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/><span>Mover</span></button>
+              <span className="penToolDivider"/>
+              <button title="Desfazer" onClick={undo}><Undo2 size={16}/><span>Desfazer</span></button>
+              <button title="Refazer" onClick={redo}><Redo2 size={16}/><span>Refazer</span></button>
+              <button title="Limpar tudo" onClick={clearAll}><Trash2 size={16}/><span>Limpar tudo</span></button>
+            </div>
+
+            <div className="penOptionsRow">
+              {tool === "pen" && (<>
+                <select value={penStyle} onChange={e => handlePenStyleChange(e.target.value)}>
+                  <option value="normal">Caneta normal</option>
+                  <option value="pencil">Lápis</option>
+                  <option value="marker">Marcador/brush</option>
+                </select>
+                <div className="penSwatches">
+                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
+                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
+                <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
+                <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+              </>)}
+              {tool === "highlighter" && (<>
+                <div className="penSwatches">
+                  {["#ffd54a", "#ff6b6b", "#4ade80", "#5b9dff"].map(c => (
+                    <button key={c} className={`penSwatch${hlColor === c ? " active" : ""}`} style={{ background: c }} onClick={() => setHlColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={hlColor} onChange={e => setHlColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e => setHlThickness(+e.target.value)}/></label>
+                <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e => setHlOpacity(+e.target.value)}/></label>
+              </>)}
+              {tool === "eraser" && (<>
+                <select value={eraserMode} onChange={e => setEraserMode(e.target.value)}>
+                  <option value="partial">Apagar parte do traço</option>
+                  <option value="object">Apagar objeto inteiro</option>
+                </select>
+                {eraserMode === "partial" && <label className="penSliderLabel">Raio<input type="range" min="4" max="40" step="1" value={eraserRadius} onChange={e => setEraserRadius(+e.target.value)}/></label>}
+              </>)}
+              {tool === "shape" && (<>
+                <div className="penToolGroup">
+                  <button title="Linha" className={shapeType === "line" ? "active" : ""} onClick={() => setShapeType("line")}><Minus size={16}/></button>
+                  <button title="Seta" className={shapeType === "arrow" ? "active" : ""} onClick={() => setShapeType("arrow")}><ArrowUpRight size={16}/></button>
+                  <button title="Retângulo" className={shapeType === "rect" ? "active" : ""} onClick={() => setShapeType("rect")}><Square size={16}/></button>
+                  <button title="Círculo" className={shapeType === "circle" ? "active" : ""} onClick={() => setShapeType("circle")}><Circle size={16}/></button>
+                </div>
+                <div className="penSwatches">
+                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
+                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
+              </>)}
+              {tool === "text" && (<>
+                <div className="penSwatches">
+                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
+                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
+                  ))}
+                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
+                </div>
+                <p className="penHint">Toque no quadro para adicionar um texto.</p>
+              </>)}
+              {tool === "select" && (<>
+                <p className="penHint">{selectedId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em algo pra selecionar."}</p>
+                {selectedId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
+              </>)}
+              {tool === "pan" && <p className="penHint">Arraste para navegar pelo quadro infinito.</p>}
+            </div>
+          </div>
+
+          <div className={"readerBody whiteboardBody" + (bg === "black" ? " whiteboardBlack" : " whiteboardWhite")} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
+            <p className="whiteboardPasteHint">Cole um print com <b>Ctrl+V</b> a qualquer momento</p>
+            <svg
+              ref={svgRef}
+              className={"whiteboardSvg" + (flash ? " flash" : "")}
+              style={{
+                cursor: isPanning() ? "grab" : tool === "eraser" ? "cell" : tool === "select" ? "default" : tool === "text" ? "text" : (tool === "pen" || tool === "highlighter") ? "crosshair" : "crosshair",
+                touchAction: "none",
+              }}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              onContextMenu={e => e.preventDefault()}
+            >
+              <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
+                {elements.filter(el => el.type !== "text").map(el => (
+                  <WhiteboardElementShape key={el.id} el={el}/>
+                ))}
+                {liveEl && liveEl.type !== "text" && <AnnotationShape ann={liveEl} preview/>}
+                {elements.filter(el => el.type === "text").map(el => (
+                  <foreignObject key={el.id} x={el.x} y={el.y} width={Math.max(160, (el.content?.length || 10) * el.fontSize * 0.6)} height={el.fontSize * 4}>
+                    {editingTextId === el.id ? (
+                      <textarea
+                        autoFocus
+                        defaultValue={el.content}
+                        className="whiteboardTextInput"
+                        style={{ color: el.color, fontSize: el.fontSize }}
+                        onBlur={e => commitTextEdit(el.id, e.target.value)}
+                        onPointerDown={e => e.stopPropagation()}
+                      />
+                    ) : (
+                      <div
+                        className="whiteboardTextLabel"
+                        style={{ color: el.color, fontSize: el.fontSize, pointerEvents: tool === "select" ? "auto" : "none" }}
+                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y }; } }}
+                        onDoubleClick={() => setEditingTextId(el.id)}
+                      >
+                        {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
+                      </div>
+                    )}
+                  </foreignObject>
+                ))}
+                {tool === "select" && selectedId && (() => {
+                  const el = elements.find(a => a.id === selectedId);
+                  if (!el) return null;
+                  const b = elementBBox(el);
+                  const pad = 6 / view.zoom;
+                  return (
+                    <g>
+                      <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>
+                      {(el.type === "shape" || el.type === "image") && (
+                        <circle
+                          cx={el.type === "image" ? el.x + el.width : el.x2}
+                          cy={el.type === "image" ? el.y + el.height : el.y2}
+                          r={6 / view.zoom}
+                          fill="var(--accent)"
+                          style={{ cursor: "nwse-resize" }}
+                          onPointerDown={e => { e.stopPropagation(); pushHistory(); dragRef.current = { mode: "resize", id: el.id }; }}
+                        />
+                      )}
+                    </g>
+                  );
+                })()}
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div className="readerNav whiteboardNav">
+          <span>{elements.length} {elements.length === 1 ? "item" : "itens"} no quadro</span>
+          <div className="pdfToolbarGroup">
+            <button title="Diminuir zoom" onClick={() => zoomAt(0.85, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomOut size={16}/></button>
+            <button title="Redefinir zoom" onClick={() => setView(v => ({ ...v, zoom: 1 }))}>{zoomPct}%</button>
+            <button title="Aumentar zoom" onClick={() => zoomAt(1.18, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomIn size={16}/></button>
+          </div>
         </div>
       </div>
     </div>
