@@ -817,3 +817,43 @@ h1{font-size:23px}
   .levelAnswerBtns{grid-template-columns:1fr 1fr}
   .levelAnswerBtns .levelBtn.back{grid-column:1/-1}
 }
+
+/* ---------- Treino (treinos personalizados) ---------- */
+.exerciseList{display:grid;gap:10px}
+.exerciseRow{position:relative;display:flex;align-items:center;gap:14px;border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:10px 14px}
+.exerciseThumb{width:56px;height:56px;flex:0 0 auto;border-radius:10px;overflow:hidden;background:var(--bg-surface-2);display:grid;place-items:center;color:var(--text-3)}
+.exerciseThumb img{width:100%;height:100%;object-fit:cover;display:block}
+.exerciseInfo{flex:1;min-width:0;display:grid;gap:3px}
+.exerciseInfo b{font-size:14px}
+.exerciseInfo small{display:flex;align-items:center;gap:5px;color:var(--text-2);font-size:12px}
+.exerciseOrderBtns{display:flex;flex-direction:column;gap:4px}
+.exerciseOrderBtns button{padding:4px 7px}
+.exerciseOrderBtns button:disabled{opacity:.3}
+.exerciseMenuBtn{position:static;background:transparent;color:var(--text-1)}
+.exerciseMenuPop{position:absolute;top:44px;right:10px}
+
+.exerciseFormGrid{display:grid;grid-template-columns:1.3fr 1fr;gap:22px;align-items:start}
+.exerciseFormFields{display:grid;gap:14px}
+.exerciseFormFields label{font-size:12px;color:var(--text-2);display:grid;gap:6px}
+.exerciseFormFields input{background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);padding:11px;border-radius:9px;outline:none}
+.exerciseModeToggle{display:flex;gap:6px;background:var(--bg-surface-2);border-radius:9px;padding:4px}
+.exerciseModeToggle button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 10px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--text-2)}
+.exerciseModeToggle button.active{background:var(--accent);color:var(--accent-text-on)}
+.exerciseTimeRow{display:flex;align-items:center;gap:8px}
+.exerciseTimeRow input{width:70px}
+.exerciseTimeRow span{color:var(--text-3);font-size:12px}
+
+.exerciseFormGif{display:grid;gap:10px;border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:14px}
+.exerciseGifPreview{aspect-ratio:1/1;max-width:220px;border-radius:12px;overflow:hidden;background:var(--bg-surface-2);display:grid;place-items:center;color:var(--text-3);border:1px solid var(--border)}
+.exerciseGifPreview img{width:100%;height:100%;object-fit:cover;display:block}
+
+.workoutPlayerModal{width:min(460px,100%);text-align:center;display:grid;gap:10px;justify-items:center}
+.workoutPlayerGif{width:100%;max-width:100%}
+.workoutPlayerName{margin:2px 0 0}
+.workoutPlayerTimer{width:100%;justify-content:center;gap:22px}
+.workoutPlayerNav{width:100%;justify-content:space-between}
+
+@media(max-width:640px){
+  .exerciseFormGrid{grid-template-columns:1fr}
+  .exerciseGifPreview{max-width:100%}
+}

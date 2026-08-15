@@ -310,3 +310,39 @@ alter table study_flashcard_lists add column if not exists completed boolean not
 alter table study_goals add column if not exists link_list_ids uuid[];
 alter table study_goals drop constraint if exists study_goals_link_source_check;
 alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards'));
+
+-- Área de Lazer: Treino (treinos personalizados em pastas, com exercícios em séries e GIF de referência)
+create table if not exists workout_folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  cover_image text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table workout_folders enable row level security;
+
+create table if not exists workout_exercises (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  folder_id uuid references workout_folders(id) on delete cascade,
+  name text not null,
+  mode text not null default 'reps' check (mode in ('reps','tempo')),
+  sets int not null default 1,
+  value numeric not null default 0,
+  gif_url text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table workout_exercises enable row level security;
+
+do $$ declare t text; begin foreach t in array array['workout_folders','workout_exercises'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
