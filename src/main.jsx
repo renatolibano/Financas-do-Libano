@@ -12,7 +12,7 @@ import {
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
-  Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown,
+  Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
   ShoppingCart, ExternalLink
 } from "lucide-react";
 import "./styles.css";
@@ -94,6 +94,7 @@ const initialCardPurchases = [
 ];
 
 const money = n => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const maskMoney = (n, hidden) => hidden ? "R$ ••••" : money(n);
 
 // Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
 // o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
@@ -431,6 +432,8 @@ function App({session,theme,setTheme}){
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
+  const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
 
   const monthTransactions = useMemo(()=>transactions.data.filter(x=>{
@@ -456,6 +459,14 @@ function App({session,theme,setTheme}){
   const effectiveIncome = overview.income ?? income;
   const effectiveExpense = overview.expense ?? expense;
   const effectiveCardBill = overview.cardBill ?? cardBill;
+
+  // Mostrar/ocultar valores na Visão Geral (ícone de olho no celular).
+  const [hideValues, setHideValues] = usePersistentState("overview_hide_values", false);
+
+  // Quanto ainda resta dos limites de orçamento cadastrados neste mês.
+  const budgetLimitTotal = useMemo(()=>budgets.data.reduce((a,b)=>a+(Number(b.limit_value)||0),0),[budgets.data]);
+  const budgetSpentTotal = useMemo(()=>budgets.data.reduce((a,b)=>a+monthTransactions.filter(t=>t.type==="out"&&t.cat===b.cat).reduce((x,y)=>x+y.value,0),0),[budgets.data,monthTransactions]);
+  const budgetAvailable = budgetLimitTotal - budgetSpentTotal;
 
   // Tudo que tem uma data/prazo e falta exatamente 1 dia entra no sininho de notificações.
   const notifItems = useMemo(()=>{
@@ -635,10 +646,29 @@ function App({session,theme,setTheme}){
       </div>
     </aside>
 
+    <div className="mobileTabBar">
+      <div className={"mobileTabBarPanel "+(mobileNavExpanded?"open":"")}>
+        <button onClick={()=>{setMobileMenuOpen(true);setMobileNavExpanded(false);}}>
+          <LayoutGrid size={19}/><span>Menu</span>
+        </button>
+        <button className={page==="Visão Geral"?"active":""} onClick={()=>{goTo("Visão Geral");setMobileNavExpanded(false);}}>
+          <LayoutDashboard size={19}/><span>Início</span>
+        </button>
+        <button onClick={()=>{setShowSettings(true);setMobileNavExpanded(false);}}>
+          <Settings size={19}/><span>Configurações</span>
+        </button>
+      </div>
+      <button className="mobileTabBarHandle" onClick={()=>setMobileNavExpanded(o=>!o)} aria-label="Mostrar menu de navegação">
+        {mobileNavExpanded ? <ChevronDown size={18}/> : <ChevronUp size={18}/>}
+      </button>
+    </div>
+
+    {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
+
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
-      {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data}/>}
+      {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
@@ -696,8 +726,133 @@ function App({session,theme,setTheme}){
   </div>
 }
 
-function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals}){
+function MobileMenuOverlay({navTree,page,goTo,onClose}){
+  const [openGroups,setOpenGroups] = useState(()=>{
+    const g = {};
+    navTree.forEach(item=>{ if(item.type==="group" && item.children.some(c=>c.key===page)) g[item.key]=true; });
+    return g;
+  });
+  const toggle = (key)=>setOpenGroups(g=>({...g,[key]:!g[key]}));
+  return <div className="mobileMenuOverlay">
+    <div className="mobileMenuHead">
+      <div className="brand">
+        <div className="brandIcon"><img src="/icons/icon-192.png" alt="Libano"/></div>
+        <div><b>Libano</b><small>Finance + vida</small></div>
+      </div>
+      <button className="mobileMenuClose" onClick={onClose}><X size={20}/></button>
+    </div>
+    <nav className="mobileMenuNav">
+      {navTree.map(item=>{
+        if(item.type==="single"){
+          const I = item.icon;
+          return <button key={item.key} className={page===item.key?"active":""} onClick={()=>goTo(item.key)}>
+            <I size={19}/><span>{item.label||item.key}</span>
+          </button>;
+        }
+        const GI = item.icon;
+        const isOpen = !!openGroups[item.key];
+        const groupActive = item.children.some(c=>c.key===page);
+        return <div className="navGroup" key={item.key}>
+          <button className={"navGroupHead "+(groupActive?"active":"")} onClick={()=>toggle(item.key)}>
+            <GI size={19}/><span>{item.label}</span>
+            {isOpen ? <ChevronDown size={15} className="chev"/> : <ChevronRight size={15} className="chev"/>}
+          </button>
+          {isOpen && <div className="navSub">
+            {item.children.map(c=>{const CI=c.icon;return <button key={c.key} className={page===c.key?"active":""} onClick={()=>goTo(c.key)}>
+              <CI size={17}/><span>{c.label||c.key}</span>
+            </button>})}
+          </div>}
+        </div>;
+      })}
+    </nav>
+  </div>;
+}
+
+function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals,hideValues,setHideValues,budgetAvailable,shoppingItems,fixedCount,debtsCount}){
+ const overdue = reminders.filter(r=>{const d=daysUntil(r.date); return d!==null && d<0;});
+ const dueToday = reminders.filter(r=>daysUntil(r.date)===0);
+ const dueNext7 = reminders.filter(r=>{const d=daysUntil(r.date); return d!==null && d>0 && d<=7;});
+ const monthLabel = new Date(month+"-02").toLocaleDateString("pt-BR",{month:"long"});
  return <div className="content">
+   <div className="mobileOverview">
+     <div className="mobileBalanceCard">
+       <div className="mobileBalanceHead">
+         <span>Saldo em contas</span>
+         <button className="mobileEyeBtn" onClick={()=>setHideValues(v=>!v)} aria-label="Mostrar ou ocultar valores">
+           {hideValues ? <EyeOff size={18}/> : <Eye size={18}/>}
+         </button>
+       </div>
+       <strong className="mobileBalanceValue">{maskMoney(balance,hideValues)}</strong>
+       <div className="mobileBalanceSub">
+         <span className="in"><ArrowUp size={14}/> {maskMoney(income,hideValues)}</span>
+         <small>{monthLabel}</small>
+         <span className="out"><ArrowDown size={14}/> {maskMoney(expense,hideValues)}</span>
+       </div>
+       <div className="mobileMetricsGrid">
+         <div className="mobileMetric"><div className="mobileMetricIcon gold"><PiggyBank size={15}/></div><div><small>Limite disp.</small><b>{maskMoney(Math.max(budgetAvailable,0),hideValues)}</b></div></div>
+         <div className="mobileMetric right"><div><small>Fatura</small><b>{maskMoney(cardBill,hideValues)}</b></div><div className="mobileMetricIcon orange"><CreditCard size={15}/></div></div>
+         <div className="mobileMetric"><div className="mobileMetricIcon red"><CalendarClock size={15}/></div><div><small>A pagar em fim do mês</small><b>{maskMoney(fixedTotal,hideValues)}</b></div></div>
+         <div className="mobileMetric right"><div><small>Gasto</small><b className="positive">{maskMoney(expense,hideValues)}</b></div><div className="mobileMetricIcon green"><TrendingDown size={15}/></div></div>
+       </div>
+     </div>
+
+     <div className="mobileListCard">
+       <div className="mobileListRow" onClick={()=>setPage("Lembretes Comuns")}>
+         <div className="mobileListIcon orange"><Zap size={16}/></div>
+         <b>Atenção</b>
+         <span className="mobileListRight">Próximos 7 dias ({dueNext7.length})</span>
+         <ChevronRight size={16}/>
+       </div>
+       <div className="mobileListRow" onClick={()=>setPage("Lembretes Comuns")}>
+         <div className="mobileListIcon purple"><Hourglass size={16}/></div>
+         <b>Atrasadas</b>
+         <span className="mobileListRight">{overdue.length} atrasada{overdue.length===1?"":"s"}</span>
+         <ChevronRight size={16}/>
+       </div>
+       <div className="mobileListRow" onClick={()=>setPage("Lembretes Comuns")}>
+         <div className="mobileListIcon blue"><CalendarClock size={16}/></div>
+         <b>Hoje</b>
+         <span className="mobileListRight">{dueToday.length} hoje</span>
+         <ChevronRight size={16}/>
+       </div>
+     </div>
+
+     <div className="mobileTaskCard" onClick={()=>setPage("Notas")}>
+       <div className="mobileListIcon pink"><StickyNote size={17}/></div>
+       <div className="mobileTaskInfo"><b>Notas</b><small>suas anotações rápidas</small></div>
+       <strong>{notes.length}</strong>
+       <ChevronRight size={16}/>
+     </div>
+
+     <div className="mobileBoardCard">
+       <div className="mobileBoardHead" onClick={()=>setPage("Lista de Compras")}>
+         <div className="mobileListIcon white"><Circle size={14}/></div>
+         <b>Quadro possível</b>
+         <ChevronRight size={16} style={{marginLeft:"auto"}}/>
+       </div>
+       {shoppingItems.slice(0,2).map((item,i)=>
+         <div className="mobileBoardItem" key={item.id}>
+           <i className={i%2===0?"purple":"orange"}/>
+           <span>{item.name}</span>
+           <small>{item.price!=null && item.price!=="" ? maskMoney(Number(item.price)||0,hideValues) : "—"}</small>
+         </div>
+       )}
+       {shoppingItems.length===0 && <p className="emptyHint">Nenhum item na lista de compras ainda.</p>}
+     </div>
+
+     <div className="mobileListCard">
+       <div className="mobileListRow" onClick={()=>setPage("Pagamentos Fixos")}>
+         <div className="mobileListIcon red"><CalendarClock size={16}/></div>
+         <b>Vencimentos</b>
+         <span className="mobileListRight">próx. mês ({fixedCount+debtsCount})</span>
+         <ChevronRight size={16}/>
+       </div>
+     </div>
+
+     <button className="mobileFab" onClick={()=>setPage("Movimentações")} aria-label="Adicionar movimentação"><Plus size={24}/></button>
+   </div>
+
+   <div className="desktopOverview">
    <div className="monthToolbar"><label>Mês analisado <input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><span>{budgets.length} orçamento(s) · {goals.length} meta(s)</span></div><section className="stats">
     <Card title="Saldo atual" value={money(balance)} icon={<WalletCards/>} big manual={manualFields?.balance!=null}/>
     <Card title="Entradas" value={money(income)} icon={<TrendingUp/>} positive manual={manualFields?.income!=null}/>
@@ -737,6 +892,7 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
     <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row rowClickable" key={n.id} onClick={()=>openNote(n.id)}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
+   </div>
  </div>
 }
 
