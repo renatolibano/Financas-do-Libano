@@ -3181,7 +3181,16 @@ function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRe
   );
 }
 
+const workoutFmtRest = (s) => {
+  const sec = Math.max(0, Number(s) || 0);
+  if (sec === 0) return null;
+  if (sec % 60 === 0) return `${sec / 60} min`;
+  const m = Math.floor(sec / 60), r = sec % 60;
+  return m > 0 ? `${m}:${String(r).padStart(2, "0")} min` : `${sec}s`;
+};
+
 function ExerciseRow({ exercise, isFirst, isLast, menuOpen, onToggleMenu, onEdit, onDelete, onMoveUp, onMoveDown }) {
+  const restLabel = workoutFmtRest(exercise.rest_seconds);
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
@@ -3189,7 +3198,7 @@ function ExerciseRow({ exercise, isFirst, isLast, menuOpen, onToggleMenu, onEdit
       </div>
       <div className="exerciseInfo">
         <b>{exercise.name}</b>
-        <small><Repeat2 size={12}/> {Number(exercise.sets) || 1} série{(Number(exercise.sets) || 1) === 1 ? "" : "s"} de {workoutFmtValue(exercise)}</small>
+        <small><Repeat2 size={12}/> {Number(exercise.sets) || 1} série{(Number(exercise.sets) || 1) === 1 ? "" : "s"} de {workoutFmtValue(exercise)}{restLabel && <> <Hourglass size={12}/> descanso de {restLabel}</>}</small>
       </div>
       <div className="exerciseOrderBtns">
         <button className="ghost" disabled={isFirst} onClick={onMoveUp}><ArrowUp size={13}/></button>
@@ -3213,6 +3222,8 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
   const [minutes, setMinutes] = useState(exercise?.mode === "tempo" ? Math.floor((exercise.value || 0) / 60) : 0);
   const [seconds, setSeconds] = useState(exercise?.mode === "tempo" ? (exercise.value || 0) % 60 : 30);
   const [reps, setReps] = useState(exercise?.mode !== "tempo" ? (exercise?.value ?? 15) : 15);
+  const [restMinutes, setRestMinutes] = useState(exercise ? Math.floor((exercise.rest_seconds || 0) / 60) : 1);
+  const [restSeconds, setRestSeconds] = useState(exercise ? (exercise.rest_seconds || 0) % 60 : 0);
   const [gifUrl, setGifUrl] = useState(exercise?.gif_url || "");
   const [gifMode, setGifMode] = useState("upload"); // "upload" | "url"
   const [uploading, setUploading] = useState(false);
@@ -3234,7 +3245,8 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
   const handleSubmit = () => {
     if (!name.trim()) return;
     const value = mode === "tempo" ? (Number(minutes) || 0) * 60 + (Number(seconds) || 0) : Number(reps) || 0;
-    onSave({ name: name.trim(), mode, sets: Number(sets) || 1, value, gif_url: gifUrl || null });
+    const rest_seconds = (Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0);
+    onSave({ name: name.trim(), mode, sets: Number(sets) || 1, value, rest_seconds, gif_url: gifUrl || null });
   };
 
   return (
@@ -3280,7 +3292,16 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
             </label>
           )}
 
-          <p className="emptyHint">Prévia: {sets || 1} série{(Number(sets) || 1) === 1 ? "" : "s"} de {mode === "tempo" ? `${Number(minutes) || 0}:${String(Number(seconds) || 0).padStart(2, "0")} min` : `${Number(reps) || 0} repetições`}</p>
+          <label>Descanso entre séries
+            <div className="exerciseTimeRow">
+              <input type="number" min="0" value={restMinutes} onChange={e => setRestMinutes(e.target.value)} placeholder="min"/>
+              <span>min</span>
+              <input type="number" min="0" max="59" value={restSeconds} onChange={e => setRestSeconds(e.target.value)} placeholder="seg"/>
+              <span>seg</span>
+            </div>
+          </label>
+
+          <p className="emptyHint">Prévia: {sets || 1} série{(Number(sets) || 1) === 1 ? "" : "s"} de {mode === "tempo" ? `${Number(minutes) || 0}:${String(Number(seconds) || 0).padStart(2, "0")} min` : `${Number(reps) || 0} repetições`}{((Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0)) > 0 && ` · descanso de ${workoutFmtRest((Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0))}`}</p>
         </div>
 
         <div className="exerciseFormGif">
@@ -3309,20 +3330,30 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
 
 function WorkoutPlayer({ folder, exercises, onClose }) {
   const [idx, setIdx] = useState(0);
+  const [setNum, setSetNum] = useState(1);
+  const [phase, setPhase] = useState("exercise"); // "exercise" | "rest"
   const [running, setRunning] = useState(false);
-  const [left, setLeft] = useState(exercises[0]?.mode === "tempo" ? exercises[0].value : 0);
-  const timerRef = useRef(null);
   const ex = exercises[idx];
+  const [left, setLeft] = useState(ex?.mode === "tempo" ? (Number(ex.value) || 0) : 0);
+  const timerRef = useRef(null);
 
+  const totalSets = Number(ex?.sets) || 1;
+  const restSeconds = Number(ex?.rest_seconds) || 0;
+
+  // Reinicia estado do exercício ao trocar de exercício
   useEffect(() => {
+    setSetNum(1);
+    setPhase("exercise");
     setRunning(false);
     setLeft(ex?.mode === "tempo" ? (Number(ex.value) || 0) : 0);
     return () => clearInterval(timerRef.current);
   }, [idx]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Cronômetro (conta tanto o tempo do exercício quanto o descanso)
   useEffect(() => {
     clearInterval(timerRef.current);
-    if (running && ex?.mode === "tempo") {
+    const shouldTick = running && (phase === "rest" || ex?.mode === "tempo");
+    if (shouldTick) {
       timerRef.current = setInterval(() => {
         setLeft(s => {
           if (s <= 1) { clearInterval(timerRef.current); setRunning(false); return 0; }
@@ -3331,11 +3362,40 @@ function WorkoutPlayer({ folder, exercises, onClose }) {
       }, 1000);
     }
     return () => clearInterval(timerRef.current);
-  }, [running, ex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [running, phase, ex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!ex) return null;
   const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  const goTo = (n) => { if (n < 0 || n >= exercises.length) return; setIdx(n); };
+
+  const goToExercise = (n) => { if (n < 0 || n >= exercises.length) return; setIdx(n); };
+
+  // Avança para o descanso (se houver) ou direto pra próxima série/exercício
+  const finishSet = () => {
+    clearInterval(timerRef.current);
+    setRunning(false);
+    if (setNum < totalSets) {
+      if (restSeconds > 0) {
+        setPhase("rest");
+        setLeft(restSeconds);
+      } else {
+        setSetNum(n => n + 1);
+        setPhase("exercise");
+        setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0);
+      }
+    } else if (idx < exercises.length - 1) {
+      goToExercise(idx + 1);
+    } else {
+      onClose();
+    }
+  };
+
+  const finishRest = () => {
+    clearInterval(timerRef.current);
+    setRunning(false);
+    setSetNum(n => n + 1);
+    setPhase("exercise");
+    setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0);
+  };
 
   return (
     <div className="modalBack" onClick={onClose}>
@@ -3344,31 +3404,53 @@ function WorkoutPlayer({ folder, exercises, onClose }) {
           <h2>{folder?.name}</h2>
           <button type="button" onClick={onClose}><X/></button>
         </div>
-        <small className="bookMenuLabel">Exercício {idx + 1} de {exercises.length}</small>
-        <div className="exerciseGifPreview workoutPlayerGif">
-          {ex.gif_url ? <img src={ex.gif_url} alt={ex.name}/> : <Film size={40}/>}
-        </div>
-        <h2 className="workoutPlayerName">{ex.name}</h2>
-        <p className="emptyHint">{Number(ex.sets) || 1} série{(Number(ex.sets) || 1) === 1 ? "" : "s"} de {workoutFmtValue(ex)}</p>
+        <small className="bookMenuLabel">Exercício {idx + 1} de {exercises.length} · Série {Math.min(setNum, totalSets)} de {totalSets}</small>
 
-        {ex.mode === "tempo" ? (
-          <div className="levelTimerRow workoutPlayerTimer">
-            <div className="levelTimer"><Clock3 size={20}/> {fmt(left)}</div>
-            <div className="levelTimerBtns">
-              <button className="ghost" onClick={() => setLeft(Number(ex.value) || 0)}><RotateCcw size={14}/></button>
-              <button className="add" onClick={() => setRunning(r => !r)}>{running ? <Pause size={16}/> : <Play size={16}/>}</button>
+        {phase === "rest" ? (
+          <>
+            <div className="exerciseGifPreview workoutPlayerGif workoutRestPreview"><Hourglass size={40}/></div>
+            <h2 className="workoutPlayerName">Descanso</h2>
+            <p className="emptyHint">Prepare-se: próxima é a série {setNum + 1} de {ex.name}.</p>
+            <div className="levelTimerRow workoutPlayerTimer">
+              <div className="levelTimer"><Clock3 size={20}/> {fmt(left)}</div>
+              <div className="levelTimerBtns">
+                <button className="ghost" onClick={() => setLeft(restSeconds)}><RotateCcw size={14}/></button>
+                <button className="add" onClick={() => setRunning(r => !r)}>{running ? <Pause size={16}/> : <Play size={16}/>}</button>
+              </div>
             </div>
-          </div>
+            <div className="modalActions workoutPlayerNav">
+              <button className="ghost" disabled={idx === 0 && setNum === 1} onClick={() => { setPhase("exercise"); setRunning(false); setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0); }}><SkipBack size={15}/> Voltar à série</button>
+              <button className="add" onClick={finishRest}>Pular descanso <SkipForward size={15}/></button>
+            </div>
+          </>
         ) : (
-          <p className="emptyHint">Faça as repetições no seu ritmo e avance quando terminar a série.</p>
-        )}
+          <>
+            <div className="exerciseGifPreview workoutPlayerGif">
+              {ex.gif_url ? <img src={ex.gif_url} alt={ex.name}/> : <Film size={40}/>}
+            </div>
+            <h2 className="workoutPlayerName">{ex.name}</h2>
+            <p className="emptyHint">{totalSets} série{totalSets === 1 ? "" : "s"} de {workoutFmtValue(ex)}{restSeconds > 0 && ` · descanso de ${workoutFmtRest(restSeconds)}`}</p>
 
-        <div className="modalActions workoutPlayerNav">
-          <button className="ghost" disabled={idx === 0} onClick={() => goTo(idx - 1)}><SkipBack size={15}/> Anterior</button>
-          <button className="add" onClick={() => idx === exercises.length - 1 ? onClose() : goTo(idx + 1)}>
-            {idx === exercises.length - 1 ? <>Concluir <Check size={16}/></> : <>Próximo <SkipForward size={15}/></>}
-          </button>
-        </div>
+            {ex.mode === "tempo" ? (
+              <div className="levelTimerRow workoutPlayerTimer">
+                <div className="levelTimer"><Clock3 size={20}/> {fmt(left)}</div>
+                <div className="levelTimerBtns">
+                  <button className="ghost" onClick={() => setLeft(Number(ex.value) || 0)}><RotateCcw size={14}/></button>
+                  <button className="add" onClick={() => setRunning(r => !r)}>{running ? <Pause size={16}/> : <Play size={16}/>}</button>
+                </div>
+              </div>
+            ) : (
+              <p className="emptyHint">Faça as repetições no seu ritmo e conclua a série quando terminar.</p>
+            )}
+
+            <div className="modalActions workoutPlayerNav">
+              <button className="ghost" disabled={idx === 0} onClick={() => goToExercise(idx - 1)}><SkipBack size={15}/> Exercício anterior</button>
+              <button className="add" onClick={finishSet}>
+                {setNum < totalSets ? <>Concluir série <SkipForward size={15}/></> : idx === exercises.length - 1 ? <>Concluir treino <Check size={16}/></> : <>Próximo exercício <SkipForward size={15}/></>}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

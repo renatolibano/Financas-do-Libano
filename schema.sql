@@ -370,3 +370,6 @@ do $$ declare t text; begin foreach t in array array['shopping_items'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Atualização: descanso entre séries de cada exercício do Treino (em segundos)
+alter table workout_exercises add column if not exists rest_seconds int not null default 0;
