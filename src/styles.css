@@ -424,23 +424,6 @@ h1{font-size:23px}
 
 .readerModalFull{width:100vw!important;height:100vh!important;border-radius:0}
 
-.pdfCreatorModal{grid-template-rows:auto 1fr}
-.pdfCreatorBody{min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
-.pdfCreatorHint{color:var(--text-2);font-size:12.5px;line-height:1.5;margin:0}
-.pdfCreatorDrop{flex:1;min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--text-3);border:1px dashed var(--border);border-radius:12px;font-size:13px;transition:box-shadow .2s ease,border-color .2s ease}
-.pdfCreatorDrop.flash{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent)}
-.pdfCreatorPages{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;border-radius:12px;padding:14px}
-.pdfCreatorPages.bgWhite{background:#f3f3f4}
-.pdfCreatorPages.bgBlack{background:#111113}
-.pdfCreatorPage{position:relative;border-radius:10px;overflow:hidden;border:2px solid transparent;cursor:pointer;background:var(--bg-surface-2);box-shadow:0 6px 18px #0004}
-.pdfCreatorPage.active{border-color:var(--accent)}
-.pdfCreatorPage img{display:block;width:100%;max-height:220px;object-fit:contain;background:inherit}
-.pdfCreatorPage .pdfCreatorPageBar{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;font-size:11px;color:var(--text-2);background:var(--bg-surface-3)}
-.pdfCreatorPageActions{display:flex;align-items:center;gap:2px}
-.pdfCreatorPageActions button{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;color:var(--text-2)}
-.pdfCreatorPageActions button:hover:not(:disabled){background:var(--bg-surface-1);color:var(--text-1)}
-.pdfCreatorPageActions button:disabled{opacity:.35}
-
 .whiteboardBody{position:relative;overflow:hidden;padding:0;display:block}
 .whiteboardWhite{background:#f4f4f5}
 .whiteboardBlack{background:#0b0b0c}
@@ -451,6 +434,8 @@ h1{font-size:23px}
 .whiteboardTextLabel{white-space:pre-wrap;line-height:1.25;font-weight:600;cursor:default}
 .whiteboardNav{justify-content:space-between}
 
+.pdfPasteHint{width:100%;margin:2px 0 0;font-size:11.5px;color:var(--text-3);opacity:.85;transition:opacity .2s ease,color .2s ease}
+.pdfPasteHint.flash{color:var(--accent);opacity:1}
 .pdfToolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar)}
 .pdfToolbarGroup{display:flex;align-items:center;gap:4px}
 .pdfToolbarGroup>button{min-width:32px;height:32px;padding:0 9px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text-2);font-size:11.5px;font-weight:700;border:1px solid transparent}

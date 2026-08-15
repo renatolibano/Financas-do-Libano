@@ -26,6 +26,7 @@ import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
+import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
   translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
@@ -1897,7 +1898,7 @@ function AnnotationShape({ ann, preview, onPointerDown }) {
   return null;
 }
 
-function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange }) {
+function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange, onTotalPagesChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
   const [numPages, setNumPages] = useState(pdfDoc.total_pages || 0);
@@ -1942,6 +1943,8 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [selectedAnnId, setSelectedAnnId] = useState(null);
   const [editingTextId, setEditingTextId] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [addingPage, setAddingPage] = useState(false);
+  const [pastePulse, setPastePulse] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
   // Cursor customizado: uma bolinha da cor/espessura da ferramenta atual,
   // que segue o ponteiro (mouse/caneta) e some enquanto o traço está sendo feito.
@@ -1966,6 +1969,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
   const renderTaskRef = useRef(null);
+  const pdfBytesRef = useRef(null); // bytes crus do PDF atual, usados pra anexar página colada
 
   useEffect(() => {
     let active = true;
@@ -1974,6 +1978,10 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         setLoading(true);
         const blob = await downloadStudyPdfFile(pdfDoc.file_path);
         const buf = await blob.arrayBuffer();
+        // Guarda uma cópia antes: pdf.js pode "esvaziar" o ArrayBuffer que
+        // recebe (transferable), então o que sobra pra reaproveitar depois
+        // (colar uma página nova) precisa ser um buffer separado.
+        pdfBytesRef.current = buf.slice(0);
         const doc = await pdfjsLib.getDocument({ data: buf }).promise;
         if (!active) return;
         setPdf(doc);
@@ -1986,6 +1994,69 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     })();
     return () => { active = false; };
   }, [pdfDoc.file_path]);
+
+  // ---- Colar print (Ctrl+V) direto no leitor: vira uma página nova no
+  // final do próprio PDF, e não um arquivo separado montado antes de existir.
+  const appendPastedImage = (file) => {
+    if (!file || !file.type?.startsWith("image/") || !pdfBytesRef.current) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = async () => {
+        try {
+          setAddingPage(true);
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          canvas.getContext("2d").drawImage(img, 0, 0);
+          const dataUrl = canvas.toDataURL("image/png");
+
+          const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, img.width, img.height);
+          const newBuf = await blob.arrayBuffer();
+          pdfBytesRef.current = newBuf.slice(0);
+          const newDoc = await pdfjsLib.getDocument({ data: newBuf }).promise;
+          setPdf(newDoc);
+          setNumPages(newDoc.numPages);
+          setPageNum(newDoc.numPages);
+          onTotalPagesChange?.(pdfDoc.id, newDoc.numPages);
+
+          const { data: userData } = await supabase.auth.getUser();
+          if (userData?.user) {
+            const uploadFile = new File([blob], "page.pdf", { type: "application/pdf" });
+            await uploadStudyPdfFile(userData.user.id, pdfDoc.id, uploadFile);
+          }
+        } catch (e) {
+          console.error(e);
+          alert("Não foi possível colar esse print como página: " + (e.message || e));
+        } finally {
+          setAddingPage(false);
+        }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  useEffect(() => {
+    const handlePaste = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type?.startsWith("image/")) {
+          e.preventDefault();
+          appendPastedImage(item.getAsFile());
+          setPastePulse(true);
+          setTimeout(() => setPastePulse(false), 260);
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDoc.id]);
 
   useEffect(() => {
     if (!pdf) return;
@@ -2560,6 +2631,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
+          <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>
+            {addingPage ? "Adicionando página..." : <>Cole um print com <b>Ctrl+V</b> para virar uma nova página</>}
+          </p>
         </div>
 
         <div className="readerMain">
@@ -2844,7 +2918,6 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
-  const [creatingPdf, setCreatingPdf] = useState(false);
   const [whiteboardOpen, setWhiteboardOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
@@ -2877,6 +2950,32 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       setUploading(false);
     }
   };
+
+  // "Criar PDF" cria o documento em branco e já abre no leitor — os prints
+  // viram páginas de dentro dele (ver paste no StudyPdfReader), não antes.
+  const handleCreatePdf = async () => {
+    if (!cloud) { alert('Criar PDFs precisa de sincronização ativa (Supabase) — veja o README.'); return; }
+    const title = window.prompt("Título do PDF:", "Novo PDF");
+    if (title === null) return; // cancelado
+    try {
+      setUploading(true);
+      const id = crypto.randomUUID();
+      const finalTitle = title.trim() || "Novo PDF";
+      const blob = await createBlankPdfBlob();
+      const file = new File([blob], `${finalTitle}.pdf`, { type: "application/pdf" });
+      const filePath = await uploadStudyPdfFile(session.user.id, id, file);
+      const newDoc = { id, title: finalTitle, file_path: filePath, total_pages: 1, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId };
+      await add(newDoc);
+      setReadingPdf(newDoc);
+    } catch (err) {
+      console.error(err);
+      alert("Não foi possível criar o PDF: " + (err.message || err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onTotalPagesChange = (id, total_pages) => update(id, { total_pages });
 
   const onProgress = (id, page) => {
     clearTimeout(progressTimer.current);
@@ -2989,8 +3088,8 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
           <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
           <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
         </div>
-        <div className="bookTile addTile" onClick={()=>setCreatingPdf(true)}>
-          <div className="bookCoverWrap addCover"><FilePlus2 size={26}/><span>Criar PDF</span></div>
+        <div className="bookTile addTile" onClick={handleCreatePdf}>
+          <div className="bookCoverWrap addCover">{uploading ? <span>Criando...</span> : <><FilePlus2 size={26}/><span>Criar PDF</span></>}</div>
         </div>
         <div className="bookTile addTile" onClick={()=>setWhiteboardOpen(true)}>
           <div className="bookCoverWrap addCover"><LayoutGrid size={26}/><span>Quadro infinito</span></div>
@@ -3052,157 +3151,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onFavoriteExcerptsChange={onFavoriteExcerptsChange}
         onCreateFlashcard={onCreateFlashcard}
         onDrawingsChange={onDrawingsChange}
+        onTotalPagesChange={onTotalPagesChange}
       />}
-      {creatingPdf && <PdfCreator onClose={()=>setCreatingPdf(false)}/>}
       {whiteboardOpen && <Whiteboard onClose={()=>setWhiteboardOpen(false)}/>}
-    </div>
-  );
-}
-
-// ---------- Criar PDF (colar prints com Ctrl+V) ----------
-
-function PdfCreator({ onClose }) {
-  const [pages, setPages] = useState([]); // [{ id, dataUrl, width, height }]
-  const [bg, setBg] = useState("white"); // "white" | "black"
-  const [selectedId, setSelectedId] = useState(null);
-  const [downloading, setDownloading] = useState(false);
-  const [flash, setFlash] = useState(false);
-  const modalRef = useRef(null);
-
-  const addImageFromFile = (file) => {
-    if (!file || !file.type?.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        // Redesenha num canvas e exporta sempre como PNG, evitando problemas
-        // de formato/orientação com o que veio da área de transferência.
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-        const dataUrl = canvas.toDataURL("image/png");
-        const id = crypto.randomUUID();
-        setPages(prev => [...prev, { id, dataUrl, width: img.width, height: img.height }]);
-        setSelectedId(id);
-        setFlash(true);
-        setTimeout(()=>setFlash(false), 260);
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  useEffect(() => {
-    const handlePaste = (e) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of items) {
-        if (item.type?.startsWith("image/")) {
-          e.preventDefault();
-          addImageFromFile(item.getAsFile());
-        }
-      }
-    };
-    window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
-  }, []);
-
-  useEffect(() => {
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith("image/"));
-    files.forEach(addImageFromFile);
-  };
-
-  const removePage = (id) => {
-    setPages(prev => prev.filter(p => p.id !== id));
-    setSelectedId(id2 => id2 === id ? null : id2);
-  };
-
-  const movePage = (id, dir) => {
-    setPages(prev => {
-      const idx = prev.findIndex(p => p.id === id);
-      const newIdx = idx + dir;
-      if (idx === -1 || newIdx < 0 || newIdx >= prev.length) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(idx, 1);
-      next.splice(newIdx, 0, moved);
-      return next;
-    });
-  };
-
-  const handleDownload = async () => {
-    if (!pages.length) { alert("Cole ao menos um print (Ctrl+V) antes de baixar."); return; }
-    try {
-      setDownloading(true);
-      const pageW = 595.28, pageH = 841.89; // A4 em pt
-      const margin = 24;
-      const doc = new jsPDF({ unit: "pt", format: "a4" });
-      const bgColor = bg === "black" ? "#0b0b0c" : "#ffffff";
-      pages.forEach((p, i) => {
-        if (i > 0) doc.addPage();
-        doc.setFillColor(bgColor);
-        doc.rect(0, 0, pageW, pageH, "F");
-        const maxW = pageW - margin * 2;
-        const maxH = pageH - margin * 2;
-        const ratio = Math.min(maxW / p.width, maxH / p.height, 1) || 1;
-        const w = p.width * ratio, h = p.height * ratio;
-        const x = (pageW - w) / 2, y = (pageH - h) / 2;
-        doc.addImage(p.dataUrl, "PNG", x, y, w, h, undefined, "FAST");
-      });
-      doc.save(`pdf_criado_${new Date().toISOString().slice(0,10)}.pdf`);
-    } catch (e) {
-      console.error(e);
-      alert("Não foi possível gerar o PDF: " + (e.message || e));
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <div className="readerBack" onClick={onClose}>
-      <div ref={modalRef} className="readerModal readerModalWide pdfCreatorModal" onClick={(e)=>e.stopPropagation()}>
-        <div className="readerHead">
-          <b>Criar PDF</b>
-          <div className="readerHeadActions">
-            <button title="Fundo branco" className={"ghost"+(bg==="white"?" active":"")} onClick={()=>setBg("white")}><Sun size={15}/> <span>Fundo branco</span></button>
-            <button title="Fundo preto" className={"ghost"+(bg==="black"?" active":"")} onClick={()=>setBg("black")}><Moon size={15}/> <span>Fundo preto</span></button>
-            <button className="ghost" disabled={downloading || !pages.length} onClick={handleDownload}><Download size={15}/> <span>{downloading?"Gerando...":"Baixar PDF"}</span></button>
-            <button onClick={onClose}><X size={18}/></button>
-          </div>
-        </div>
-        <div className="pdfCreatorBody" onDragOver={(e)=>e.preventDefault()} onDrop={handleDrop}>
-          <p className="pdfCreatorHint">
-            Clique aqui e aperte <b>Ctrl+V</b> para colar um print da área de transferência (ou arraste uma imagem). Cada print vira uma página do PDF.
-          </p>
-          {pages.length===0 ? (
-            <div className={"pdfCreatorDrop"+(flash?" flash":"")}><ImagePlus size={32}/><span>Nenhum print colado ainda</span></div>
-          ) : (
-            <div className={"pdfCreatorPages"+(bg==="black"?" bgBlack":" bgWhite")}>
-              {pages.map((p, idx) => (
-                <div key={p.id} className={"pdfCreatorPage"+(selectedId===p.id?" active":"")} onClick={()=>setSelectedId(p.id)}>
-                  <img src={p.dataUrl} alt={`Página ${idx+1}`}/>
-                  <div className="pdfCreatorPageBar">
-                    <span>Pág. {idx+1}</span>
-                    <div className="pdfCreatorPageActions">
-                      <button title="Mover para cima" disabled={idx===0} onClick={(e)=>{e.stopPropagation(); movePage(p.id, -1);}}><ChevronLeft size={14}/></button>
-                      <button title="Mover para baixo" disabled={idx===pages.length-1} onClick={(e)=>{e.stopPropagation(); movePage(p.id, 1);}}><ChevronRight size={14}/></button>
-                      <button title="Remover página" onClick={(e)=>{e.stopPropagation(); removePage(p.id);}}><Trash2 size={14}/></button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
