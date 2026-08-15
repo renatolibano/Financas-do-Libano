@@ -14,10 +14,11 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
+import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
@@ -670,7 +671,7 @@ function App({session,theme,setTheme}){
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
-      {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove}/>}
+      {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
@@ -928,7 +929,7 @@ function OverviewEditModal({overview, auto, onSave, onClose}){
     <button className="primary" type="submit">Salvar</button>
   </form></div>;
 }
-function Transactions({data,onAdd,onDelete}){
+function Transactions({data,onAdd,onDelete,session,bankAvailable,onImported}){
   const [desc,setDesc]=useState(""); const [cat,setCat]=useState(""); const [value,setValue]=useState(""); const [type,setType]=useState("out");
   const submit=()=>{
     if(!desc.trim()||!value) return;
@@ -936,6 +937,7 @@ function Transactions({data,onAdd,onDelete}){
     setDesc("");setCat("");setValue("");setType("out");
   };
   return <div className="content">
+    {bankAvailable && <BankConnect onImported={onImported}/>}
     <div className="panel">
       <div className="inlineAdd">
         <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Descrição"/>
@@ -945,9 +947,70 @@ function Transactions({data,onAdd,onDelete}){
         <button onClick={submit}><Plus/></button>
       </div>
     </div>
-    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
+    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}{x.source==="pluggy" && " · importado do banco"}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
     {data.length===0 && <p className="emptyHint">Nenhuma movimentação por aqui ainda.</p>}
     </div>
+  </div>
+}
+
+// Botão "Conectar banco": abre o widget da Pluggy Connect, e ao concluir manda
+// o item conectado pro servidor sincronizar (edge function pluggy-sync).
+function BankConnect({onImported}){
+  const [PluggyConnect,setPluggyConnect] = useState(null);
+  const [connectToken,setConnectToken] = useState(null);
+  const [opening,setOpening] = useState(false);
+  const [syncing,setSyncing] = useState(false);
+  const [message,setMessage] = useState(null);
+
+  const openWidget = async ()=>{
+    setMessage(null);
+    setOpening(true);
+    try{
+      const [{ PluggyConnect: Widget }, token] = await Promise.all([
+        import("react-pluggy-connect"),
+        getPluggyConnectToken(),
+      ]);
+      setPluggyConnect(()=>Widget);
+      setConnectToken(token);
+    }catch(err){
+      setMessage({type:"error", text: err.message || "Não foi possível abrir a conexão com o banco."});
+    }finally{
+      setOpening(false);
+    }
+  };
+
+  const onSuccess = async (itemData)=>{
+    setConnectToken(null); // fecha o widget
+    setSyncing(true);
+    setMessage(null);
+    try{
+      const itemId = itemData?.item?.id;
+      const result = await syncPluggyItem(itemId);
+      setMessage({type:"success", text: `${result.institutionName}: ${result.imported} movimentações importadas.`});
+      onImported && onImported();
+    }catch(err){
+      setMessage({type:"error", text: err.message || "Banco conectado, mas a importação falhou."});
+    }finally{
+      setSyncing(false);
+    }
+  };
+
+  return <div className="panel">
+    <div className="inlineAdd" style={{alignItems:"center"}}>
+      <button onClick={openWidget} disabled={opening||syncing}>
+        <Landmark size={16}/> {syncing ? "Importando..." : opening ? "Abrindo..." : "Conectar banco"}
+      </button>
+      {message && <small className={message.type==="error"?"negative":"positive"}>{message.text}</small>}
+    </div>
+    {connectToken && PluggyConnect && (
+      <PluggyConnect
+        connectToken={connectToken}
+        includeSandbox={false}
+        onSuccess={onSuccess}
+        onError={()=>setMessage({type:"error", text:"Erro ao conectar com o banco."})}
+        onClose={()=>setConnectToken(null)}
+      />
+    )}
   </div>
 }
 

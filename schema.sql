@@ -373,3 +373,38 @@ end loop; end $$;
 
 -- Atualização: descanso entre séries de cada exercício do Treino (em segundos)
 alter table workout_exercises add column if not exists rest_seconds int not null default 0;
+
+-- Integração bancária via Pluggy (Open Finance)
+-- Guarda a conexão (item) de cada banco ligado pelo usuário.
+create table if not exists bank_connections (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  item_id text not null unique,
+  institution_name text,
+  status text,
+  last_synced_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table bank_connections enable row level security;
+
+do $$ declare t text; begin foreach t in array array['bank_connections'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
+
+-- Marca de onde veio cada movimentação, e o id da transação na Pluggy
+-- (evita duplicar a mesma movimentação importada em mais de uma sincronização).
+alter table transactions add column if not exists source text not null default 'manual' check (source in ('manual','pluggy'));
+alter table transactions add column if not exists pluggy_transaction_id text;
+alter table transactions add column if not exists bank_connection_id uuid references bank_connections(id) on delete set null;
+-- unique (não parcial): no Postgres, colunas NULL nunca conflitam entre si numa
+-- constraint unique, então as movimentações manuais (sem pluggy_transaction_id)
+-- continuam livres — só transações importadas duplicadas são bloqueadas.
+alter table transactions drop constraint if exists transactions_pluggy_transaction_id_key;
+alter table transactions add constraint transactions_pluggy_transaction_id_key unique (pluggy_transaction_id);

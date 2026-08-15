@@ -51,6 +51,31 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
    ```
 6. Pronto — no app, entre logado e clique em "Perguntar à IA" na Visão Geral. O botão de IA só funciona com sincronização ativa (a função exige login).
 
+## Ativar a integração bancária (Pluggy)
+
+O Libano pode importar movimentações direto do seu banco via [Pluggy](https://pluggy.ai), um agregador de Open Finance. Isso também roda em Supabase Edge Functions — suas credenciais bancárias nunca passam pelo navegador nem pelos servidores do Libano, só pela Pluggy.
+
+1. Crie uma conta em [dashboard.pluggy.ai](https://dashboard.pluggy.ai) e pegue seu `CLIENT_ID` e `CLIENT_SECRET` (aba API Keys/Applications).
+2. Configure os segredos do projeto:
+   ```
+   supabase secrets set PLUGGY_CLIENT_ID=seu-client-id
+   supabase secrets set PLUGGY_CLIENT_SECRET=seu-client-secret
+   ```
+3. Publique as duas funções novas:
+   ```
+   supabase functions deploy pluggy-connect-token
+   supabase functions deploy pluggy-sync
+   ```
+4. Rode novamente o `schema.sql` no SQL Editor do Supabase (ele é idempotente — cria só o que ainda não existe, como a tabela `bank_connections` e as colunas novas em `transactions`).
+5. Rode `npm install` (adiciona o pacote `react-pluggy-connect`, o widget oficial da Pluggy).
+6. No app, vá em Movimentações e clique em "Conectar banco". A Pluggy abre uma janela pra você escolher o banco e logar com suas credenciais — nada disso passa pelo Libano.
+7. Ao concluir, as movimentações dos últimos 90 dias são importadas automaticamente pro Extrato, marcadas como "importado do banco".
+
+Observações:
+- O plano gratuito da Pluggy tem limite de conexões simultâneas — dá pra testar tranquilo com uma ou duas contas.
+- Rodar de novo o "Conectar banco" volta a sincronizar (dá pra usar isso como botão de atualizar); movimentações já importadas não duplicam.
+- Se quiser sincronização automática/periódica (sem precisar clicar), o próximo passo seria configurar um Webhook da Pluggy apontando pra uma função que chama a `pluggy-sync` sozinha — hoje a sincronização é sob demanda, pelo botão.
+
 ## O que já funciona
 
 - Dashboard visual responsivo.
@@ -66,6 +91,7 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
 - Dados salvos localmente (funciona offline).
 - Sincronização real entre dispositivos via Supabase (login por e-mail/senha), quando configurado.
 - Análise de gastos por IA real (Gemini, via Supabase Edge Function), quando configurada.
+- Importação de extrato bancário real via Pluggy (Open Finance), quando configurada.
 - Estante virtual de livros em PDF, com leitor embutido, capa gerada automaticamente a partir do PDF, e progresso de leitura salvo por livro (retoma exatamente na página em que parou). Precisa de sincronização ativa (os arquivos ficam no Supabase Storage).
 - Layout adaptado para celular e PC.
 
