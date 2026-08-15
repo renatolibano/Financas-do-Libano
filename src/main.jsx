@@ -14,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -23,6 +23,7 @@ import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
+import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
 import {
@@ -2843,6 +2844,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
+  const [creatingPdf, setCreatingPdf] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [dragOverGroupId, setDragOverGroupId] = useState(null);
@@ -2986,6 +2988,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
           <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
           <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
         </div>
+        <div className="bookTile addTile" onClick={()=>setCreatingPdf(true)}>
+          <div className="bookCoverWrap addCover"><FilePlus2 size={26}/><span>Criar PDF</span></div>
+        </div>
         {!currentGroup && (
           <div className="bookTile addTile" onClick={handleNewGroup}>
             <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Nova pasta</span></div>
@@ -3044,6 +3049,155 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onCreateFlashcard={onCreateFlashcard}
         onDrawingsChange={onDrawingsChange}
       />}
+      {creatingPdf && <PdfCreator onClose={()=>setCreatingPdf(false)}/>}
+    </div>
+  );
+}
+
+// ---------- Criar PDF (colar prints com Ctrl+V) ----------
+
+function PdfCreator({ onClose }) {
+  const [pages, setPages] = useState([]); // [{ id, dataUrl, width, height }]
+  const [bg, setBg] = useState("white"); // "white" | "black"
+  const [selectedId, setSelectedId] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const modalRef = useRef(null);
+
+  const addImageFromFile = (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        // Redesenha num canvas e exporta sempre como PNG, evitando problemas
+        // de formato/orientação com o que veio da área de transferência.
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        const dataUrl = canvas.toDataURL("image/png");
+        const id = crypto.randomUUID();
+        setPages(prev => [...prev, { id, dataUrl, width: img.width, height: img.height }]);
+        setSelectedId(id);
+        setFlash(true);
+        setTimeout(()=>setFlash(false), 260);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  useEffect(() => {
+    const handlePaste = (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type?.startsWith("image/")) {
+          e.preventDefault();
+          addImageFromFile(item.getAsFile());
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, []);
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith("image/"));
+    files.forEach(addImageFromFile);
+  };
+
+  const removePage = (id) => {
+    setPages(prev => prev.filter(p => p.id !== id));
+    setSelectedId(id2 => id2 === id ? null : id2);
+  };
+
+  const movePage = (id, dir) => {
+    setPages(prev => {
+      const idx = prev.findIndex(p => p.id === id);
+      const newIdx = idx + dir;
+      if (idx === -1 || newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(newIdx, 0, moved);
+      return next;
+    });
+  };
+
+  const handleDownload = async () => {
+    if (!pages.length) { alert("Cole ao menos um print (Ctrl+V) antes de baixar."); return; }
+    try {
+      setDownloading(true);
+      const pageW = 595.28, pageH = 841.89; // A4 em pt
+      const margin = 24;
+      const doc = new jsPDF({ unit: "pt", format: "a4" });
+      const bgColor = bg === "black" ? "#0b0b0c" : "#ffffff";
+      pages.forEach((p, i) => {
+        if (i > 0) doc.addPage();
+        doc.setFillColor(bgColor);
+        doc.rect(0, 0, pageW, pageH, "F");
+        const maxW = pageW - margin * 2;
+        const maxH = pageH - margin * 2;
+        const ratio = Math.min(maxW / p.width, maxH / p.height, 1) || 1;
+        const w = p.width * ratio, h = p.height * ratio;
+        const x = (pageW - w) / 2, y = (pageH - h) / 2;
+        doc.addImage(p.dataUrl, "PNG", x, y, w, h, undefined, "FAST");
+      });
+      doc.save(`pdf_criado_${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível gerar o PDF: " + (e.message || e));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <div ref={modalRef} className="readerModal readerModalWide pdfCreatorModal" onClick={(e)=>e.stopPropagation()}>
+        <div className="readerHead">
+          <b>Criar PDF</b>
+          <div className="readerHeadActions">
+            <button title="Fundo branco" className={"ghost"+(bg==="white"?" active":"")} onClick={()=>setBg("white")}><Sun size={15}/> <span>Fundo branco</span></button>
+            <button title="Fundo preto" className={"ghost"+(bg==="black"?" active":"")} onClick={()=>setBg("black")}><Moon size={15}/> <span>Fundo preto</span></button>
+            <button className="ghost" disabled={downloading || !pages.length} onClick={handleDownload}><Download size={15}/> <span>{downloading?"Gerando...":"Baixar PDF"}</span></button>
+            <button onClick={onClose}><X size={18}/></button>
+          </div>
+        </div>
+        <div className="pdfCreatorBody" onDragOver={(e)=>e.preventDefault()} onDrop={handleDrop}>
+          <p className="pdfCreatorHint">
+            Clique aqui e aperte <b>Ctrl+V</b> para colar um print da área de transferência (ou arraste uma imagem). Cada print vira uma página do PDF.
+          </p>
+          {pages.length===0 ? (
+            <div className={"pdfCreatorDrop"+(flash?" flash":"")}><ImagePlus size={32}/><span>Nenhum print colado ainda</span></div>
+          ) : (
+            <div className={"pdfCreatorPages"+(bg==="black"?" bgBlack":" bgWhite")}>
+              {pages.map((p, idx) => (
+                <div key={p.id} className={"pdfCreatorPage"+(selectedId===p.id?" active":"")} onClick={()=>setSelectedId(p.id)}>
+                  <img src={p.dataUrl} alt={`Página ${idx+1}`}/>
+                  <div className="pdfCreatorPageBar">
+                    <span>Pág. {idx+1}</span>
+                    <div className="pdfCreatorPageActions">
+                      <button title="Mover para cima" disabled={idx===0} onClick={(e)=>{e.stopPropagation(); movePage(p.id, -1);}}><ChevronLeft size={14}/></button>
+                      <button title="Mover para baixo" disabled={idx===pages.length-1} onClick={(e)=>{e.stopPropagation(); movePage(p.id, 1);}}><ChevronRight size={14}/></button>
+                      <button title="Remover página" onClick={(e)=>{e.stopPropagation(); removePage(p.id);}}><Trash2 size={14}/></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
