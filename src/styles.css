@@ -254,6 +254,8 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .themeToggle button{flex:1;padding:9px 10px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--text-2);display:flex;align-items:center;justify-content:center;gap:6px}
 .themeToggle button.active{background:var(--accent);color:var(--accent-text-on)}
 @media(max-width:1050px){.stats{grid-template-columns:repeat(2,1fr)}.grid3{grid-template-columns:1fr 1fr}.mini{grid-column:span 2}}
+/* Visão Geral - layout compacto para celular, estilo "cofrinho" com saldo censurável */
+.mobileOverview{display:none;flex-direction:column;gap:14px}
 @media(max-width:760px){
 .sidebar{display:none}
 main{width:100%;margin-left:0;padding:20px 15px 74px}
@@ -274,9 +276,6 @@ h1{font-size:23px}
 .mobileOverview{display:flex}
 }
 @media(max-width:430px){.stats{grid-template-columns:1fr}.stat{min-height:100px}}
-
-/* Visão Geral - layout compacto para celular, estilo "cofrinho" com saldo censurável */
-.mobileOverview{display:none;flex-direction:column;gap:14px}
 
 /* Barra de navegação inferior (celular): fica escondida, só a setinha central some ao toque */
 .mobileTabBar{display:none}
