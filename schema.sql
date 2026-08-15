@@ -346,3 +346,27 @@ do $$ declare t text; begin foreach t in array array['workout_folders','workout_
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Finanças: Lista de compras (itens com foto, preço e link para a loja)
+create table if not exists shopping_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  price numeric,
+  link text,
+  photo text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table shopping_items enable row level security;
+
+do $$ declare t text; begin foreach t in array array['shopping_items'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

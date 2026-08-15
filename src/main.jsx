@@ -12,7 +12,8 @@ import {
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
-  Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown
+  Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown,
+  ShoppingCart, ExternalLink
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -427,6 +428,7 @@ function App({session,theme,setTheme}){
   const studyGoals = useEntity("study_goals", initialStudyGoals, session);
   const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true});
   const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true});
+  const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
@@ -549,6 +551,7 @@ function App({session,theme,setTheme}){
       { key:"Orçamento", icon:PiggyBank },
       { key:"Metas", icon:Target },
       { key:"Recorrentes", icon:Repeat2 },
+      { key:"Lista de Compras", label:"Lista de compras", icon:ShoppingCart },
     ]},
     { type:"group", key:"lembretes", label:"Lembretes", icon:Bell, children:[
       { key:"Lembretes Comuns", label:"Lembretes comuns", icon:Bell },
@@ -643,6 +646,7 @@ function App({session,theme,setTheme}){
       {page==="Orçamento" && <Budgets entity={budgets} transactions={monthTransactions} month={selectedMonth}/>}
       {page==="Metas" && <Goals entity={goals}/>}
       {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
+      {page==="Lista de Compras" && <ShoppingList entity={shoppingItems}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
@@ -2820,6 +2824,148 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onCreateFlashcard={onCreateFlashcard}
         onDrawingsChange={onDrawingsChange}
       />}
+    </div>
+  );
+}
+
+// ---------- Lista de compras (Finanças) ----------
+
+function ShoppingList({ entity }) {
+  const { data, add, remove, update } = entity;
+  const [formOpen, setFormOpen] = useState(null); // null | "new" | item sendo editado
+  const [openMenuId, setOpenMenuId] = useState(null);
+
+  const confirmDelete = (item) => {
+    setOpenMenuId(null);
+    if (confirm(`Excluir "${item.name}" da lista de compras?`)) remove(item.id);
+  };
+
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><ShoppingCart size={22}/></div>
+          <div>
+            <small>FINANÇAS</small>
+            <h2>Lista de compras</h2>
+            <p>Guarde os itens que você quer comprar, com foto, preço e o link da loja.</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          <button className="add" onClick={(e) => { e.stopPropagation(); setFormOpen("new"); }}><Plus size={16}/> Adicionar item</button>
+        </div>
+      </div>
+
+      {data.length === 0 ? (
+        <div className="flashEmpty">
+          <div className="flashEmptyIcon"><ShoppingCart size={30}/></div>
+          <h3>Nenhum item ainda</h3>
+          <p>Adicione o que você quer comprar: uma foto, o nome, o preço e um link pra loja de sua preferência.</p>
+          <button className="add" onClick={() => setFormOpen("new")}><Plus size={16}/> Adicionar meu primeiro item</button>
+        </div>
+      ) : (
+        <div className="shelf">
+          {data.map(item => (
+            <ShoppingItemTile
+              key={item.id}
+              item={item}
+              menuOpen={openMenuId === item.id}
+              onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(id => id === item.id ? null : item.id); }}
+              onEdit={() => { setOpenMenuId(null); setFormOpen(item); }}
+              onDelete={() => confirmDelete(item)}
+            />
+          ))}
+        </div>
+      )}
+
+      {formOpen && (
+        <ShoppingItemModal
+          item={formOpen === "new" ? null : formOpen}
+          onClose={() => setFormOpen(null)}
+          onSave={(payload) => {
+            if (formOpen === "new") add({ id: crypto.randomUUID(), ...payload });
+            else update(formOpen.id, payload);
+            setFormOpen(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShoppingItemTile({ item, menuOpen, onToggleMenu, onEdit, onDelete }) {
+  return (
+    <div className="bookTile" onClick={(e) => e.stopPropagation()}>
+      <div className="bookCoverWrap shoppingCover" onClick={onEdit}>
+        {item.photo
+          ? <div className="bookCoverImg"><img src={item.photo} alt={item.name}/></div>
+          : <ShoppingCart size={30}/>}
+      </div>
+      <button className="bookMenuBtn" onClick={onToggleMenu}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onEdit}><Pencil size={13}/> Editar</button>
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+      </div>}
+      <b className="bookTitle">{item.name}</b>
+      {item.price != null && item.price !== "" && <small className="bookProgressLabel shoppingPrice">{money(Number(item.price) || 0)}</small>}
+      {item.link && (
+        <a className="ghost shoppingLinkBtn" href={item.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+          <ExternalLink size={13}/> Ir para a loja
+        </a>
+      )}
+    </div>
+  );
+}
+
+function ShoppingItemModal({ item, onClose, onSave }) {
+  const [name, setName] = useState(item?.name || "");
+  const [price, setPrice] = useState(item?.price ?? "");
+  const [link, setLink] = useState(item?.link || "");
+  const [photo, setPhoto] = useState(item?.photo || "");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+      setPhoto(dataUrl);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    }
+    setUploading(false);
+  };
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    onSave({ name: name.trim(), price: price === "" ? null : Number(price), link: link.trim() || null, photo: photo || null });
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{item ? "Editar item" : "Novo item"}</h2><button type="button" onClick={onClose}><X/></button></div>
+
+        <label>Foto do produto
+          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => fileRef.current?.click()}>
+            {photo ? <img src={photo} alt="Prévia"/> : <ShoppingCart size={28}/>}
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleFile(f); }}/>
+          <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>{uploading ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
+          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+        </label>
+
+        <label>Nome do produto<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Tênis de corrida" onKeyDown={e => { if (e.key === "Enter" && name.trim()) handleSubmit(); }}/></label>
+        <label>Preço<input type="number" min="0" step="0.01" value={price} onChange={e => setPrice(e.target.value)} placeholder="0,00"/></label>
+        <label>Link da loja<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
+
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!name.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
     </div>
   );
 }

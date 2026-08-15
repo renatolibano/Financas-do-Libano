@@ -857,3 +857,9 @@ h1{font-size:23px}
   .exerciseFormGrid{grid-template-columns:1fr}
   .exerciseGifPreview{max-width:100%}
 }
+
+/* ---------- Lista de compras (Finanças) ---------- */
+.shoppingCover{cursor:pointer}
+.shoppingPrice{color:var(--accent-2);font-weight:800;font-size:13px}
+.shoppingLinkBtn{margin-top:4px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:11.5px;text-decoration:none}
+.shoppingPhotoPreview{width:100%;max-width:180px;aspect-ratio:1/1;cursor:pointer}
