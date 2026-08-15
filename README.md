@@ -31,7 +31,7 @@ Por padrão, o Supabase pede confirmação por e-mail ao criar conta. Se quiser 
 
 ## Ativar a IA real
 
-A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functions/ai-insights`), que chama a API da Anthropic (Claude) com sua própria chave, guardada **só no servidor** — nunca no navegador. Isso exige que a sincronização (passo acima) já esteja configurada.
+A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functions/ai-insights`), que chama a API do Gemini (Google) com sua própria chave, guardada **só no servidor** — nunca no navegador. Isso exige que a sincronização (passo acima) já esteja configurada.
 
 1. Instale a CLI do Supabase: `npm install -g supabase` (ou veja outras opções em supabase.com/docs/guides/cli).
 2. Faça login e associe este projeto ao seu projeto Supabase:
@@ -40,10 +40,10 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
    supabase link --project-ref SEU-PROJECT-REF
    ```
    (o `project-ref` aparece na URL do painel do Supabase, ex.: `abcdefghijk`)
-3. Pegue uma chave de API em console.anthropic.com (aba API Keys).
+3. Pegue uma chave de API em aistudio.google.com/apikey.
 4. Configure a chave como segredo do projeto (fica só no servidor):
    ```
-   supabase secrets set ANTHROPIC_API_KEY=sk-ant-sua-chave
+   supabase secrets set GEMINI_API_KEY=sua-chave-aqui
    ```
 5. Publique a função:
    ```
@@ -65,7 +65,7 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
 - Livros, com adicionar/excluir e mover entre "já li" e "quero ler".
 - Dados salvos localmente (funciona offline).
 - Sincronização real entre dispositivos via Supabase (login por e-mail/senha), quando configurado.
-- Análise de gastos por IA real (Claude, via Supabase Edge Function), quando configurada.
+- Análise de gastos por IA real (Gemini, via Supabase Edge Function), quando configurada.
 - Estante virtual de livros em PDF, com leitor embutido, capa gerada automaticamente a partir do PDF, e progresso de leitura salvo por livro (retoma exatamente na página em que parou). Precisa de sincronização ativa (os arquivos ficam no Supabase Storage).
 - Layout adaptado para celular e PC.
 

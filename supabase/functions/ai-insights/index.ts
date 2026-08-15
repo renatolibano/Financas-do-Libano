@@ -1,15 +1,16 @@
 // Edge Function: ai-insights
 // Recebe um resumo financeiro do app Libano e devolve uma análise gerada
-// pela API da Anthropic (Claude). A chave da API fica só aqui no servidor —
+// pela API do Gemini (Google). A chave da API fica só aqui no servidor —
 // nunca é exposta ao navegador.
 //
 // Deploy: supabase functions deploy ai-insights
 // Configurar a chave secreta (uma vez só):
-//   supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+//   supabase secrets set GEMINI_API_KEY=AIza...
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+const GEMINI_MODEL = "gemini-2.5-flash";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY");
 
@@ -24,9 +25,9 @@ Deno.serve(async (req) => {
   }
 
   try {
-    if (!ANTHROPIC_API_KEY) {
+    if (!GEMINI_API_KEY) {
       return new Response(
-        JSON.stringify({ error: "ANTHROPIC_API_KEY não configurada no projeto Supabase." }),
+        JSON.stringify({ error: "GEMINI_API_KEY não configurada no projeto Supabase." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -68,25 +69,37 @@ Deno.serve(async (req) => {
 
 Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Brasil, tom direto e acolhedor) destacando padrões, pontos de atenção e uma sugestão prática. Não dê conselhos de investimento específicos nem invente dados que não foram fornecidos. Não use markdown, apenas texto corrido.`;
 
-    const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-5",
-        max_tokens: 500,
-        system:
-          "Você é um assistente financeiro dentro do app Libano. Seja objetivo, gentil e nunca prescritivo — ofereça observações e opções, não ordens. Nunca invente números que não foram passados a você.",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    const aiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [
+              {
+                text: "Você é um assistente financeiro dentro do app Libano. Seja objetivo, gentil e nunca prescritivo — ofereça observações e opções, não ordens. Nunca invente números que não foram passados a você.",
+              },
+            ],
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: 500,
+          },
+        }),
+      }
+    );
 
     if (!aiRes.ok) {
       const errText = await aiRes.text();
-      console.error("Anthropic API error:", errText);
+      console.error("Gemini API error:", errText);
       return new Response(JSON.stringify({ error: "Falha ao consultar a IA." }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -94,11 +107,19 @@ Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Br
     }
 
     const aiData = await aiRes.json();
-    const text = (aiData.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
+    const text = (aiData.candidates?.[0]?.content?.parts || [])
+      .filter((p) => typeof p.text === "string")
+      .map((p) => p.text)
       .join("\n")
       .trim();
+
+    if (!text) {
+      console.error("Gemini retornou sem texto:", JSON.stringify(aiData));
+      return new Response(JSON.stringify({ error: "A IA não retornou uma resposta." }), {
+        status: 502,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     return new Response(JSON.stringify({ insight: text }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
