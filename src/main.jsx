@@ -1,5 +1,6 @@
 import React, {useMemo, useState, useEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
+import {createPortal} from "react-dom";
 import {
   LayoutDashboard, ArrowLeftRight, CreditCard, CircleDollarSign,
   CalendarClock, Bell, StickyNote, Bot, Plus, TrendingUp, TrendingDown,
@@ -13,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink
+  ShoppingCart, ExternalLink, PictureInPicture2
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -4390,6 +4391,7 @@ function Nivelamento(){
   const [seconds,setSeconds] = useState(0);
   const [paused,setPaused] = useState(false);
   const [lastResult,setLastResult] = useState(null);
+  const [pipWindow,setPipWindow] = useState(null);
   const timerRef = useRef(null);
 
   const parsed = levelParsePattern(pattern);
@@ -4400,6 +4402,52 @@ function Nivelamento(){
       return ()=>clearInterval(timerRef.current);
     }
   },[phase,paused]);
+
+  // Fecha a janela de picture-in-picture (se estiver aberta) quando a página some ou o nivelamento termina.
+  useEffect(()=>{
+    if(!pipWindow) return;
+    const onPageHide = ()=>setPipWindow(null);
+    pipWindow.addEventListener("pagehide", onPageHide);
+    return ()=>pipWindow.removeEventListener("pagehide", onPageHide);
+  },[pipWindow]);
+  useEffect(()=>{
+    if(phase!=="running" && pipWindow){ pipWindow.close(); setPipWindow(null); }
+  },[phase]);
+  useEffect(()=>()=>{ if(pipWindow) pipWindow.close(); },[]);
+
+  const openPip = async ()=>{
+    if(!("documentPictureInPicture" in window)){
+      toast("Seu navegador não suporta picture-in-picture.", "error");
+      return;
+    }
+    try{
+      const pipWin = await window.documentPictureInPicture.requestWindow({width:280, height:230});
+      pipWin.document.title = "Nivelamento";
+      [...document.styleSheets].forEach(sheet=>{
+        try{
+          const rules = [...sheet.cssRules].map(r=>r.cssText).join("");
+          const style = pipWin.document.createElement("style");
+          style.textContent = rules;
+          pipWin.document.head.appendChild(style);
+        }catch(e){
+          if(sheet.href){
+            const link = pipWin.document.createElement("link");
+            link.rel = "stylesheet"; link.href = sheet.href;
+            pipWin.document.head.appendChild(link);
+          }
+        }
+      });
+      const theme = document.documentElement.getAttribute("data-theme") || document.body.getAttribute("data-theme");
+      if(theme) pipWin.document.documentElement.setAttribute("data-theme", theme);
+      pipWin.document.body.style.margin = "0";
+      pipWin.document.body.style.background = "var(--bg-grad-3)";
+      pipWin.document.body.style.overflow = "hidden";
+      setPipWindow(pipWin);
+    }catch(err){
+      toast("Não foi possível abrir o picture-in-picture.", "error");
+    }
+  };
+  const closePip = ()=>{ if(pipWindow) pipWindow.close(); setPipWindow(null); };
 
   const start = ()=>{
     if(!parsed){ toast("Use o formato acertos/total, ex: 4/5", "error"); return; }
@@ -4475,8 +4523,27 @@ function Nivelamento(){
     {phase==="running" && parsed && <div className="levelRunCard">
       <div className="levelRunHead">
         <div><h3>Nivelamento em progresso</h3><small>Padrão: {parsed.need}/{parsed.win}</small></div>
-        <button className="levelExitBtn" onClick={exitRunning} title="Sair"><X size={18}/></button>
+        <div className="levelRunHeadBtns">
+          <button className="levelExitBtn" onClick={pipWindow?closePip:openPip} title={pipWindow?"Fechar picture-in-picture":"Abrir em picture-in-picture"}>
+            <PictureInPicture2 size={17}/>
+          </button>
+          <button className="levelExitBtn" onClick={exitRunning} title="Sair"><X size={18}/></button>
+        </div>
       </div>
+
+      {pipWindow && createPortal(
+        <div className="levelPipContent">
+          <div className="levelHistoryRow">
+            {history.length===0 && <span className="emptyHint">Nenhuma resposta ainda.</span>}
+            {history.map((c,i)=><div key={i} className={"levelDot "+(c?"correct":"wrong")}>{i+1}</div>)}
+          </div>
+          <div className="levelAnswerBtns levelPipAnswerBtns">
+            <button className="levelBtn correct" onClick={()=>answer(true)} disabled={paused}><CheckCircle2 size={17}/> Correta</button>
+            <button className="levelBtn wrong" onClick={()=>answer(false)} disabled={paused}><X size={17}/> Errada</button>
+          </div>
+        </div>,
+        pipWindow.document.body
+      )}
 
       <div className="levelHistoryRow">
         {history.length===0 && <span className="emptyHint">Nenhuma questão respondida ainda.</span>}

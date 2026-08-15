@@ -854,8 +854,11 @@ h1{font-size:23px}
 .levelRunHead{display:flex;align-items:flex-start;justify-content:space-between}
 .levelRunHead h3{margin:0 0 3px;font-size:17px}
 .levelRunHead small{color:var(--text-2);font-size:12px}
+.levelRunHeadBtns{display:flex;gap:8px}
 .levelExitBtn{width:34px;height:34px;border-radius:10px;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-2);display:grid;place-items:center}
 .levelExitBtn:hover{color:#ff9d9d;border-color:var(--border-danger)}
+.levelPipContent{padding:14px;display:grid;gap:12px;min-height:100vh;background:var(--bg-grad-3)}
+.levelPipAnswerBtns{grid-template-columns:1fr 1fr}
 .levelHistoryRow{display:flex;flex-wrap:wrap;gap:8px}
 .levelDot{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff}
 .levelDot.correct{background:#3ecf6a}
