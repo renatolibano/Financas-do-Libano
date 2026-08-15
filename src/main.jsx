@@ -11,7 +11,7 @@ import {
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
-  Upload, Popcorn, Clapperboard, Play, Pause
+  Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -565,6 +565,7 @@ function App({session,theme,setTheme}){
     { type:"group", key:"lazer", label:"Área de Lazer", icon:Popcorn, children:[
       { key:"Treino", icon:Dumbbell },
       { key:"Filmes e Séries", icon:Clapperboard },
+      { key:"Jogos", icon:Gamepad2 },
     ]},
   ];
   const [openGroups,setOpenGroups] = useState({});
@@ -650,6 +651,7 @@ function App({session,theme,setTheme}){
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
       {page==="Treino" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
       {page==="Filmes e Séries" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Jogos" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       <ToastHost/>
 
@@ -3187,6 +3189,9 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage 
           <button title="Sublinhado" onClick={()=>exec("underline")}><Underline size={14}/></button>
           <span className="noteToolDivider"/>
           <button title="Marcador de texto amarelo" onClick={()=>exec("hiliteColor", FLASH_HIGHLIGHT_COLOR)}><Highlighter size={14}/></button>
+          <span className="noteToolDivider"/>
+          <button title="Lista com marcadores" onClick={()=>exec("insertUnorderedList")}><List size={14}/></button>
+          <button title="Lista numerada (1, 2, 3)" onClick={()=>exec("insertOrderedList")}><ListOrdered size={14}/></button>
         </div>
         <button onClick={()=>onRemove(row.id)}><Trash2 size={14}/></button>
       </div>
