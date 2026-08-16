@@ -3372,7 +3372,7 @@ function WhiteboardLibrary({ onClose }) {
 
   if (editingId) {
     const board = boards.find(b => b.id === editingId);
-    if (board) return <Whiteboard board={board} onClose={() => setEditingId(null)} onSave={patch => saveBoard(board.id, patch)}/>;
+    if (board) return <WhiteboardErrorBoundary board={board} onClose={() => setEditingId(null)} onSave={patch => saveBoard(board.id, patch)}/>;
   }
 
   return (
@@ -3410,6 +3410,38 @@ function WhiteboardLibrary({ onClose }) {
       </div>
     </div>
   );
+}
+
+// Isola qualquer erro inesperado dentro do quadro infinito. Sem isso, um erro
+// não tratado em qualquer lugar do React derruba a árvore inteira do app,
+// deixando a tela preta/em branco até recarregar a aba. Com isso, o erro fica
+// contido aqui dentro e a pessoa consegue fechar (ou recentralizar) sem sair
+// do app nem perder o resto do quadro.
+class WhiteboardErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Erro no quadro infinito:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="readerBack" onClick={this.props.onClose}>
+          <div className="readerModal" onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: 32, textAlign: "center" }}>
+            <b>O quadro travou num erro inesperado</b>
+            <p className="penHint" style={{ maxWidth: 360 }}>Seus desenhos foram salvos automaticamente até a última alteração. Feche e abra o quadro de novo pra continuar.</p>
+            <button className="ghost" onClick={() => { this.setState({ error: null }); this.props.onClose(); }}><X size={15}/> <span>Fechar quadro</span></button>
+          </div>
+        </div>
+      );
+    }
+    return <Whiteboard {...this.props}/>;
+  }
 }
 
 function Whiteboard({ board, onClose, onSave }) {
@@ -3562,7 +3594,7 @@ function Whiteboard({ board, onClose, onSave }) {
     setSelectedId(null);
   };
 
-  const handleSelectPointerDown = (x, y) => {
+  const handleSelectPointerDown = (x, y, pointerId) => {
     if (selectedId) {
       const sel = elements.find(a => a.id === selectedId);
       if (sel && (sel.type === "shape" || sel.type === "image")) {
@@ -3570,7 +3602,7 @@ function Whiteboard({ board, onClose, onSave }) {
         const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
         if (Math.hypot(x - cx, y - cy) < 14 / view.zoom) {
           pushHistory();
-          dragRef.current = { mode: "resize", id: sel.id };
+          dragRef.current = { mode: "resize", id: sel.id, pointerId };
           return;
         }
       }
@@ -3579,7 +3611,7 @@ function Whiteboard({ board, onClose, onSave }) {
     if (hit) {
       setSelectedId(hit.id);
       pushHistory();
-      dragRef.current = { mode: "move", id: hit.id, lastX: x, lastY: y };
+      dragRef.current = { mode: "move", id: hit.id, lastX: x, lastY: y, pointerId };
     } else {
       setSelectedId(null);
     }
@@ -3701,7 +3733,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const handlePointerDown = (e) => {
     if (e.button === 1 || isPanning()) {
       e.preventDefault();
-      panRef.current = { startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
+      panRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
       try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
       return;
     }
@@ -3709,7 +3741,7 @@ function Whiteboard({ board, onClose, onSave }) {
     try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
-      isDrawingRef.current = true;
+      isDrawingRef.current = e.pointerId;
       setLiveEl({
         id: crypto.randomUUID(), type: "stroke", tool,
         color: tool === "highlighter" ? hlColor : color,
@@ -3719,31 +3751,35 @@ function Whiteboard({ board, onClose, onSave }) {
         points: [{ x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }],
       });
     } else if (tool === "shape") {
-      isDrawingRef.current = true;
+      isDrawingRef.current = e.pointerId;
       setLiveEl({ id: crypto.randomUUID(), type: "shape", shape: shapeType, color, width: thickness, opacity, x1: x, y1: y, x2: x, y2: y });
     } else if (tool === "eraser") {
-      isDrawingRef.current = true;
+      isDrawingRef.current = e.pointerId;
       if (eraserMode === "object") eraseObjectAt(x, y); else eraseRadiusAt(x, y);
     } else if (tool === "text") {
       addTextElement(x, y);
     } else if (tool === "select") {
-      handleSelectPointerDown(x, y);
+      handleSelectPointerDown(x, y, e.pointerId);
     }
   };
 
   const handlePointerMove = (e) => {
     if (panRef.current) {
+      // Ignora eventos de um ponteiro diferente do que iniciou o arraste —
+      // touchpads às vezes emitem eventos de outro pointerId no meio do
+      // gesto, e sem essa checagem isso teleporta a visão pra qualquer lugar.
+      if (e.pointerId !== panRef.current.pointerId) return;
       const dx = e.clientX - panRef.current.startX, dy = e.clientY - panRef.current.startY;
       setView(v => ({ ...v, x: panRef.current.viewX + dx, y: panRef.current.viewY + dy }));
       return;
     }
     if (tool === "select") {
-      if (!dragRef.current) return;
+      if (!dragRef.current || e.pointerId !== dragRef.current.pointerId) return;
       const { x, y } = toWorld(e.clientX, e.clientY);
       handleSelectPointerMove(x, y);
       return;
     }
-    if (!isDrawingRef.current) return;
+    if (!isDrawingRef.current || e.pointerId !== isDrawingRef.current) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
       setLiveEl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
@@ -3754,8 +3790,12 @@ function Whiteboard({ board, onClose, onSave }) {
     }
   };
 
-  const handlePointerUp = () => {
-    if (panRef.current) { panRef.current = null; return; }
+  const handlePointerUp = (e) => {
+    if (panRef.current) {
+      if (e && e.pointerId !== panRef.current.pointerId) return;
+      panRef.current = null;
+      return;
+    }
     if (tool === "select") { dragRef.current = null; return; }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
     if (!isDrawingRef.current) return;
@@ -3972,7 +4012,7 @@ function Whiteboard({ board, onClose, onSave }) {
                       <div
                         className="whiteboardTextLabel"
                         style={{ color: el.color, fontSize: el.fontSize, pointerEvents: tool === "select" ? "auto" : "none" }}
-                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y }; } }}
+                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
                         onDoubleClick={() => setEditingTextId(el.id)}
                       >
                         {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
@@ -3995,7 +4035,7 @@ function Whiteboard({ board, onClose, onSave }) {
                           r={6 / view.zoom}
                           fill="var(--accent)"
                           style={{ cursor: "nwse-resize" }}
-                          onPointerDown={e => { e.stopPropagation(); pushHistory(); dragRef.current = { mode: "resize", id: el.id }; }}
+                          onPointerDown={e => { e.stopPropagation(); pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
                         />
                       )}
                     </g>
