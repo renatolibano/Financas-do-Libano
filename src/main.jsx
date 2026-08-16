@@ -103,16 +103,21 @@ const maskMoney = (n, hidden) => hidden ? "R$ ••••" : money(n);
 // Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
 // o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
 // (ex.: Safari iOS mais antigo), cai para uma classe CSS que expande o elemento ocupando a tela toda.
-function useFullscreen(ref) {
+// Passe { native: false } pra pular a Fullscreen API de propósito e usar só a classe CSS — o próprio
+// navegador mostra um botão de "sair da tela cheia" por cima do conteúdo ao mexer o mouse quando a API
+// real está ativa, e em algumas telas (como o quadro infinito) isso atrapalha mais do que ajuda.
+function useFullscreen(ref, { native = true } = {}) {
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
+    if (!native) return;
     const handler = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
+  }, [native]);
 
   const toggleFullscreen = async () => {
+    if (!native) { setFullscreen(f => !f); return; }
     try {
       if (!document.fullscreenElement) {
         await ref.current?.requestFullscreen?.();
@@ -124,7 +129,7 @@ function useFullscreen(ref) {
     }
   };
 
-  useEffect(() => () => { if (document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, []);
+  useEffect(() => () => { if (native && document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, [native]);
 
   return [fullscreen, toggleFullscreen];
 }
@@ -3666,7 +3671,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { native: false });
   const isDrawingRef = useRef(false);
   const dragRef = useRef(null);
   const panRef = useRef(null);
@@ -3830,7 +3835,7 @@ function Whiteboard({ board, onClose, onSave }) {
       if (sel && (sel.type === "shape" || sel.type === "image")) {
         const cx = sel.type === "image" ? sel.x + sel.width : sel.x2;
         const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
-        if (Math.hypot(x - cx, y - cy) < 14 / view.zoom) {
+        if (Math.hypot(x - cx, y - cy) < 20 / view.zoom) {
           pushHistory();
           dragRef.current = { mode: "resize", id: sel.id, pointerId };
           return;
@@ -3983,7 +3988,20 @@ function Whiteboard({ board, onClose, onSave }) {
     // criam formas/texto — só selecionam e movem objetos (ou navegam pelo
     // quadro, se tocar/clicar em área vazia).
     if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso") {
-      const hit = findElementAt(elements, x, y, 8);
+      // Antes de checar o hit-test normal, vê se o toque começou perto da
+      // bolinha de redimensionar do item selecionado — sem isso, com o dedo
+      // (impreciso) o clique quase sempre "erra" a bolinha por pouco e cai
+      // no hit-test comum, que só sabe mover, nunca redimensionar.
+      let nearResizeHandle = false;
+      if (selectedId) {
+        const sel = elements.find(a => a.id === selectedId);
+        if (sel && (sel.type === "shape" || sel.type === "image")) {
+          const cx = sel.type === "image" ? sel.x + sel.width : sel.x2;
+          const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
+          nearResizeHandle = Math.hypot(x - cx, y - cy) < 20 / view.zoom;
+        }
+      }
+      const hit = nearResizeHandle || findElementAt(elements, x, y, 8);
       if (hit) {
         handleSelectPointerDown(x, y, e.pointerId);
       } else {
@@ -4335,16 +4353,18 @@ function Whiteboard({ board, onClose, onSave }) {
                   return (
                     <g>
                       <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>
-                      {(el.type === "shape" || el.type === "image") && (
-                        <circle
-                          cx={el.type === "image" ? el.x + el.width : el.x2}
-                          cy={el.type === "image" ? el.y + el.height : el.y2}
-                          r={6 / view.zoom}
-                          fill="var(--accent)"
-                          style={{ cursor: "nwse-resize" }}
-                          onPointerDown={e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
-                        />
-                      )}
+                      {(el.type === "shape" || el.type === "image") && (() => {
+                        const hx = el.type === "image" ? el.x + el.width : el.x2;
+                        const hy = el.type === "image" ? el.y + el.height : el.y2;
+                        const onResizeStart = e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; };
+                        return (
+                          <g style={{ cursor: "nwse-resize" }} onPointerDown={onResizeStart}>
+                            {/* alvo invisível maior, só pra facilitar tocar com o dedo/trackpad */}
+                            <circle cx={hx} cy={hy} r={18 / view.zoom} fill="transparent"/>
+                            <circle cx={hx} cy={hy} r={6 / view.zoom} fill="var(--accent)" pointerEvents="none"/>
+                          </g>
+                        );
+                      })()}
                     </g>
                   );
                 })()}
