@@ -14,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -3288,10 +3288,10 @@ function resizeElementCorner(el, x, y) {
   return resizeShapeAnnotation(el, x, y);
 }
 function eraseElementAtPoint(el, x, y, radius) {
-  if (el.type === "image") {
-    const hit = x >= el.x - radius && x <= el.x + el.width + radius && y >= el.y - radius && y <= el.y + el.height + radius;
-    return hit ? [] : [el];
-  }
+  // Prints (imagens) nunca são apagados pela borracha — só à mão, selecionando
+  // e excluindo. Assim escrever/rabiscar por cima de um print e apagar o
+  // rabisco não some com a imagem junto.
+  if (el.type === "image") return [el];
   return eraseAnnotationAtPoint(el, x, y, radius);
 }
 
@@ -3454,20 +3454,44 @@ function Whiteboard({ board, onClose, onSave }) {
   const redoRef = useRef([]);
   const firstFit = useRef(false);
 
-  // Ajusta a visão pra caber tudo que já existe, na primeira abertura.
-  useEffect(() => {
-    if (firstFit.current || !elements.length || !containerRef.current) return;
-    firstFit.current = true;
+  // Calcula a visão ideal pra caber tudo que já existe no quadro (ou centraliza a origem, se estiver vazio).
+  const fitToContent = () => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    if (!elements.length) {
+      setView({ x: rect.width / 2, y: rect.height / 2, zoom: 1 });
+      return;
+    }
     const xs1 = elements.map(el => elementBBox(el).x);
     const ys1 = elements.map(el => elementBBox(el).y);
     const xs2 = elements.map(el => { const b = elementBBox(el); return b.x + b.w; });
     const ys2 = elements.map(el => { const b = elementBBox(el); return b.y + b.h; });
     const minX = Math.min(...xs1), minY = Math.min(...ys1), maxX = Math.max(...xs2), maxY = Math.max(...ys2);
     const w = Math.max(40, maxX - minX), h = Math.max(40, maxY - minY);
-    const rect = containerRef.current.getBoundingClientRect();
     const zoom = Math.min(2, Math.max(0.15, Math.min((rect.width - 60) / w, (rect.height - 60) / h)));
     setView({ x: rect.width / 2 - (minX + w / 2) * zoom, y: rect.height / 2 - (minY + h / 2) * zoom, zoom });
+  };
+
+  // Ajusta a visão pra caber tudo que já existe, na primeira abertura.
+  useEffect(() => {
+    if (firstFit.current || !elements.length || !containerRef.current) return;
+    firstFit.current = true;
+    fitToContent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elements]);
+
+  // Se a aba perder o foco (trocar de app, notificação, etc.) enquanto o espaço
+  // está pressionado, o "keyup" pode nunca chegar até nós — o que travaria o
+  // quadro permanentemente em modo de arrastar. Isso solta tudo nesses casos.
+  useEffect(() => {
+    const releasePan = () => { spaceDownRef.current = false; panRef.current = null; };
+    window.addEventListener("blur", releasePan);
+    document.addEventListener("visibilitychange", releasePan);
+    return () => {
+      window.removeEventListener("blur", releasePan);
+      document.removeEventListener("visibilitychange", releasePan);
+    };
+  }, []);
 
   const pushHistory = () => {
     historyRef.current.push(JSON.stringify(elements));
@@ -3523,7 +3547,10 @@ function Whiteboard({ board, onClose, onSave }) {
     setElements(prev => prev.flatMap(el => eraseElementAtPoint(el, x, y, eraserRadius)));
   };
   const eraseObjectAt = (x, y) => {
-    const hit = findElementAt(elements, x, y, 8);
+    // Ignora prints (imagens) — a borracha (em qualquer modo) nunca apaga
+    // imagens, só traços, formas e textos. Pra apagar um print é preciso
+    // selecioná-lo e excluir manualmente.
+    const hit = findElementAt(elements.filter(el => el.type !== "image"), x, y, 8);
     if (!hit) return;
     pushHistory();
     setElements(prev => prev.filter(a => a.id !== hit.id));
@@ -3642,7 +3669,17 @@ function Whiteboard({ board, onClose, onSave }) {
   const handleWheel = (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      zoomAt(e.deltaY < 0 ? 1.08 : 0.93, e.clientX, e.clientY);
+      // Pinça no touchpad (e Ctrl/Cmd+roda) chegam como eventos "wheel" com
+      // deltaY de intensidade bem variável — um gesto rápido pode disparar
+      // várias dezenas de eventos em poucos milissegundos. Antes o fator de
+      // zoom era fixo (±8%) por evento, então esses eventos se multiplicavam
+      // entre si e geravam saltos enormes. Agora o fator acompanha a
+      // intensidade real do gesto (suave em pinças lentas, mais rápido em
+      // pinças fortes) e é limitado por evento pra nenhum pico isolado do
+      // touchpad estourar o zoom de uma vez.
+      let factor = Math.exp(-e.deltaY * 0.008);
+      factor = Math.min(1.12, Math.max(0.89, factor));
+      zoomAt(factor, e.clientX, e.clientY);
     } else {
       setView(v => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
     }
@@ -3827,6 +3864,7 @@ function Whiteboard({ board, onClose, onSave }) {
               <button title="Texto" className={tool === "text" ? "active" : ""} onClick={() => { setTool("text"); setSelectedId(null); }}><Type size={16}/><span>Texto</span></button>
               <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/><span>Selecionar</span></button>
               <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/><span>Mover</span></button>
+              <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/><span>Recentralizar</span></button>
               <span className="penToolDivider"/>
               <button title="Desfazer" onClick={undo}><Undo2 size={16}/><span>Desfazer</span></button>
               <button title="Refazer" onClick={redo}><Redo2 size={16}/><span>Refazer</span></button>
@@ -3911,7 +3949,7 @@ function Whiteboard({ board, onClose, onSave }) {
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
+              onPointerCancel={handlePointerUp}
               onContextMenu={e => e.preventDefault()}
             >
               <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
