@@ -20,7 +20,7 @@ import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { useEntity } from "./lib/useEntity";
-import { clearLocal, usePersistentState } from "./lib/storage";
+import { clearLocal, usePersistentState, loadLocal, saveLocal } from "./lib/storage";
 import { pdfjsLib } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
@@ -3009,7 +3009,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
-  const [whiteboardOpen, setWhiteboardOpen] = useState(false);
+  const [whiteboardLibraryOpen, setWhiteboardLibraryOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [dragOverGroupId, setDragOverGroupId] = useState(null);
@@ -3189,7 +3189,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         <div className="bookTile addTile" onClick={()=>setNewPdfDialogOpen(true)}>
           <div className="bookCoverWrap addCover">{uploading ? <span>Criando...</span> : <><FilePlus2 size={26}/><span>Criar PDF</span></>}</div>
         </div>
-        <div className="bookTile addTile" onClick={()=>setWhiteboardOpen(true)}>
+        <div className="bookTile addTile" onClick={()=>setWhiteboardLibraryOpen(true)}>
           <div className="bookCoverWrap addCover"><LayoutGrid size={26}/><span>Quadro infinito</span></div>
         </div>
         {!currentGroup && (
@@ -3251,7 +3251,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onDrawingsChange={onDrawingsChange}
         onTotalPagesChange={onTotalPagesChange}
       />}
-      {whiteboardOpen && <Whiteboard onClose={()=>setWhiteboardOpen(false)}/>}
+      {whiteboardLibraryOpen && <WhiteboardLibrary onClose={()=>setWhiteboardLibraryOpen(false)}/>}
       {newPdfDialogOpen && <NewPdfDialog onClose={()=>setNewPdfDialogOpen(false)} onCreate={handleCreatePdf} creating={uploading}/>}
     </div>
   );
@@ -3302,18 +3302,125 @@ function WhiteboardElementShape({ el, onPointerDown }) {
   return <AnnotationShape ann={el} onPointerDown={onPointerDown}/>;
 }
 
-function Whiteboard({ onClose }) {
-  const [persisted, setPersisted] = usePersistentState("whiteboard_v1", { elements: [] });
-  const [elements, setElements] = useState(persisted.elements || []);
+function WhiteboardThumbnail({ board }) {
+  const elements = board?.elements || [];
+  const bg = board?.bg === "white" ? "#f4f4f5" : "#0b0b0c";
+  if (!elements.length) {
+    return <div className="whiteboardThumbEmpty" style={{ background: bg }}><LayoutGrid size={30}/></div>;
+  }
+  const boxes = elements.map(elementBBox);
+  const minX = Math.min(...boxes.map(b => b.x));
+  const minY = Math.min(...boxes.map(b => b.y));
+  const maxX = Math.max(...boxes.map(b => b.x + b.w));
+  const maxY = Math.max(...boxes.map(b => b.y + b.h));
+  const w = Math.max(120, maxX - minX);
+  const h = Math.max(90, maxY - minY);
+  const pad = Math.max(12, Math.max(w, h) * 0.08);
+  return (
+    <div className="whiteboardThumb" style={{ background: bg }}>
+      <svg viewBox={`${minX - pad} ${minY - pad} ${w + pad * 2} ${h + pad * 2}`} preserveAspectRatio="xMidYMid meet">
+        {elements.filter(el => el.type !== "text").map(el => <WhiteboardElementShape key={el.id} el={el}/>)}
+        {elements.filter(el => el.type === "text").map(el => (
+          <text key={el.id} x={el.x} y={el.y + el.fontSize} fill={el.color} fontSize={el.fontSize} fontWeight="600">{(el.content || "").slice(0, 60)}</text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function WhiteboardLibrary({ onClose }) {
+  const [boards, setBoards] = useState(() => {
+    const saved = loadLocal("whiteboards_v2", null);
+    if (Array.isArray(saved)) return saved;
+    const legacy = loadLocal("whiteboard_v1", null);
+    return legacy?.elements?.length
+      ? [{ id: crypto.randomUUID(), name: "Quadro 1", elements: legacy.elements, bg: "black", updatedAt: Date.now() }]
+      : [];
+  });
+  const [editingId, setEditingId] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+
+  useEffect(() => {
+    saveLocal("whiteboards_v2", boards);
+  }, [boards]);
+
+  const createBoard = () => {
+    const number = boards.length + 1;
+    const name = window.prompt("Nome do quadro:", `Quadro ${number}`);
+    if (!name?.trim()) return;
+    const board = { id: crypto.randomUUID(), name: name.trim(), elements: [], bg: "black", updatedAt: Date.now() };
+    setBoards(prev => [...prev, board]);
+    setEditingId(board.id);
+  };
+
+  const renameBoard = (board) => {
+    setOpenMenuId(null);
+    const name = window.prompt("Nome do quadro:", board.name);
+    if (!name?.trim()) return;
+    setBoards(prev => prev.map(b => b.id === board.id ? { ...b, name: name.trim(), updatedAt: Date.now() } : b));
+  };
+
+  const deleteBoard = (board) => {
+    setOpenMenuId(null);
+    if (!confirm(`Excluir o quadro "${board.name}"? Esta ação não pode ser desfeita.`)) return;
+    setBoards(prev => prev.filter(b => b.id !== board.id));
+  };
+
+  const saveBoard = (id, patch) => {
+    setBoards(prev => prev.map(b => b.id === id ? { ...b, ...patch, updatedAt: Date.now() } : b));
+  };
+
+  if (editingId) {
+    const board = boards.find(b => b.id === editingId);
+    if (board) return <Whiteboard board={board} onClose={() => setEditingId(null)} onSave={patch => saveBoard(board.id, patch)}/>;
+  }
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <div className="readerModal readerModalWide whiteboardLibraryModal" onClick={e => e.stopPropagation()}>
+        <div className="readerHead">
+          <div><b>Quadros infinitos</b><span className="whiteboardLibraryCount">{boards.length} {boards.length === 1 ? "quadro" : "quadros"}</span></div>
+          <button onClick={onClose}><X size={18}/></button>
+        </div>
+        <div className="whiteboardLibraryBody">
+          <div className="shelf whiteboardShelf">
+            <div className="bookTile addTile" onClick={createBoard}>
+              <div className="bookCoverWrap addCover whiteboardNewTile"><Plus size={28}/><span>Novo quadro</span></div>
+            </div>
+            {boards.map(board => (
+              <div className="bookTile whiteboardBookTile" key={board.id} onClick={() => setEditingId(board.id)}>
+                <div className="bookCoverWrap whiteboardCover">
+                  <WhiteboardThumbnail board={board}/>
+                  <button className="whiteboardTileMenu" title="Opções" onClick={e => { e.stopPropagation(); setOpenMenuId(id => id === board.id ? null : board.id); }}><MoreVertical size={17}/></button>
+                  {openMenuId === board.id && (
+                    <div className="whiteboardTileMenuPop" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => { setOpenMenuId(null); setEditingId(board.id); }}>Abrir</button>
+                      <button onClick={() => renameBoard(board)}>Renomear</button>
+                      <button className="danger" onClick={() => deleteBoard(board)}>Excluir</button>
+                    </div>
+                  )}
+                </div>
+                <div className="whiteboardBookTitle">{board.name}</div>
+                <div className="whiteboardBookMeta">{board.elements?.length || 0} {board.elements?.length === 1 ? "item" : "itens"}</div>
+              </div>
+            ))}
+          </div>
+          {!boards.length && <div className="whiteboardLibraryEmpty"><LayoutGrid size={34}/><b>Nenhum quadro criado</b><span>Crie quantos quadros quiser para separar matérias, projetos ou anotações.</span></div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Whiteboard({ board, onClose, onSave }) {
+  const [elements, setElements] = useState(board?.elements || []);
+  const [bg, setBg] = useState(board?.bg || "black"); // "white" | "black"
   const saveTimer = useRef(null);
   useEffect(() => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => setPersisted({ elements }), 400);
+    saveTimer.current = setTimeout(() => onSave?.({ elements, bg }), 450);
     return () => clearTimeout(saveTimer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements]);
-
-  const [bg, setBg] = useState("black"); // "white" | "black"
+  }, [elements, bg, onSave]);
   const [tool, setTool] = useState("pen"); // pen|highlighter|eraser|shape|text|select|pan
   const [shapeType, setShapeType] = useState("line");
   const [penStyle, setPenStyle] = useState("normal");
