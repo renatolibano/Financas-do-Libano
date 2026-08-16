@@ -4234,7 +4234,6 @@ function Whiteboard({ board, onClose, onSave }) {
       <div ref={modalRef} className="readerModal whiteboardModalFull" onClick={(e) => e.stopPropagation()}>
         <div className={"readerBody whiteboardBody" + (bg === "black" ? " whiteboardBlack" : " whiteboardWhite")} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
           <button className="whiteboardBackBtn" onClick={onClose}><ArrowLeft size={16}/><span>{board?.name || "Quadro infinito"}</span></button>
-          <p className="whiteboardPasteHint">Cole um print com <b>Ctrl+V</b> a qualquer momento</p>
             <svg
               ref={svgRef}
               className={"whiteboardSvg" + (flash ? " flash" : "")}
