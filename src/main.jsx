@@ -3791,6 +3791,7 @@ function Whiteboard({ board, onClose, onSave }) {
     }
     if (tool === "pen" || tool === "highlighter") {
       isDrawingRef.current = e.pointerId;
+      if (showPenCursor) setShowPenCursor(false);
       setLiveEl({
         id: crypto.randomUUID(), type: "stroke", tool,
         color: tool === "highlighter" ? hlColor : color,
@@ -3815,9 +3816,13 @@ function Whiteboard({ board, onClose, onSave }) {
   const handlePointerMove = (e) => {
     // Acompanha a bolinha de cursor colorida (só aparece pra caneta de
     // verdade — mouse/trackpad nesse quadro não desenha, então não precisa
-    // dela; e enquanto está desenhando, o próprio traço já mostra onde está).
+    // dela; e enquanto está desenhando, o próprio traço já mostra onde está,
+    // então a bolinha deve SUMIR, não ficar parada no ponto onde o traço
+    // começou).
     if ((tool === "pen" || tool === "highlighter") && e.pointerType === "pen") {
-      if (!isDrawingRef.current) {
+      if (isDrawingRef.current) {
+        if (showPenCursor) setShowPenCursor(false);
+      } else {
         movePenCursor(e.clientX, e.clientY);
         setShowPenCursor(true);
       }
