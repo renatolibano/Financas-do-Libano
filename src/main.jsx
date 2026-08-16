@@ -14,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -3671,7 +3671,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const svgRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { native: false });
+  const [styleFlyoutOpen, setStyleFlyoutOpen] = useState(false);
   const isDrawingRef = useRef(false);
   const dragRef = useRef(null);
   const panRef = useRef(null);
@@ -3707,6 +3707,16 @@ function Whiteboard({ board, onClose, onSave }) {
       lassoGroupDragRef.current = null;
     }
   }, [tool]);
+
+  // Fecha o painel de estilo (cor/espessura/opacidade) sempre que trocar de
+  // ferramenta — ele só reabre com um duplo toque na ferramenta ativa.
+  useEffect(() => { setStyleFlyoutOpen(false); }, [tool]);
+
+  const changeSelectedColor = (hex) => {
+    if (!selectedId) return;
+    pushHistory();
+    setElements(prev => prev.map(el => (el.id === selectedId && el.type !== "image") ? { ...el, color: hex } : el));
+  };
 
   const deleteLassoSelection = () => {
     if (!lassoSelectedIds.length) return;
@@ -4220,89 +4230,11 @@ function Whiteboard({ board, onClose, onSave }) {
   const zoomPct = Math.round(view.zoom * 100);
 
   return (
-    <div className="readerBack" onClick={onClose}>
-      <div ref={modalRef} className={`readerModal readerModalWide${fullscreen ? " readerModalFull" : ""}`} onClick={(e) => e.stopPropagation()}>
-        <div className="readerHead">
-          <b>Quadro infinito</b>
-          <div className="readerHeadActions">
-            <button title="Fundo branco" className={"ghost" + (bg === "white" ? " active" : "")} onClick={() => setBg("white")}><Sun size={15}/> <span>Fundo branco</span></button>
-            <button title="Fundo preto" className={"ghost" + (bg === "black" ? " active" : "")} onClick={() => setBg("black")}><Moon size={15}/> <span>Fundo preto</span></button>
-            <button className="ghost" disabled={downloading || !elements.length} onClick={handleDownload}><Download size={15}/> <span>{downloading ? "Gerando..." : "Baixar PDF"}</span></button>
-            <button title={fullscreen ? "Sair da tela cheia" : "Tela cheia"} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
-            <button onClick={onClose}><X size={18}/></button>
-          </div>
-        </div>
-
-        <div className="readerMain">
-          <div className="penOptionsBar">
-            <div className="penToolGroup penToolGroupMain">
-              <button title="Caneta" className={tool === "pen" ? "active" : ""} onClick={() => { setTool("pen"); setSelectedId(null); }}><PenTool size={16}/><span>Caneta</span></button>
-              <button title="Marca-texto" className={tool === "highlighter" ? "active" : ""} onClick={() => { setTool("highlighter"); setSelectedId(null); }}><Highlighter size={16}/><span>Marca-texto</span></button>
-              <button title="Borracha" className={tool === "eraser" ? "active" : ""} onClick={() => { setTool("eraser"); setSelectedId(null); }}><Eraser size={16}/><span>Borracha</span></button>
-              <button title="Formas" className={tool === "shape" ? "active" : ""} onClick={() => { setTool("shape"); setSelectedId(null); }}><Square size={16}/><span>Formas</span></button>
-              <button title="Texto" className={tool === "text" ? "active" : ""} onClick={() => { setTool("text"); setSelectedId(null); }}><Type size={16}/><span>Texto</span></button>
-              <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/><span>Selecionar</span></button>
-              <button title="Laço" className={tool === "lasso" ? "active" : ""} onClick={() => { setTool("lasso"); setSelectedId(null); }}><Lasso size={16}/><span>Laço</span></button>
-              <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/><span>Mover</span></button>
-              <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/><span>Recentralizar</span></button>
-              <span className="penToolDivider"/>
-              <button title="Desfazer" onClick={undo}><Undo2 size={16}/><span>Desfazer</span></button>
-              <button title="Refazer" onClick={redo}><Redo2 size={16}/><span>Refazer</span></button>
-              <button title="Limpar tudo" onClick={clearAll}><Trash2 size={16}/><span>Limpar tudo</span></button>
-            </div>
-
-            <div className="penOptionsRow">
-              {tool === "pen" && (<>
-                <select value={penStyle} onChange={e => handlePenStyleChange(e.target.value)}>
-                  <option value="normal">Caneta normal</option>
-                  <option value="pencil">Lápis</option>
-                  <option value="marker">Marcador/brush</option>
-                </select>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
-                <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
-                <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
-              </>)}
-              {tool === "highlighter" && (<>
-                <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e => setHlThickness(+e.target.value)}/></label>
-                <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e => setHlOpacity(+e.target.value)}/></label>
-              </>)}
-              {tool === "eraser" && (<>
-                <select value={eraserMode} onChange={e => setEraserMode(e.target.value)}>
-                  <option value="partial">Apagar parte do traço</option>
-                  <option value="object">Apagar objeto inteiro</option>
-                </select>
-                {eraserMode === "partial" && <label className="penSliderLabel">Raio<input type="range" min="4" max="40" step="1" value={eraserRadius} onChange={e => setEraserRadius(+e.target.value)}/></label>}
-              </>)}
-              {tool === "shape" && (<>
-                <div className="penToolGroup">
-                  <button title="Linha" className={shapeType === "line" ? "active" : ""} onClick={() => setShapeType("line")}><Minus size={16}/></button>
-                  <button title="Seta" className={shapeType === "arrow" ? "active" : ""} onClick={() => setShapeType("arrow")}><ArrowUpRight size={16}/></button>
-                  <button title="Retângulo" className={shapeType === "rect" ? "active" : ""} onClick={() => setShapeType("rect")}><Square size={16}/></button>
-                  <button title="Círculo" className={shapeType === "circle" ? "active" : ""} onClick={() => setShapeType("circle")}><Circle size={16}/></button>
-                </div>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
-              </>)}
-              {tool === "text" && (<>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <p className="penHint">Toque no quadro para adicionar um texto.</p>
-              </>)}
-              {tool === "select" && (<>
-                <p className="penHint">{selectedId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em algo pra selecionar."}</p>
-                {selectedId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
-              </>)}
-              {tool === "lasso" && (<>
-                <p className="penHint">{lassoSelectedIds.length ? `${lassoSelectedIds.length} ${lassoSelectedIds.length===1?"item selecionado":"itens selecionados"}. Arraste dentro da seleção pra mover.` : "Arraste ao redor dos itens pra selecioná-los."}</p>
-                {lassoSelectedIds.length > 0 && <button className="penDeleteBtn" onClick={deleteLassoSelection}><Trash2 size={14}/> Excluir selecionados</button>}
-              </>)}
-              {tool === "pan" && <p className="penHint">Arraste para navegar pelo quadro infinito.</p>}
-            </div>
-          </div>
-
-          <div className={"readerBody whiteboardBody" + (bg === "black" ? " whiteboardBlack" : " whiteboardWhite")} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
-            <p className="whiteboardPasteHint">Cole um print com <b>Ctrl+V</b> a qualquer momento</p>
+    <div className="readerBack whiteboardBackFull" onClick={onClose}>
+      <div ref={modalRef} className="readerModal whiteboardModalFull" onClick={(e) => e.stopPropagation()}>
+        <div className={"readerBody whiteboardBody" + (bg === "black" ? " whiteboardBlack" : " whiteboardWhite")} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
+          <button className="whiteboardBackBtn" onClick={onClose}><ArrowLeft size={16}/><span>{board?.name || "Quadro infinito"}</span></button>
+          <p className="whiteboardPasteHint">Cole um print com <b>Ctrl+V</b> a qualquer momento</p>
             <svg
               ref={svgRef}
               className={"whiteboardSvg" + (flash ? " flash" : "")}
@@ -4412,17 +4344,97 @@ function Whiteboard({ board, onClose, onSave }) {
                 }}
               />
             )}
-          </div>
-        </div>
+            {tool === "select" && selectedId && (() => {
+              const el = elements.find(a => a.id === selectedId);
+              if (!el) return null;
+              const b = elementBBox(el);
+              const left = (b.x + b.w / 2) * view.zoom + view.x;
+              const top = b.y * view.zoom + view.y;
+              return (
+                <div className="lassoToolbar" style={{ left, top }} onPointerDown={e => e.stopPropagation()}>
+                  {el.type !== "image" && (<>
+                    <span className="lassoToolbarLabel">COR</span>
+                    <div className="lassoToolbarColors">
+                      {LASSO_COLORS.map(hex => (
+                        <button key={hex} className="lassoColorSwatch" style={{ background: hex }} onClick={() => changeSelectedColor(hex)}/>
+                      ))}
+                    </div>
+                    <span className="lassoToolbarDivider"/>
+                  </>)}
+                  <button className="lassoToolbarBtn" title="Excluir" onClick={deleteSelected}><Trash2 size={15}/></button>
+                </div>
+              );
+            })()}
 
-        <div className="readerNav whiteboardNav">
-          <span>{elements.length} {elements.length === 1 ? "item" : "itens"} no quadro</span>
-          <div className="pdfToolbarGroup">
-            <button title="Diminuir zoom" onClick={() => zoomAt(0.85, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomOut size={16}/></button>
-            <button title="Redefinir zoom" onClick={() => setView(v => ({ ...v, zoom: 1 }))}>{zoomPct}%</button>
-            <button title="Aumentar zoom" onClick={() => zoomAt(1.18, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomIn size={16}/></button>
+            {styleFlyoutOpen && (tool === "pen" || tool === "highlighter" || tool === "eraser" || tool === "shape" || tool === "text") && (
+              <div className="whiteboardStylePanel" onPointerDown={e => e.stopPropagation()}>
+                {tool === "pen" && (<>
+                  <select value={penStyle} onChange={e => handlePenStyleChange(e.target.value)}>
+                    <option value="normal">Caneta normal</option>
+                    <option value="pencil">Lápis</option>
+                    <option value="marker">Marcador/brush</option>
+                  </select>
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
+                  <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+                </>)}
+                {tool === "highlighter" && (<>
+                  <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e => setHlThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e => setHlOpacity(+e.target.value)}/></label>
+                </>)}
+                {tool === "eraser" && (<>
+                  <select value={eraserMode} onChange={e => setEraserMode(e.target.value)}>
+                    <option value="partial">Apagar parte do traço</option>
+                    <option value="object">Apagar objeto inteiro</option>
+                  </select>
+                  {eraserMode === "partial" && <label className="penSliderLabel">Raio<input type="range" min="4" max="40" step="1" value={eraserRadius} onChange={e => setEraserRadius(+e.target.value)}/></label>}
+                </>)}
+                {tool === "shape" && (<>
+                  <div className="penToolGroup">
+                    <button title="Linha" className={shapeType === "line" ? "active" : ""} onClick={() => setShapeType("line")}><Minus size={16}/></button>
+                    <button title="Seta" className={shapeType === "arrow" ? "active" : ""} onClick={() => setShapeType("arrow")}><ArrowUpRight size={16}/></button>
+                    <button title="Retângulo" className={shapeType === "rect" ? "active" : ""} onClick={() => setShapeType("rect")}><Square size={16}/></button>
+                    <button title="Círculo" className={shapeType === "circle" ? "active" : ""} onClick={() => setShapeType("circle")}><Circle size={16}/></button>
+                  </div>
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
+                </>)}
+                {tool === "text" && (
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                )}
+              </div>
+            )}
+
+            <div className="whiteboardDock">
+              <div className="whiteboardDockRow">
+                <button title="Caneta (2 toques: opções)" className={tool === "pen" ? "active" : ""} onClick={() => { setTool("pen"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><PenTool size={16}/></button>
+                <button title="Marca-texto (2 toques: opções)" className={tool === "highlighter" ? "active" : ""} onClick={() => { setTool("highlighter"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><Highlighter size={16}/></button>
+                <button title="Borracha (2 toques: opções)" className={tool === "eraser" ? "active" : ""} onClick={() => { setTool("eraser"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><Eraser size={16}/></button>
+                <button title="Formas (2 toques: opções)" className={tool === "shape" ? "active" : ""} onClick={() => { setTool("shape"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><Square size={16}/></button>
+                <button title="Texto (2 toques: opções)" className={tool === "text" ? "active" : ""} onClick={() => { setTool("text"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><Type size={16}/></button>
+                <span className="whiteboardDockDivider"/>
+                <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/></button>
+                <button title="Laço" className={tool === "lasso" ? "active" : ""} onClick={() => { setTool("lasso"); setSelectedId(null); }}><Lasso size={16}/></button>
+                <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/></button>
+                <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/></button>
+                <span className="whiteboardDockDivider"/>
+                <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
+                <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
+                <button title="Limpar tudo" onClick={clearAll}><Trash2 size={16}/></button>
+              </div>
+              <div className="whiteboardDockRow">
+                <button title="Diminuir zoom" onClick={() => zoomAt(0.85, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomOut size={16}/></button>
+                <button className="whiteboardDockZoomLabel" title={`${elements.length} ${elements.length === 1 ? "item" : "itens"} no quadro — redefinir zoom`} onClick={() => setView(v => ({ ...v, zoom: 1 }))}>{zoomPct}%</button>
+                <button title="Aumentar zoom" onClick={() => zoomAt(1.18, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomIn size={16}/></button>
+                <span className="whiteboardDockDivider"/>
+                <button title="Fundo branco" className={bg === "white" ? "active" : ""} onClick={() => setBg("white")}><Sun size={16}/></button>
+                <button title="Fundo preto" className={bg === "black" ? "active" : ""} onClick={() => setBg("black")}><Moon size={16}/></button>
+                <button title={downloading ? "Gerando..." : "Baixar PDF"} disabled={downloading || !elements.length} onClick={handleDownload}><Download size={16}/></button>
+              </div>
+            </div>
           </div>
-        </div>
       </div>
     </div>
   );
