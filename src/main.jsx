@@ -3814,10 +3814,6 @@ function Whiteboard({ board, onClose, onSave }) {
       setShowPenCursor(false);
     }
     if (panRef.current) {
-      // Ignora eventos de um ponteiro diferente do que iniciou o arraste —
-      // touchpads às vezes emitem eventos de outro pointerId no meio do
-      // gesto, e sem essa checagem isso teleporta a visão pra qualquer lugar.
-      if (e.pointerId !== panRef.current.pointerId) return;
       // Importante: tirar esses valores do ref e guardar em variáveis locais
       // ANTES do setView. O React só executa a função de atualização depois
       // (às vezes já depois de um pointerup seguinte ter zerado panRef.current
@@ -3832,12 +3828,11 @@ function Whiteboard({ board, onClose, onSave }) {
     // porque um toque com o dedo pode ter forçado um "mover objeto" mesmo
     // com a caneta/pincel selecionada.
     if (dragRef.current) {
-      if (e.pointerId !== dragRef.current.pointerId) return;
       const { x, y } = toWorld(e.clientX, e.clientY);
       handleSelectPointerMove(x, y);
       return;
     }
-    if (!isDrawingRef.current || e.pointerId !== isDrawingRef.current) return;
+    if (!isDrawingRef.current) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
       setLiveEl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
@@ -3850,12 +3845,10 @@ function Whiteboard({ board, onClose, onSave }) {
 
   const handlePointerUp = (e) => {
     if (panRef.current) {
-      if (e && e.pointerId !== panRef.current.pointerId) return;
       panRef.current = null;
       return;
     }
     if (dragRef.current) {
-      if (e && e.pointerId !== dragRef.current.pointerId) return;
       dragRef.current = null;
       return;
     }
