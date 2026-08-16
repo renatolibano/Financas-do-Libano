@@ -3755,14 +3755,15 @@ function Whiteboard({ board, onClose, onSave }) {
   const isPanning = () => tool === "pan" || spaceDownRef.current;
 
   const handlePointerDown = (e) => {
+    console.log("[quadro] pointerdown", { pointerType: e.pointerType, pointerId: e.pointerId, button: e.button, tool, isPrimary: e.isPrimary });
     if (e.button === 1 || isPanning()) {
       e.preventDefault();
       panRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
-      try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+      try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); }
       return;
     }
     e.preventDefault();
-    try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+    try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); }
     const { x, y } = toWorld(e.clientX, e.clientY);
     // Só a caneta/stylus (pointerType "pen") desenha de verdade. Trackpad
     // (que o navegador reporta como "mouse", sem diferenciar de um mouse de
@@ -3802,6 +3803,9 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerMove = (e) => {
+    if (dragRef.current || panRef.current) {
+      console.log("[quadro] pointermove", { pointerId: e.pointerId, pointerType: e.pointerType, hasPan: !!panRef.current, hasDrag: !!dragRef.current, clientX: e.clientX, clientY: e.clientY });
+    }
     // Acompanha a bolinha de cursor colorida (só aparece pra caneta de
     // verdade — mouse/trackpad nesse quadro não desenha, então não precisa
     // dela; e enquanto está desenhando, o próprio traço já mostra onde está).
@@ -3844,6 +3848,7 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerUp = (e) => {
+    console.log("[quadro] pointerup/cancel", { type: e?.type, pointerId: e?.pointerId, hasPan: !!panRef.current, hasDrag: !!dragRef.current, isDrawing: !!isDrawingRef.current });
     if (panRef.current) {
       panRef.current = null;
       return;
@@ -4068,7 +4073,7 @@ function Whiteboard({ board, onClose, onSave }) {
                       <div
                         className="whiteboardTextLabel"
                         style={{ color: el.color, fontSize: el.fontSize, pointerEvents: tool === "select" ? "auto" : "none" }}
-                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {} setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
+                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
                         onDoubleClick={() => setEditingTextId(el.id)}
                       >
                         {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
@@ -4091,7 +4096,7 @@ function Whiteboard({ board, onClose, onSave }) {
                           r={6 / view.zoom}
                           fill="var(--accent)"
                           style={{ cursor: "nwse-resize" }}
-                          onPointerDown={e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {} pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
+                          onPointerDown={e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
                         />
                       )}
                     </g>
