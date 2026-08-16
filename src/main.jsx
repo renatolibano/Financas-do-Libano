@@ -3478,6 +3478,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const [liveEl, setLiveEl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [flash, setFlash] = useState(false);
+  const [showPenCursor, setShowPenCursor] = useState(false);
 
   const svgRef = useRef(null);
   const containerRef = useRef(null);
@@ -3491,6 +3492,23 @@ function Whiteboard({ board, onClose, onSave }) {
   const historyRef = useRef([]);
   const redoRef = useRef([]);
   const firstFit = useRef(false);
+  const penCursorRef = useRef(null);
+
+  // Move a bolinha do cursor customizado direto no DOM (sem re-render) pra
+  // acompanhar a caneta com fluidez — igual no leitor de PDF.
+  const movePenCursor = (clientX, clientY) => {
+    const el = penCursorRef.current;
+    const wrap = containerRef.current;
+    if (!el || !wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    el.style.left = (clientX - rect.left) + "px";
+    el.style.top = (clientY - rect.top) + "px";
+  };
+
+  // Some com a bolinha sempre que trocar pra uma ferramenta que não desenha traço.
+  useEffect(() => {
+    if (tool !== "pen" && tool !== "highlighter") setShowPenCursor(false);
+  }, [tool]);
 
   // Calcula a visão ideal pra caber tudo que já existe no quadro (ou centraliza a origem, se estiver vazio).
   const fitToContent = () => {
@@ -3784,6 +3802,17 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerMove = (e) => {
+    // Acompanha a bolinha de cursor colorida (só aparece pra caneta de
+    // verdade — mouse/trackpad nesse quadro não desenha, então não precisa
+    // dela; e enquanto está desenhando, o próprio traço já mostra onde está).
+    if ((tool === "pen" || tool === "highlighter") && e.pointerType === "pen") {
+      if (!isDrawingRef.current) {
+        movePenCursor(e.clientX, e.clientY);
+        setShowPenCursor(true);
+      }
+    } else if (showPenCursor) {
+      setShowPenCursor(false);
+    }
     if (panRef.current) {
       // Ignora eventos de um ponteiro diferente do que iniciou o arraste —
       // touchpads às vezes emitem eventos de outro pointerId no meio do
@@ -4016,13 +4045,14 @@ function Whiteboard({ board, onClose, onSave }) {
               ref={svgRef}
               className={"whiteboardSvg" + (flash ? " flash" : "")}
               style={{
-                cursor: isPanning() ? "grab" : tool === "eraser" ? "cell" : tool === "select" ? "default" : tool === "text" ? "text" : (tool === "pen" || tool === "highlighter") ? "crosshair" : "crosshair",
+                cursor: showPenCursor ? "none" : isPanning() ? "grab" : tool === "eraser" ? "cell" : tool === "select" ? "default" : tool === "text" ? "text" : (tool === "pen" || tool === "highlighter") ? "crosshair" : "crosshair",
                 touchAction: "none",
               }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onPointerLeave={() => setShowPenCursor(false)}
               onContextMenu={e => e.preventDefault()}
             >
               <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
@@ -4076,6 +4106,19 @@ function Whiteboard({ board, onClose, onSave }) {
                 })()}
               </g>
             </svg>
+            {(tool === "pen" || tool === "highlighter") && (
+              <div
+                ref={penCursorRef}
+                className="penCursorDot"
+                style={{
+                  display: showPenCursor ? "block" : "none",
+                  width: Math.min(60, Math.max(6, (tool === "highlighter" ? hlThickness : thickness) * view.zoom)) + "px",
+                  height: Math.min(60, Math.max(6, (tool === "highlighter" ? hlThickness : thickness) * view.zoom)) + "px",
+                  background: tool === "highlighter" ? hlColor : color,
+                  opacity: tool === "highlighter" ? Math.max(0.5, hlOpacity) : 1,
+                }}
+              />
+            )}
           </div>
         </div>
 
