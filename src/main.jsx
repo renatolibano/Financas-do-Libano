@@ -3746,11 +3746,12 @@ function Whiteboard({ board, onClose, onSave }) {
     e.preventDefault();
     try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
     const { x, y } = toWorld(e.clientX, e.clientY);
-    // Toque com o dedo (touchpad/tela sensível ao toque) nunca desenha, apaga
-    // ou cria formas/texto — só seleciona e move objetos (ou navega pelo
-    // quadro, se tocar em área vazia). Desenhar fica reservado pra
-    // caneta/mouse, mesmo com a ferramenta de desenho ativa.
-    if (e.pointerType === "touch") {
+    // Só a caneta/stylus (pointerType "pen") desenha de verdade. Trackpad
+    // (que o navegador reporta como "mouse", sem diferenciar de um mouse de
+    // verdade) e toque numa tela sensível ao toque nunca desenham, apagam ou
+    // criam formas/texto — só selecionam e movem objetos (ou navegam pelo
+    // quadro, se tocar/clicar em área vazia).
+    if (e.pointerType === "touch" || e.pointerType === "mouse") {
       const hit = findElementAt(elements, x, y, 8);
       if (hit || selectedId) {
         handleSelectPointerDown(x, y, e.pointerId);
@@ -4044,7 +4045,7 @@ function Whiteboard({ board, onClose, onSave }) {
                       <div
                         className="whiteboardTextLabel"
                         style={{ color: el.color, fontSize: el.fontSize, pointerEvents: tool === "select" ? "auto" : "none" }}
-                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
+                        onPointerDown={e => { if (tool === "select") { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {} setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
                         onDoubleClick={() => setEditingTextId(el.id)}
                       >
                         {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
@@ -4067,7 +4068,7 @@ function Whiteboard({ board, onClose, onSave }) {
                           r={6 / view.zoom}
                           fill="var(--accent)"
                           style={{ cursor: "nwse-resize" }}
-                          onPointerDown={e => { e.stopPropagation(); pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
+                          onPointerDown={e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {} pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; }}
                         />
                       )}
                     </g>
