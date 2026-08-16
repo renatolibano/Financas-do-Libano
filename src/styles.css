@@ -512,9 +512,17 @@ h1{font-size:23px}
 .penOptionsRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--text-2)}
 .penOptionsRow select{background:var(--bg-surface-3);color:var(--text-1);border:1px solid var(--border);border-radius:7px;padding:6px 8px;font-size:11.5px}
 .penSwatches{display:flex;align-items:center;gap:6px}
-.penSwatch{width:20px;height:20px;border-radius:50%;border:2px solid transparent;padding:0;box-shadow:0 0 0 1px var(--border) inset}
+.penSwatch{position:relative;width:20px;height:20px;border-radius:50%;border:2px solid transparent;padding:0;box-shadow:0 0 0 1px var(--border) inset;display:flex;align-items:center;justify-content:center;color:#fff}
 .penSwatch.active{border-color:var(--text-1)}
+.penSwatch.editing{animation:penSwatchWiggle .28s ease-in-out infinite alternate}
+.penSwatch.editing::before{content:"";position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,.45)}
+.penSwatch.editing svg{position:relative;z-index:1}
 .penSwatches input[type=color]{width:22px;height:22px;padding:0;border:none;border-radius:50%;overflow:hidden;background:none;cursor:pointer}
+.penSwatchStar,.penSwatchEdit{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--text-2);border:1px solid var(--border);background:var(--bg-surface-3);padding:0;flex-shrink:0}
+.penSwatchStar:hover,.penSwatchEdit:hover{color:var(--text-1);background:var(--bg-surface-4,var(--bg-surface-3))}
+.penSwatchStar:disabled{cursor:default;color:var(--accent);border-color:var(--accent);opacity:.7}
+.penSwatchEdit.active{border-color:var(--accent);color:var(--accent)}
+@keyframes penSwatchWiggle{from{transform:rotate(-6deg)}to{transform:rotate(6deg)}}
 .penSliderLabel{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .penSliderLabel input[type=range]{width:80px}
 .penCheckLabel{display:flex;align-items:center;gap:5px;white-space:nowrap}
@@ -536,6 +544,15 @@ h1{font-size:23px}
 .pdfTextAnn textarea{background:#fffbe6cc;color:#1f2937;border:1px dashed #0007;border-radius:4px;padding:2px 5px;font:inherit;font-size:inherit;min-width:140px;min-height:1.4em;resize:both}
 .pdfSelectionBox{position:absolute;z-index:5;border:1.5px dashed var(--accent);border-radius:3px;pointer-events:none}
 .pdfSelectionHandle{position:absolute;right:-6px;bottom:-6px;width:13px;height:13px;background:var(--accent);border:2px solid var(--bg-reader-modal);border-radius:50%;pointer-events:auto;cursor:nwse-resize}
+
+.lassoToolbar{position:absolute;transform:translate(-50%,calc(-100% - 12px));display:flex;align-items:center;gap:8px;background:var(--bg-modal);border:1px solid var(--border);border-radius:12px;padding:7px 10px;box-shadow:0 12px 30px #000a;z-index:20;white-space:nowrap}
+.lassoToolbarLabel{font-size:10.5px;font-weight:800;letter-spacing:.04em;color:var(--text-2)}
+.lassoToolbarColors{display:flex;align-items:center;gap:5px}
+.lassoColorSwatch{width:18px;height:18px;border-radius:50%;border:1.5px solid rgba(255,255,255,.35);padding:0;cursor:pointer;transition:transform .12s ease}
+.lassoColorSwatch:hover{transform:scale(1.15)}
+.lassoToolbarDivider{width:1px;align-self:stretch;background:var(--border);margin:0 1px}
+.lassoToolbarBtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:7px;color:#ff8a80}
+.lassoToolbarBtn:hover{background:var(--bg-surface-3)}
 
 .pdfExcerptList{display:flex;flex-direction:column;gap:4px}
 .pdfExcerptItem{display:flex;align-items:stretch;gap:4px}

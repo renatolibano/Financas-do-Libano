@@ -14,7 +14,7 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -1279,6 +1279,46 @@ function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, on
   );
 }
 
+// Linha de "canetas" (swatches de cor) com favoritos escolhidos pela pessoa,
+// em vez de uma lista fixa no código. `colors` é a lista persistida (guardada
+// com usePersistentState no componente que usa); "value" é a cor selecionada
+// no momento; "onPick" troca a cor ativa; "onColorsChange" atualiza a lista
+// de favoritos guardada.
+function PenSwatches({ colors, onColorsChange, value, onPick, max = 8 }) {
+  const [editing, setEditing] = useState(false);
+  const isFav = colors.includes(value);
+  return (
+    <div className="penSwatches">
+      {colors.map(c => (
+        <button
+          key={c}
+          type="button"
+          className={`penSwatch${value === c ? " active" : ""}${editing ? " editing" : ""}`}
+          style={{ background: c }}
+          onClick={() => editing ? onColorsChange(colors.filter(x => x !== c)) : onPick(c)}
+          title={editing ? "Remover dos favoritos" : c}
+        >
+          {editing && <X size={10}/>}
+        </button>
+      ))}
+      <input type="color" value={value} onChange={e => onPick(e.target.value)} title="Cor personalizada"/>
+      <button
+        type="button"
+        className="penSwatchStar"
+        title={isFav ? "Essa cor já está nos favoritos" : "Favoritar a cor atual"}
+        disabled={isFav || colors.length >= max}
+        onClick={() => onColorsChange([...colors, value])}
+      ><Star size={13} fill={isFav ? "currentColor" : "none"}/></button>
+      <button
+        type="button"
+        className={`penSwatchEdit${editing ? " active" : ""}`}
+        title={editing ? "Concluir edição dos favoritos" : "Editar favoritos"}
+        onClick={() => setEditing(v => !v)}
+      ><Pencil size={13}/></button>
+    </div>
+  );
+}
+
 function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
@@ -1936,9 +1976,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [eraserMode, setEraserMode] = useState("partial"); // partial | object
   const [shapeType, setShapeType] = useState("line"); // line | arrow | rect | circle
   const [color, setColor] = useState("#1f2937");
+  const [favPenColors, setFavPenColors] = usePersistentState("pdfFavPenColors", ["#1f2937", "#e11d48", "#2563eb", "#16a34a"]);
   const [thickness, setThickness] = useState(3);
   const [opacity, setOpacity] = useState(1);
   const [hlColor, setHlColor] = useState("#ffd54a");
+  const [favHlColors, setFavHlColors] = usePersistentState("pdfFavHlColors", ["#ffd54a", "#ff6b6b", "#4ade80", "#5b9dff"]);
   const [hlThickness, setHlThickness] = useState(16);
   const [hlOpacity, setHlOpacity] = useState(0.4);
   const [eraserRadius, setEraserRadius] = useState(12);
@@ -1947,6 +1989,10 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [liveAnn, setLiveAnn] = useState(null);
   const [selectedAnnId, setSelectedAnnId] = useState(null);
+  const [lassoSelectedIds, setLassoSelectedIds] = useState([]);
+  const [lassoPath, setLassoPath] = useState(null);
+  const lassoDrawRef = useRef(null);
+  const lassoGroupDragRef = useRef(null);
   const [editingTextId, setEditingTextId] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [addingPage, setAddingPage] = useState(false);
@@ -2314,6 +2360,37 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     if (!penMode || (tool !== "pen" && tool !== "highlighter")) setShowPenCursor(false);
   }, [penMode, tool]);
 
+  // Some com a seleção do laço sempre que trocar de ferramenta.
+  useEffect(() => {
+    if (tool !== "lasso") {
+      setLassoSelectedIds([]);
+      setLassoPath(null);
+      lassoDrawRef.current = null;
+      lassoGroupDragRef.current = null;
+    }
+  }, [tool]);
+
+  const deleteLassoSelection = () => {
+    if (!lassoSelectedIds.length) return;
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: (prev[pageNum] || []).filter(a => !lassoSelectedIds.includes(a.id)) };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+    setLassoSelectedIds([]);
+  };
+
+  const changeLassoColor = (hex) => {
+    if (!lassoSelectedIds.length) return;
+    pushHistory();
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: (prev[pageNum] || []).map(a => lassoSelectedIds.includes(a.id) ? { ...a, color: hex } : a) };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+  };
+
   const addTextAnnotation = (x, y) => {
     const id = crypto.randomUUID();
     const ann = { id, type: "text", x, y, fontSize: 16, color, content: "" };
@@ -2447,6 +2524,23 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       addTextAnnotation(x, y);
     } else if (tool === "select") {
       handleSelectPointerDown(x, y);
+    } else if (tool === "lasso") {
+      if (lassoSelectedIds.length) {
+        const list = drawings[pageNum] || [];
+        const boxes = list.filter(a => lassoSelectedIds.includes(a.id)).map(annotationBBox);
+        if (boxes.length) {
+          const b = unionBBox(boxes);
+          const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
+          if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) {
+            pushHistory();
+            lassoGroupDragRef.current = { lastX: x, lastY: y };
+            return;
+          }
+        }
+      }
+      setLassoSelectedIds([]);
+      lassoDrawRef.current = { points: [{ x, y }] };
+      setLassoPath([{ x, y }]);
     }
   };
 
@@ -2468,6 +2562,29 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       handleSelectPointerMove(x, y);
       return;
     }
+    if (tool === "lasso") {
+      if (lassoGroupDragRef.current) {
+        const { x, y } = toPageCoords(e.clientX, e.clientY);
+        const drag = lassoGroupDragRef.current;
+        const dx = x - drag.lastX, dy = y - drag.lastY;
+        drag.lastX = x; drag.lastY = y;
+        setDrawings(prev => {
+          const list = prev[pageNum] || [];
+          const next = list.map(a => lassoSelectedIds.includes(a.id) ? translateAnnotation(a, dx, dy) : a);
+          const nextAll = { ...prev, [pageNum]: next };
+          scheduleDrawingsSave(nextAll);
+          return nextAll;
+        });
+        return;
+      }
+      if (lassoDrawRef.current) {
+        const { x, y } = toPageCoords(e.clientX, e.clientY);
+        lassoDrawRef.current.points.push({ x, y });
+        setLassoPath([...lassoDrawRef.current.points]);
+        return;
+      }
+      return;
+    }
     if (!isDrawingRef.current) return;
     const { x, y } = toPageCoords(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
@@ -2481,6 +2598,22 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
 
   const handleDrawPointerUp = () => {
     if (tool === "select") { dragRef.current = null; return; }
+    if (tool === "lasso") {
+      if (lassoGroupDragRef.current) { lassoGroupDragRef.current = null; return; }
+      if (lassoDrawRef.current) {
+        const pts = lassoDrawRef.current.points;
+        lassoDrawRef.current = null;
+        setLassoPath(null);
+        if (pts.length > 2) {
+          const list = drawings[pageNum] || [];
+          const ids = list.filter(a => pointInPolygon(bboxCenter(annotationBBox(a)), pts)).map(a => a.id);
+          setLassoSelectedIds(ids);
+        } else {
+          setLassoSelectedIds([]);
+        }
+      }
+      return;
+    }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
@@ -2618,13 +2751,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
       if (!penMode && e.key === "ArrowRight") goTo(pageNum + 1);
       if (!penMode && e.key === "ArrowLeft") goTo(pageNum - 1);
-      if (e.key === "Escape") { if (penMode) togglePenMode(); else handleClose(); }
+      if (e.key === "Escape") { if (penMode && tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else if (penMode) togglePenMode(); else handleClose(); }
       if (penMode && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+      if (penMode && (e.key === "Delete" || e.key === "Backspace") && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages, panel, penMode, drawings]);
+  }, [pageNum, numPages, panel, penMode, drawings, tool, lassoSelectedIds]);
 
   const isFav = favoritePages.includes(pageNum);
   const isImp = importantPages.includes(pageNum);
@@ -2694,6 +2828,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
               <button title="Formas" className={tool==="shape"?"active":""} onClick={()=>{setTool("shape"); setSelectedAnnId(null);}}><Square size={16}/></button>
               <button title="Texto" className={tool==="text"?"active":""} onClick={()=>{setTool("text"); setSelectedAnnId(null);}}><Type size={16}/></button>
               <button title="Selecionar" className={tool==="select"?"active":""} onClick={()=>setTool("select")}><MousePointer2 size={16}/></button>
+              <button title="Laço" className={tool==="lasso"?"active":""} onClick={()=>setTool("lasso")}><Lasso size={16}/></button>
               <span className="penToolDivider"/>
               <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
               <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
@@ -2710,23 +2845,13 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   <option value="pencil">Lápis</option>
                   <option value="marker">Marcador/brush</option>
                 </select>
-                <div className="penSwatches">
-                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
-                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
                 <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e=>setOpacity(+e.target.value)}/></label>
                 <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e=>setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
               </>)}
               {tool==="highlighter" && (<>
-                <div className="penSwatches">
-                  {["#ffd54a","#ff6b6b","#4ade80","#5b9dff"].map(c=>(
-                    <button key={c} className={`penSwatch${hlColor===c?" active":""}`} style={{background:c}} onClick={()=>setHlColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={hlColor} onChange={e=>setHlColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e=>setHlThickness(+e.target.value)}/></label>
                 <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e=>setHlOpacity(+e.target.value)}/></label>
               </>)}
@@ -2744,26 +2869,20 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   <button title="Retângulo" className={shapeType==="rect"?"active":""} onClick={()=>setShapeType("rect")}><Square size={16}/></button>
                   <button title="Círculo" className={shapeType==="circle"?"active":""} onClick={()=>setShapeType("circle")}><Circle size={16}/></button>
                 </div>
-                <div className="penSwatches">
-                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
-                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="1" max="10" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
               </>)}
               {tool==="text" && (<>
-                <div className="penSwatches">
-                  {["#1f2937","#e11d48","#2563eb","#16a34a"].map(c=>(
-                    <button key={c} className={`penSwatch${color===c?" active":""}`} style={{background:c}} onClick={()=>setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e=>setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <p className="penHint">Toque na página para adicionar um texto.</p>
               </>)}
               {tool==="select" && (<>
                 <p className="penHint">{selectedAnnId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em uma anotação para selecioná-la."}</p>
                 {selectedAnnId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
+              </>)}
+              {tool==="lasso" && (<>
+                <p className="penHint">{lassoSelectedIds.length ? `${lassoSelectedIds.length} ${lassoSelectedIds.length===1?"anotação selecionada":"anotações selecionadas"}. Arraste dentro da seleção pra mover.` : "Arraste ao redor das anotações pra selecioná-las."}</p>
+                {lassoSelectedIds.length > 0 && <button className="penDeleteBtn" onClick={deleteLassoSelection}><Trash2 size={14}/> Excluir selecionados</button>}
               </>)}
             </div>
           </div>
@@ -2802,6 +2921,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                       <AnnotationShape key={ann.id} ann={ann}/>
                     ))}
                     {liveAnn && liveAnn.type!=="text" && <AnnotationShape ann={liveAnn} preview/>}
+                    {lassoPath && lassoPath.length > 1 && (
+                      <path d={lassoPathD(lassoPath)} fill="rgba(91,157,255,0.15)" stroke="var(--accent)" strokeDasharray="6" strokeWidth="1.5"/>
+                    )}
                   </svg>
                 )}
                 {penMode && (tool==="pen"||tool==="highlighter") && (
@@ -2855,6 +2977,34 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                         />
                       )}
                     </div>
+                  );
+                })()}
+                {penMode && tool==="lasso" && lassoSelectedIds.length > 0 && basePageSize.width>0 && (() => {
+                  const list = drawings[pageNum] || [];
+                  const boxes = list.filter(a => lassoSelectedIds.includes(a.id)).map(annotationBBox);
+                  if (!boxes.length) return null;
+                  const b = unionBBox(boxes);
+                  const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
+                  const left = (b.x-pad)/basePageSize.width*100;
+                  const top = (b.y-pad)/basePageSize.height*100;
+                  const w = (b.w+pad*2)/basePageSize.width*100;
+                  const h = (b.h+pad*2)/basePageSize.height*100;
+                  const toolbarLeft = (b.x+b.w/2)/basePageSize.width*100;
+                  const toolbarTop = (b.y-pad)/basePageSize.height*100;
+                  return (
+                    <React.Fragment>
+                      <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}/>
+                      <div className="lassoToolbar" style={{left:toolbarLeft+"%", top:toolbarTop+"%"}} onPointerDown={e=>e.stopPropagation()}>
+                        <span className="lassoToolbarLabel">COR</span>
+                        <div className="lassoToolbarColors">
+                          {LASSO_COLORS.map(hex => (
+                            <button key={hex} className="lassoColorSwatch" style={{background:hex}} onClick={()=>changeLassoColor(hex)}/>
+                          ))}
+                        </div>
+                        <span className="lassoToolbarDivider"/>
+                        <button className="lassoToolbarBtn" title="Excluir selecionados" onClick={deleteLassoSelection}><Trash2 size={15}/></button>
+                      </div>
+                    </React.Fragment>
                   );
                 })()}
               </div>
@@ -3265,6 +3415,33 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
 
 // ---------- Quadro infinito (whiteboard) ----------
 
+// ---------- Laço (seleção múltipla por área livre) ----------
+// Usado tanto no quadro infinito quanto no leitor de PDF de estudo: recebe
+// um caminho de pontos (o gesto do laço) e testa se um ponto está dentro
+// dele (algoritmo clássico de ray casting).
+const LASSO_COLORS = ["#111111", "#ffffff", "#ef4444", "#3b82f6", "#22c55e", "#f59e0b", "#a855f7"];
+function pointInPolygon(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
+      (pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi + 1e-9) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+function bboxCenter(b) { return { x: b.x + b.w / 2, y: b.y + b.h / 2 }; }
+function unionBBox(boxes) {
+  const minX = Math.min(...boxes.map(b => b.x));
+  const minY = Math.min(...boxes.map(b => b.y));
+  const maxX = Math.max(...boxes.map(b => b.x + b.w));
+  const maxY = Math.max(...boxes.map(b => b.y + b.h));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+function lassoPathD(points) {
+  return "M " + points.map(p => `${p.x},${p.y}`).join(" L ") + " Z";
+}
+
 function hitTestElement(el, x, y, tol = 6) {
   if (el.type === "image") {
     return x >= el.x - tol && x <= el.x + el.width + tol && y >= el.y - tol && y <= el.y + el.height + tol;
@@ -3466,14 +3643,20 @@ function Whiteboard({ board, onClose, onSave }) {
   const [eraserRadius, setEraserRadius] = useState(14);
   const [autoShape, setAutoShape] = useState(true);
   const [color, setColor] = useState("#f5f5f5");
+  const [favPenColors, setFavPenColors] = usePersistentState("quadroFavPenColors", ["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"]);
   const [thickness, setThickness] = useState(3);
   const [opacity, setOpacity] = useState(1);
   const [hlColor, setHlColor] = useState("#ffd54a");
+  const [favHlColors, setFavHlColors] = usePersistentState("quadroFavHlColors", ["#ffd54a", "#ff6b6b", "#4ade80", "#5b9dff"]);
   const [hlThickness, setHlThickness] = useState(16);
   const [hlOpacity, setHlOpacity] = useState(0.4);
 
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [selectedId, setSelectedId] = useState(null);
+  const [lassoSelectedIds, setLassoSelectedIds] = useState([]);
+  const [lassoPath, setLassoPath] = useState(null);
+  const lassoDrawRef = useRef(null);
+  const lassoGroupDragRef = useRef(null);
   const [editingTextId, setEditingTextId] = useState(null);
   const [liveEl, setLiveEl] = useState(null);
   const [downloading, setDownloading] = useState(false);
@@ -3509,6 +3692,29 @@ function Whiteboard({ board, onClose, onSave }) {
   useEffect(() => {
     if (tool !== "pen" && tool !== "highlighter") setShowPenCursor(false);
   }, [tool]);
+
+  // Some com a seleção do laço sempre que trocar de ferramenta.
+  useEffect(() => {
+    if (tool !== "lasso") {
+      setLassoSelectedIds([]);
+      setLassoPath(null);
+      lassoDrawRef.current = null;
+      lassoGroupDragRef.current = null;
+    }
+  }, [tool]);
+
+  const deleteLassoSelection = () => {
+    if (!lassoSelectedIds.length) return;
+    pushHistory();
+    setElements(prev => prev.filter(el => !lassoSelectedIds.includes(el.id)));
+    setLassoSelectedIds([]);
+  };
+
+  const changeLassoColor = (hex) => {
+    if (!lassoSelectedIds.length) return;
+    pushHistory();
+    setElements(prev => prev.map(el => (lassoSelectedIds.includes(el.id) && el.type !== "image") ? { ...el, color: hex } : el));
+  };
 
   // Calcula a visão ideal pra caber tudo que já existe no quadro (ou centraliza a origem, se estiver vazio).
   const fitToContent = () => {
@@ -3707,16 +3913,17 @@ function Whiteboard({ board, onClose, onSave }) {
     const onKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
       if (e.code === "Space") { spaceDownRef.current = true; e.preventDefault(); }
-      if (e.key === "Escape") { if (editingTextId) setEditingTextId(null); else onClose(); }
+      if (e.key === "Escape") { if (editingTextId) setEditingTextId(null); else if (tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else onClose(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       if ((e.key === "Delete" || e.key === "Backspace") && selectedId && tool === "select") deleteSelected();
+      if ((e.key === "Delete" || e.key === "Backspace") && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
     };
     const onKeyUp = (e) => { if (e.code === "Space") spaceDownRef.current = false; };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, tool, editingTextId, elements]);
+  }, [selectedId, tool, editingTextId, elements, lassoSelectedIds]);
 
   const zoomAt = (factor, clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
@@ -3775,7 +3982,7 @@ function Whiteboard({ board, onClose, onSave }) {
     // verdade) e toque numa tela sensível ao toque nunca desenham, apagam ou
     // criam formas/texto — só selecionam e movem objetos (ou navegam pelo
     // quadro, se tocar/clicar em área vazia).
-    if (e.pointerType === "touch" || e.pointerType === "mouse") {
+    if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso") {
       const hit = findElementAt(elements, x, y, 8);
       if (hit) {
         handleSelectPointerDown(x, y, e.pointerId);
@@ -3810,6 +4017,22 @@ function Whiteboard({ board, onClose, onSave }) {
       addTextElement(x, y);
     } else if (tool === "select") {
       handleSelectPointerDown(x, y, e.pointerId);
+    } else if (tool === "lasso") {
+      if (lassoSelectedIds.length) {
+        const boxes = elements.filter(el => lassoSelectedIds.includes(el.id)).map(elementBBox);
+        if (boxes.length) {
+          const b = unionBBox(boxes);
+          const pad = 10 / view.zoom;
+          if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) {
+            pushHistory();
+            lassoGroupDragRef.current = { lastX: x, lastY: y };
+            return;
+          }
+        }
+      }
+      setLassoSelectedIds([]);
+      lassoDrawRef.current = { points: [{ x, y }] };
+      setLassoPath([{ x, y }]);
     }
   };
 
@@ -3848,6 +4071,20 @@ function Whiteboard({ board, onClose, onSave }) {
       handleSelectPointerMove(x, y);
       return;
     }
+    if (lassoGroupDragRef.current) {
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      const drag = lassoGroupDragRef.current;
+      const dx = x - drag.lastX, dy = y - drag.lastY;
+      drag.lastX = x; drag.lastY = y;
+      setElements(prev => prev.map(a => lassoSelectedIds.includes(a.id) ? translateElement(a, dx, dy) : a));
+      return;
+    }
+    if (lassoDrawRef.current) {
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      lassoDrawRef.current.points.push({ x, y });
+      setLassoPath([...lassoDrawRef.current.points]);
+      return;
+    }
     if (!isDrawingRef.current) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
@@ -3866,6 +4103,19 @@ function Whiteboard({ board, onClose, onSave }) {
     }
     if (dragRef.current) {
       dragRef.current = null;
+      return;
+    }
+    if (lassoGroupDragRef.current) { lassoGroupDragRef.current = null; return; }
+    if (lassoDrawRef.current) {
+      const pts = lassoDrawRef.current.points;
+      lassoDrawRef.current = null;
+      setLassoPath(null);
+      if (pts.length > 2) {
+        const ids = elements.filter(el => pointInPolygon(bboxCenter(elementBBox(el)), pts)).map(el => el.id);
+        setLassoSelectedIds(ids);
+      } else {
+        setLassoSelectedIds([]);
+      }
       return;
     }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
@@ -3974,6 +4224,7 @@ function Whiteboard({ board, onClose, onSave }) {
               <button title="Formas" className={tool === "shape" ? "active" : ""} onClick={() => { setTool("shape"); setSelectedId(null); }}><Square size={16}/><span>Formas</span></button>
               <button title="Texto" className={tool === "text" ? "active" : ""} onClick={() => { setTool("text"); setSelectedId(null); }}><Type size={16}/><span>Texto</span></button>
               <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/><span>Selecionar</span></button>
+              <button title="Laço" className={tool === "lasso" ? "active" : ""} onClick={() => { setTool("lasso"); setSelectedId(null); }}><Lasso size={16}/><span>Laço</span></button>
               <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/><span>Mover</span></button>
               <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/><span>Recentralizar</span></button>
               <span className="penToolDivider"/>
@@ -3989,23 +4240,13 @@ function Whiteboard({ board, onClose, onSave }) {
                   <option value="pencil">Lápis</option>
                   <option value="marker">Marcador/brush</option>
                 </select>
-                <div className="penSwatches">
-                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
-                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
                 <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
                 <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
               </>)}
               {tool === "highlighter" && (<>
-                <div className="penSwatches">
-                  {["#ffd54a", "#ff6b6b", "#4ade80", "#5b9dff"].map(c => (
-                    <button key={c} className={`penSwatch${hlColor === c ? " active" : ""}`} style={{ background: c }} onClick={() => setHlColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={hlColor} onChange={e => setHlColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e => setHlThickness(+e.target.value)}/></label>
                 <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e => setHlOpacity(+e.target.value)}/></label>
               </>)}
@@ -4023,26 +4264,20 @@ function Whiteboard({ board, onClose, onSave }) {
                   <button title="Retângulo" className={shapeType === "rect" ? "active" : ""} onClick={() => setShapeType("rect")}><Square size={16}/></button>
                   <button title="Círculo" className={shapeType === "circle" ? "active" : ""} onClick={() => setShapeType("circle")}><Circle size={16}/></button>
                 </div>
-                <div className="penSwatches">
-                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
-                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
               </>)}
               {tool === "text" && (<>
-                <div className="penSwatches">
-                  {["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"].map(c => (
-                    <button key={c} className={`penSwatch${color === c ? " active" : ""}`} style={{ background: c }} onClick={() => setColor(c)} title={c}/>
-                  ))}
-                  <input type="color" value={color} onChange={e => setColor(e.target.value)} title="Cor personalizada"/>
-                </div>
+                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 <p className="penHint">Toque no quadro para adicionar um texto.</p>
               </>)}
               {tool === "select" && (<>
                 <p className="penHint">{selectedId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em algo pra selecionar."}</p>
                 {selectedId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
+              </>)}
+              {tool === "lasso" && (<>
+                <p className="penHint">{lassoSelectedIds.length ? `${lassoSelectedIds.length} ${lassoSelectedIds.length===1?"item selecionado":"itens selecionados"}. Arraste dentro da seleção pra mover.` : "Arraste ao redor dos itens pra selecioná-los."}</p>
+                {lassoSelectedIds.length > 0 && <button className="penDeleteBtn" onClick={deleteLassoSelection}><Trash2 size={14}/> Excluir selecionados</button>}
               </>)}
               {tool === "pan" && <p className="penHint">Arraste para navegar pelo quadro infinito.</p>}
             </div>
@@ -4113,8 +4348,37 @@ function Whiteboard({ board, onClose, onSave }) {
                     </g>
                   );
                 })()}
+                {lassoPath && lassoPath.length > 1 && (
+                  <path d={lassoPathD(lassoPath)} fill="rgba(91,157,255,0.15)" stroke="var(--accent)" strokeDasharray={5 / view.zoom} strokeWidth={1.5 / view.zoom}/>
+                )}
+                {tool === "lasso" && lassoSelectedIds.length > 0 && (() => {
+                  const boxes = elements.filter(el => lassoSelectedIds.includes(el.id)).map(elementBBox);
+                  if (!boxes.length) return null;
+                  const b = unionBBox(boxes);
+                  const pad = 8 / view.zoom;
+                  return <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>;
+                })()}
               </g>
             </svg>
+            {tool === "lasso" && lassoSelectedIds.length > 0 && (() => {
+              const boxes = elements.filter(el => lassoSelectedIds.includes(el.id)).map(elementBBox);
+              if (!boxes.length) return null;
+              const b = unionBBox(boxes);
+              const left = (b.x + b.w / 2) * view.zoom + view.x;
+              const top = b.y * view.zoom + view.y;
+              return (
+                <div className="lassoToolbar" style={{ left, top }} onPointerDown={e => e.stopPropagation()}>
+                  <span className="lassoToolbarLabel">COR</span>
+                  <div className="lassoToolbarColors">
+                    {LASSO_COLORS.map(hex => (
+                      <button key={hex} className="lassoColorSwatch" style={{ background: hex }} onClick={() => changeLassoColor(hex)}/>
+                    ))}
+                  </div>
+                  <span className="lassoToolbarDivider"/>
+                  <button className="lassoToolbarBtn" title="Excluir selecionados" onClick={deleteLassoSelection}><Trash2 size={15}/></button>
+                </div>
+              );
+            })()}
             {(tool === "pen" || tool === "highlighter") && (
               <div
                 ref={penCursorRef}
