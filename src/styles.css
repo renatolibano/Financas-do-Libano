@@ -436,6 +436,13 @@ h1{font-size:23px}
 
 .pdfPasteHint{width:100%;margin:2px 0 0;font-size:11.5px;color:var(--text-3);opacity:.85;transition:opacity .2s ease,color .2s ease}
 .pdfPasteHint.flash{color:var(--accent);opacity:1}
+.newPdfDialog{width:min(420px,100%);height:auto;grid-template-rows:auto auto}
+.newPdfDialogBody{padding:18px 20px 20px;display:flex;flex-direction:column;gap:16px}
+.newPdfDialogLabel{display:flex;flex-direction:column;gap:8px;font-size:12.5px;color:var(--text-2)}
+.newPdfDialogLabel input[type="text"]{height:38px;padding:0 12px;border-radius:9px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);font-size:14px}
+.newPdfDialogBgRow{display:flex;gap:8px}
+.newPdfDialogSubmit{height:40px;border-radius:9px;background:var(--accent);color:var(--accent-text-on);font-weight:700;font-size:13.5px}
+.newPdfDialogSubmit:disabled{opacity:.6}
 .pdfToolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar)}
 .pdfToolbarGroup{display:flex;align-items:center;gap:4px}
 .pdfToolbarGroup>button{min-width:32px;height:32px;padding:0 9px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text-2);font-size:11.5px;font-weight:700;border:1px solid transparent}

@@ -1995,46 +1995,53 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     return () => { active = false; };
   }, [pdfDoc.file_path]);
 
-  // ---- Colar print (Ctrl+V) direto no leitor: vira uma página nova no
-  // final do próprio PDF, e não um arquivo separado montado antes de existir.
-  const appendPastedImage = (file) => {
-    if (!file || !file.type?.startsWith("image/") || !pdfBytesRef.current) return;
+  // ---- Colar print (Ctrl+V) ou escolher arquivo direto no leitor: vira uma
+  // página nova no final do próprio PDF, e não um arquivo separado montado
+  // antes de existir.
+  const fileToImage = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
-      img.onload = async () => {
-        try {
-          setAddingPage(true);
-          const canvas = document.createElement("canvas");
-          canvas.width = img.width;
-          canvas.height = img.height;
-          canvas.getContext("2d").drawImage(img, 0, 0);
-          const dataUrl = canvas.toDataURL("image/png");
-
-          const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, img.width, img.height);
-          const newBuf = await blob.arrayBuffer();
-          pdfBytesRef.current = newBuf.slice(0);
-          const newDoc = await pdfjsLib.getDocument({ data: newBuf }).promise;
-          setPdf(newDoc);
-          setNumPages(newDoc.numPages);
-          setPageNum(newDoc.numPages);
-          onTotalPagesChange?.(pdfDoc.id, newDoc.numPages);
-
-          const { data: userData } = await supabase.auth.getUser();
-          if (userData?.user) {
-            const uploadFile = new File([blob], "page.pdf", { type: "application/pdf" });
-            await uploadStudyPdfFile(userData.user.id, pdfDoc.id, uploadFile);
-          }
-        } catch (e) {
-          console.error(e);
-          alert("Não foi possível colar esse print como página: " + (e.message || e));
-        } finally {
-          setAddingPage(false);
-        }
-      };
+      img.onload = () => resolve(img);
+      img.onerror = reject;
       img.src = reader.result;
     };
+    reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+
+  const appendPastedImage = async (file) => {
+    if (!file || !file.type?.startsWith("image/") || !pdfBytesRef.current) return;
+    try {
+      setAddingPage(true);
+      const img = await fileToImage(file);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      const dataUrl = canvas.toDataURL("image/png");
+
+      const bg = pdfDoc.bg_color || "white";
+      const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, img.width, img.height, bg);
+      const newBuf = await blob.arrayBuffer();
+      pdfBytesRef.current = newBuf.slice(0);
+      const newDoc = await pdfjsLib.getDocument({ data: newBuf }).promise;
+      setPdf(newDoc);
+      setNumPages(newDoc.numPages);
+      setPageNum(newDoc.numPages);
+      onTotalPagesChange?.(pdfDoc.id, newDoc.numPages);
+
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData?.user) {
+        const uploadFile = new File([blob], "page.pdf", { type: "application/pdf" });
+        await uploadStudyPdfFile(userData.user.id, pdfDoc.id, uploadFile);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível adicionar essa página: " + (e.message || e));
+    } finally {
+      setAddingPage(false);
+    }
   };
 
   useEffect(() => {
@@ -2492,6 +2499,31 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     setLiveAnn(null);
   };
 
+  // Baixa o PDF exatamente como está (sem anotações "queimadas") — o que já
+  // foi colado/adicionado como página entra, claro, porque já faz parte do
+  // arquivo salvo.
+  const downloadCurrentPdf = () => {
+    if (!pdfBytesRef.current) return;
+    const blob = new Blob([pdfBytesRef.current], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(pdfDoc.title || "documento").trim() || "documento"}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const addPageFileInputRef = useRef(null);
+  const handleAddPageFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter(f => f.type?.startsWith("image/"));
+    for (const file of files) {
+      // eslint-disable-next-line no-await-in-loop
+      await appendPastedImage(file);
+    }
+  };
+
   const handleExportAnnotated = async () => {
     if (!pdf) return;
     try {
@@ -2606,6 +2638,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
               <StickyNote size={15}/> <span>Anotações</span>
             </button>
+            <button className="ghost" onClick={downloadCurrentPdf}>
+              <Download size={15}/> <span>Baixar PDF</span>
+            </button>
             <button onClick={handleClose}><X size={18}/></button>
           </div>
         </div>
@@ -2630,6 +2665,13 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+          </div>
+          <div className="pdfToolbarGroup">
+            <button title="Adicionar página a partir de uma imagem" onClick={()=>addPageFileInputRef.current?.click()}>
+              <ImagePlus size={16}/> <span>Adicionar página</span>
+            </button>
+            <input ref={addPageFileInputRef} type="file" accept="image/*" multiple hidden
+              onChange={(e)=>{ handleAddPageFiles(e.target.files); e.target.value=""; }}/>
           </div>
           <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>
             {addingPage ? "Adicionando página..." : <>Cole um print com <b>Ctrl+V</b> para virar uma nova página</>}
@@ -2912,7 +2954,56 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   );
 }
 
+// ---------- Diálogo "Criar PDF" (título + fundo) ----------
+
+function NewPdfDialog({ onClose, onCreate, creating }) {
+  const [title, setTitle] = useState("Novo PDF");
+  const [bg, setBg] = useState("white");
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const submit = (e) => {
+    e?.preventDefault();
+    if (creating) return;
+    onCreate(title, bg);
+  };
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <form className="readerModal newPdfDialog" onClick={(e)=>e.stopPropagation()} onSubmit={submit}>
+        <div className="readerHead">
+          <b>Criar PDF</b>
+          <button type="button" onClick={onClose}><X size={18}/></button>
+        </div>
+        <div className="newPdfDialogBody">
+          <label className="newPdfDialogLabel">
+            Título
+            <input ref={inputRef} type="text" value={title} onChange={e=>setTitle(e.target.value)}/>
+          </label>
+          <div className="newPdfDialogLabel">
+            Fundo das páginas
+            <div className="newPdfDialogBgRow">
+              <button type="button" className={"ghost"+(bg==="white"?" active":"")} onClick={()=>setBg("white")}><Sun size={15}/> <span>Fundo branco</span></button>
+              <button type="button" className={"ghost"+(bg==="black"?" active":"")} onClick={()=>setBg("black")}><Moon size={15}/> <span>Fundo preto</span></button>
+            </div>
+          </div>
+          <button type="submit" className="newPdfDialogSubmit" disabled={creating}>{creating?"Criando...":"Criar PDF"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---------- Estante de PDFs de estudo ----------
+
 function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }) {
+
   const { data, add, remove, update, cloud, reorder } = entity;
   const groups = groupsEntity.data;
   const [currentGroupId, setCurrentGroupId] = useState(null);
@@ -2951,21 +3042,22 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
     }
   };
 
-  // "Criar PDF" cria o documento em branco e já abre no leitor — os prints
-  // viram páginas de dentro dele (ver paste no StudyPdfReader), não antes.
-  const handleCreatePdf = async () => {
+  // "Criar PDF" abre um diálogo pra escolher título e fundo, cria o
+  // documento em branco e já abre no leitor — os prints viram páginas de
+  // dentro dele (ver paste/botão no StudyPdfReader), não antes.
+  const [newPdfDialogOpen, setNewPdfDialogOpen] = useState(false);
+  const handleCreatePdf = async (title, bg) => {
     if (!cloud) { alert('Criar PDFs precisa de sincronização ativa (Supabase) — veja o README.'); return; }
-    const title = window.prompt("Título do PDF:", "Novo PDF");
-    if (title === null) return; // cancelado
     try {
       setUploading(true);
       const id = crypto.randomUUID();
-      const finalTitle = title.trim() || "Novo PDF";
-      const blob = await createBlankPdfBlob();
+      const finalTitle = (title || "").trim() || "Novo PDF";
+      const blob = await createBlankPdfBlob(bg);
       const file = new File([blob], `${finalTitle}.pdf`, { type: "application/pdf" });
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
-      const newDoc = { id, title: finalTitle, file_path: filePath, total_pages: 1, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId };
+      const newDoc = { id, title: finalTitle, file_path: filePath, total_pages: 1, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId, bg_color: bg };
       await add(newDoc);
+      setNewPdfDialogOpen(false);
       setReadingPdf(newDoc);
     } catch (err) {
       console.error(err);
@@ -3088,7 +3180,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
           <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
           <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
         </div>
-        <div className="bookTile addTile" onClick={handleCreatePdf}>
+        <div className="bookTile addTile" onClick={()=>setNewPdfDialogOpen(true)}>
           <div className="bookCoverWrap addCover">{uploading ? <span>Criando...</span> : <><FilePlus2 size={26}/><span>Criar PDF</span></>}</div>
         </div>
         <div className="bookTile addTile" onClick={()=>setWhiteboardOpen(true)}>
@@ -3154,6 +3246,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onTotalPagesChange={onTotalPagesChange}
       />}
       {whiteboardOpen && <Whiteboard onClose={()=>setWhiteboardOpen(false)}/>}
+      {newPdfDialogOpen && <NewPdfDialog onClose={()=>setNewPdfDialogOpen(false)} onCreate={handleCreatePdf} creating={uploading}/>}
     </div>
   );
 }
