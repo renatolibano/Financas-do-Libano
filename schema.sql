@@ -218,6 +218,10 @@ alter table study_pdfs add column if not exists notes text;
 -- Formato: { "<numero_da_pagina>": [ {id, type, ...}, ... ] }
 alter table study_pdfs add column if not exists drawings jsonb not null default '{}'::jsonb;
 
+-- Atualização: Fundo usado nas páginas de PDFs criados pelo usuário.
+-- PDFs enviados/importados usam branco por padrão no leitor.
+alter table study_pdfs add column if not exists bg_color text not null default 'white' check (bg_color in ('white','black'));
+
 -- Atualização: Metas vinculadas a um PDF (Área de Estudos ou Livros)
 -- Quando vinculada, o progresso da meta é atualizado automaticamente conforme a leitura avança.
 alter table study_goals add column if not exists link_source text not null default 'none' check (link_source in ('none','estudo','livro'));

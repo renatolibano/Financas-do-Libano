@@ -57,12 +57,14 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
           .from(table)
           .insert({ ...row, user_id: session.user.id })
           .select()
-          .single();
+          .maybeSingle();
         if (error) {
+          console.error("Supabase insert error:", error);
           alert("Não foi possível salvar: " + error.message);
-          return;
+          return null;
         }
         setCloudData((d) => (order === "desc" ? [inserted, ...d] : [...d, inserted]));
+        return inserted;
       } else {
         const item = { id: uid(), ...row };
         setLocalData((d) => (order === "desc" ? [item, ...d] : [...d, item]));
@@ -97,10 +99,17 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
           .select()
           .single();
         if (error) {
+          console.error("Supabase update error:", error);
           alert("Não foi possível atualizar: " + error.message);
-          return;
+          return null;
+        }
+        if (!updated) {
+          console.error("Supabase update returned no row for id:", id);
+          alert("Não foi possível atualizar: o PDF não foi encontrado no banco de dados.");
+          return null;
         }
         setCloudData((d) => d.map((x) => (x.id === id ? updated : x)));
+        return updated;
       } else {
         setLocalData((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
       }

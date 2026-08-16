@@ -3056,9 +3056,15 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       const file = new File([blob], `${finalTitle}.pdf`, { type: "application/pdf" });
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
       const newDoc = { id, title: finalTitle, file_path: filePath, total_pages: 1, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId, bg_color: bg };
-      await add(newDoc);
+      const inserted = await add(newDoc);
+      if (!inserted) {
+        // Se o registro não foi salvo no Supabase, não abrimos um PDF
+        // fantasma no leitor. O erro original já foi mostrado por useEntity.
+        await deleteStudyPdfFile(filePath).catch(() => {});
+        return;
+      }
       setNewPdfDialogOpen(false);
-      setReadingPdf(newDoc);
+      setReadingPdf(inserted);
     } catch (err) {
       console.error(err);
       alert("Não foi possível criar o PDF: " + (err.message || err));
