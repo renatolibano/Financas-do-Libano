@@ -3643,13 +3643,19 @@ function Whiteboard({ board, onClose, onSave }) {
   const handleSelectPointerMove = (x, y) => {
     const drag = dragRef.current;
     if (!drag) return;
-    setElements(prev => prev.map(a => {
-      if (a.id !== drag.id) return a;
-      if (drag.mode === "resize") return resizeElementCorner(a, x, y);
-      const dx = x - drag.lastX, dy = y - drag.lastY;
-      return translateElement(a, dx, dy);
-    }));
-    if (drag.mode === "move") { drag.lastX = x; drag.lastY = y; }
+    if (drag.mode === "resize") {
+      setElements(prev => prev.map(a => (a.id === drag.id ? resizeElementCorner(a, x, y) : a)));
+      return;
+    }
+    // dx/dy precisam ser calculados e o drag.lastX/Y atualizado AQUI, de forma
+    // síncrona, antes de chamar setElements. O updater passado pro setElements
+    // só roda depois (o React agenda/faz batch), então se a leitura de
+    // drag.lastX acontecesse lá dentro, ela já pegaria o valor novo (igual a
+    // "x"), zerando o delta e travando o elemento no lugar mesmo com o dedo
+    // ainda deslizando — era exatamente esse o bug.
+    const dx = x - drag.lastX, dy = y - drag.lastY;
+    drag.lastX = x; drag.lastY = y;
+    setElements(prev => prev.map(a => (a.id === drag.id ? translateElement(a, dx, dy) : a)));
   };
 
   const addImageAt = (dataUrl, naturalW, naturalH, worldX, worldY) => {
@@ -3755,7 +3761,6 @@ function Whiteboard({ board, onClose, onSave }) {
   const isPanning = () => tool === "pan" || spaceDownRef.current;
 
   const handlePointerDown = (e) => {
-    console.log("[quadro] pointerdown", { pointerType: e.pointerType, pointerId: e.pointerId, button: e.button, tool, isPrimary: e.isPrimary });
     if (e.button === 1 || isPanning()) {
       e.preventDefault();
       panRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
@@ -3772,9 +3777,14 @@ function Whiteboard({ board, onClose, onSave }) {
     // quadro, se tocar/clicar em área vazia).
     if (e.pointerType === "touch" || e.pointerType === "mouse") {
       const hit = findElementAt(elements, x, y, 8);
-      if (hit || selectedId) {
+      if (hit) {
         handleSelectPointerDown(x, y, e.pointerId);
       } else {
+        // Clicar em área vazia sempre desmarca e já inicia a navegação —
+        // antes, se algo estivesse selecionado, esse clique só desmarcava e
+        // "perdia" o gesto (nem movia nada nem navegava), sendo preciso um
+        // segundo clique pra conseguir arrastar o quadro.
+        if (selectedId) setSelectedId(null);
         panRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
       }
       return;
@@ -3803,9 +3813,6 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerMove = (e) => {
-    if (dragRef.current || panRef.current) {
-      console.log("[quadro] pointermove", { pointerId: e.pointerId, pointerType: e.pointerType, hasPan: !!panRef.current, hasDrag: !!dragRef.current, clientX: e.clientX, clientY: e.clientY });
-    }
     // Acompanha a bolinha de cursor colorida (só aparece pra caneta de
     // verdade — mouse/trackpad nesse quadro não desenha, então não precisa
     // dela; e enquanto está desenhando, o próprio traço já mostra onde está).
@@ -3848,7 +3855,6 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerUp = (e) => {
-    console.log("[quadro] pointerup/cancel", { type: e?.type, pointerId: e?.pointerId, hasPan: !!panRef.current, hasDrag: !!dragRef.current, isDrawing: !!isDrawingRef.current });
     if (panRef.current) {
       panRef.current = null;
       return;
