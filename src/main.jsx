@@ -1848,7 +1848,13 @@ function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRen
 
 // Desenha uma anotação (traço à mão livre ou forma) dentro do <svg> de anotações.
 // As coordenadas já vêm em "unidades de página" (mesmo sistema do viewBox do svg).
-function AnnotationShape({ ann, preview, onPointerDown }) {
+// Envolvido em React.memo: sem isso, toda vez que um traço NOVO ganhava um
+// ponto (a cada pequeníssimo movimento do mouse/caneta), TODOS os outros
+// traços/formas já existentes na tela recalculavam seu contorno do zero —
+// e no quadro infinito, que acumula muito mais conteúdo do que uma página
+// de PDF, isso ia deixando o traço cada vez mais travado conforme o quadro
+// enchia. Com o memo, um elemento só recalcula quando ele mesmo muda.
+const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPointerDown }) {
   if (ann.type === "stroke") {
     const isHl = ann.tool === "highlighter";
     const uniform = ann.style === "marker" || isHl;
@@ -1896,7 +1902,7 @@ function AnnotationShape({ ann, preview, onPointerDown }) {
     }
   }
   return null;
-}
+});
 
 function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange, onTotalPagesChange }) {
   const [pdf, setPdf] = useState(null);
@@ -3295,12 +3301,12 @@ function eraseElementAtPoint(el, x, y, radius) {
   return eraseAnnotationAtPoint(el, x, y, radius);
 }
 
-function WhiteboardElementShape({ el, onPointerDown }) {
+const WhiteboardElementShape = React.memo(function WhiteboardElementShape({ el, onPointerDown }) {
   if (el.type === "image") {
     return <image href={el.dataUrl} x={el.x} y={el.y} width={el.width} height={el.height} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} preserveAspectRatio="none"/>;
   }
   return <AnnotationShape ann={el} onPointerDown={onPointerDown}/>;
-}
+});
 
 function WhiteboardThumbnail({ board }) {
   const elements = board?.elements || [];
@@ -3740,6 +3746,19 @@ function Whiteboard({ board, onClose, onSave }) {
     e.preventDefault();
     try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
     const { x, y } = toWorld(e.clientX, e.clientY);
+    // Toque com o dedo (touchpad/tela sensível ao toque) nunca desenha, apaga
+    // ou cria formas/texto — só seleciona e move objetos (ou navega pelo
+    // quadro, se tocar em área vazia). Desenhar fica reservado pra
+    // caneta/mouse, mesmo com a ferramenta de desenho ativa.
+    if (e.pointerType === "touch") {
+      const hit = findElementAt(elements, x, y, 8);
+      if (hit || selectedId) {
+        handleSelectPointerDown(x, y, e.pointerId);
+      } else {
+        panRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, viewX: view.x, viewY: view.y };
+      }
+      return;
+    }
     if (tool === "pen" || tool === "highlighter") {
       isDrawingRef.current = e.pointerId;
       setLiveEl({
@@ -3769,12 +3788,21 @@ function Whiteboard({ board, onClose, onSave }) {
       // touchpads às vezes emitem eventos de outro pointerId no meio do
       // gesto, e sem essa checagem isso teleporta a visão pra qualquer lugar.
       if (e.pointerId !== panRef.current.pointerId) return;
-      const dx = e.clientX - panRef.current.startX, dy = e.clientY - panRef.current.startY;
-      setView(v => ({ ...v, x: panRef.current.viewX + dx, y: panRef.current.viewY + dy }));
+      // Importante: tirar esses valores do ref e guardar em variáveis locais
+      // ANTES do setView. O React só executa a função de atualização depois
+      // (às vezes já depois de um pointerup seguinte ter zerado panRef.current
+      // para null) — ler panRef.current *dentro* do callback do setView podia
+      // então tentar ler propriedades de null e quebrar o quadro inteiro.
+      const { startX, startY, viewX, viewY } = panRef.current;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      setView(v => ({ ...v, x: viewX + dx, y: viewY + dy }));
       return;
     }
-    if (tool === "select") {
-      if (!dragRef.current || e.pointerId !== dragRef.current.pointerId) return;
+    // Verifica pelo gesto que de fato começou (não pela ferramenta atual),
+    // porque um toque com o dedo pode ter forçado um "mover objeto" mesmo
+    // com a caneta/pincel selecionada.
+    if (dragRef.current) {
+      if (e.pointerId !== dragRef.current.pointerId) return;
       const { x, y } = toWorld(e.clientX, e.clientY);
       handleSelectPointerMove(x, y);
       return;
@@ -3796,7 +3824,11 @@ function Whiteboard({ board, onClose, onSave }) {
       panRef.current = null;
       return;
     }
-    if (tool === "select") { dragRef.current = null; return; }
+    if (dragRef.current) {
+      if (e && e.pointerId !== dragRef.current.pointerId) return;
+      dragRef.current = null;
+      return;
+    }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
