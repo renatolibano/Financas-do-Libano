@@ -45,7 +45,9 @@ export default defineConfig({
       },
       workbox: {
         // Garante que o app abra offline depois da primeira visita
-        globPatterns: ["**/*.{js,mjs,css,html,png,svg,ico}"],
+        // .wasm incluído pra os decodificadores de imagem do pdf.js (ver
+        // src/lib/pdf.js) também funcionarem offline, depois da 1ª visita.
+        globPatterns: ["**/*.{js,mjs,css,html,png,svg,ico,wasm}"],
         runtimeCaching: [
           {
             // Chamadas ao Supabase sempre vão para a rede (dados financeiros atualizados)
