@@ -1046,3 +1046,52 @@ h1{font-size:23px}
 
 /* ---------- Treino: descanso entre séries ---------- */
 .workoutRestPreview{color:var(--accent-2);background:var(--accent-soft-bg)}
+
+/* ---------- Aba Calendário ---------- */
+.calToolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.calNav{display:flex;align-items:center;gap:10px}
+.calNav button{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--border);border-radius:9px;background:var(--bg-surface-3);color:var(--text-1)}
+.calNavLabel{min-width:130px;text-align:center}
+.calNavLabel b{display:block;font-size:14px}
+.calNavLabel span{color:var(--text-2);font-size:12px}
+.calNavYear{display:flex;align-items:center;gap:6px}
+.calNavYear button{border:1px solid var(--border);border-radius:9px;padding:8px 10px;font-size:12px;color:var(--text-1);background:var(--bg-surface-3)}
+.calNavYear button.ghost{color:var(--accent-2);font-weight:700}
+.calActions{display:flex;gap:10px}
+.calActions button:not(.add){display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:9px;padding:9px 13px;font-size:12.5px;color:var(--text-1);background:var(--bg-surface-3)}
+
+.calGridPanel{margin-bottom:16px}
+.calWeekHead{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:8px}
+.calWeekHead span{text-align:center;font-size:11px;color:var(--text-2);font-weight:700}
+.calGrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.calDay{aspect-ratio:1/1;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:1.5px solid var(--border-soft);border-radius:12px;background:var(--bg-surface-3);color:var(--text-1)}
+.calDay.muted{opacity:.35}
+.calDay.today{border-color:var(--accent);color:var(--accent-2)}
+.calDay.selected{background:var(--accent);color:var(--accent-text-on);border-color:var(--accent)}
+.calDayNum{font-size:13px;font-weight:700}
+.calDots{display:flex;gap:3px}
+.calDots i{width:5px;height:5px;border-radius:50%;display:block}
+
+.calDayEventList,.calRecurringList{display:grid;gap:10px}
+.calDayEventRow,.calRecurringRow{display:flex;align-items:center;gap:12px;border:1px solid var(--border-soft);border-radius:12px;padding:11px 13px}
+.calDayEventRow b,.calRecurringRow b{display:block;font-size:13px}
+.calDayEventRow small,.calRecurringRow small{color:var(--text-2);font-size:11.5px}
+.calDayEventIcon{width:34px;height:34px;min-width:34px;border-radius:10px;display:grid;place-items:center}
+.calRecurringRow{position:relative}
+.calRecurringRow>div:nth-child(2){flex:1}
+
+.calWeekdayPicker{display:flex;flex-wrap:wrap;gap:6px}
+.calWeekdayPicker button{border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12px;color:var(--text-1);background:var(--bg-surface-3)}
+.calWeekdayPicker button.active{background:var(--accent);border-color:var(--accent);color:var(--accent-text-on);font-weight:700}
+
+.calSearchResults{display:grid;gap:8px;max-height:320px;overflow-y:auto}
+.calSearchResultRow{text-align:left;border:1px solid var(--border-soft);border-radius:10px;padding:10px 12px;background:var(--bg-surface-3);color:var(--text-1)}
+.calSearchResultRow:disabled{opacity:.55;cursor:default}
+.calSearchResultRow b{display:block;font-size:13px}
+.calSearchResultRow small{color:var(--text-2);font-size:11.5px}
+
+@media (max-width:760px){
+  .calToolbar{flex-direction:column;align-items:stretch}
+  .calNav,.calNavYear,.calActions{justify-content:center}
+  .calDay{min-height:40px}
+}

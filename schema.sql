@@ -484,3 +484,30 @@ end loop; end $$;
 
 -- Atualização: hora opcional para Lembretes Comuns (notificação com horário marcado)
 alter table reminders add column if not exists time text;
+
+-- Atualização: aba Calendário — eventos recorrentes em dias da semana (ex.: treino, aulas).
+-- Feriados nacionais, datas comemorativas, lembretes, aniversários e metas de estudo já
+-- existem em outras tabelas e são apenas *lidos* pela aba Calendário; só os eventos
+-- recorrentes por dia da semana são exclusivos dela.
+-- weekdays guarda os dias da semana em que o evento se repete, como texto separado por
+-- vírgula (0=domingo ... 6=sábado), ex.: "1,3,5" para segunda/quarta/sexta.
+create table if not exists calendar_recurring_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  weekdays text not null,
+  time text,
+  created_at timestamptz not null default now()
+);
+alter table calendar_recurring_events enable row level security;
+
+do $$ declare t text; begin foreach t in array array['calendar_recurring_events'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

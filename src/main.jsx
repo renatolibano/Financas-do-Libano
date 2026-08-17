@@ -14,7 +14,8 @@ import {
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
-  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft
+  ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
+  CalendarDays, PartyPopper
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -182,6 +183,136 @@ function urgencyClass(days){
   if(days<=7) return "red";
   if(days<=20) return "yellow";
   return "green";
+}
+
+// ===== Aba Calendário =====
+const WEEKDAY_LABELS = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+const MONTH_LABELS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const pad2 = n => String(n).padStart(2,"0");
+
+// Algoritmo de Gauss/Meeus para calcular a data da Páscoa em qualquer ano —
+// a partir dela derivamos Carnaval, Sexta-feira Santa e Corpus Christi.
+function computeEaster(year){
+  const a=year%19, b=Math.floor(year/100), c=year%100;
+  const d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3);
+  const h=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4;
+  const l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
+  const month=Math.floor((h+l-7*m+114)/31), day=((h+l-7*m+114)%31)+1;
+  return new Date(year, month-1, day);
+}
+function addDaysToDate(date,n){ const d=new Date(date); d.setDate(d.getDate()+n); return d; }
+function nthWeekdayOfMonth(year, monthIdx, weekday, n){
+  let d=new Date(year, monthIdx, 1), count=0;
+  while(true){ if(d.getDay()===weekday){ count++; if(count===n) return d; } d.setDate(d.getDate()+1); }
+}
+function lastWeekdayOfMonth(year, monthIdx, weekday){
+  let d=new Date(year, monthIdx+1, 0);
+  while(d.getDay()!==weekday) d.setDate(d.getDate()-1);
+  return d;
+}
+
+// Feriados nacionais e datas comemorativas do Brasil, recalculados a cada ano exibido
+// (os móveis dependem da Páscoa; "Dia das Mães"/"Dia dos Pais" dependem do dia da semana).
+function computeSpecialDays(year){
+  const md = d => ({month:d.getMonth()+1, day:d.getDate()});
+  const easter = computeEaster(year);
+  return [
+    {...md(new Date(year,0,1)), title:"Ano Novo", type:"holiday"},
+    {...md(addDaysToDate(easter,-48)), title:"Carnaval (segunda-feira)", type:"event"},
+    {...md(addDaysToDate(easter,-47)), title:"Carnaval", type:"holiday"},
+    {...md(addDaysToDate(easter,-2)), title:"Sexta-feira Santa", type:"holiday"},
+    {...md(easter), title:"Páscoa", type:"event"},
+    {...md(new Date(year,3,21)), title:"Tiradentes", type:"holiday"},
+    {...md(new Date(year,4,1)), title:"Dia do Trabalho", type:"holiday"},
+    {...md(nthWeekdayOfMonth(year,4,0,2)), title:"Dia das Mães", type:"event"},
+    {...md(addDaysToDate(easter,60)), title:"Corpus Christi", type:"holiday"},
+    {month:6, day:12, title:"Dia dos Namorados", type:"event"},
+    {...md(nthWeekdayOfMonth(year,7,0,2)), title:"Dia dos Pais", type:"event"},
+    {month:7, day:26, title:"Dia dos Avós", type:"event"},
+    {...md(new Date(year,8,7)), title:"Independência do Brasil", type:"holiday"},
+    {...md(new Date(year,9,12)), title:"Nossa Sr.ª Aparecida / Dia das Crianças", type:"holiday"},
+    {month:10, day:15, title:"Dia do Professor", type:"event"},
+    {month:10, day:31, title:"Halloween", type:"event"},
+    {...md(new Date(year,10,2)), title:"Finados", type:"holiday"},
+    {...md(new Date(year,10,15)), title:"Proclamação da República", type:"holiday"},
+    {...md(new Date(year,10,20)), title:"Consciência Negra", type:"holiday"},
+    {...md(lastWeekdayOfMonth(year,10,5)), title:"Black Friday", type:"event"},
+    {month:12, day:25, title:"Natal", type:"holiday"},
+    {month:12, day:31, title:"Réveillon", type:"event"},
+  ];
+}
+
+// Lembretes/aniversários guardam dd/mm (repete todo ano) ou dd/mm/aaaa (data única).
+function reminderMatchesDay(dateStr, year, month, day){
+  if(!dateStr) return false;
+  const parts = String(dateStr).split("/").map(p=>parseInt(p,10));
+  if(parts.length<2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) return false;
+  const [d,m,y] = parts;
+  if(y) return d===day && m===month && y===year;
+  return d===day && m===month;
+}
+function studyGoalMatchesDay(dueDate, year, month, day){
+  return !!dueDate && dueDate===`${year}-${pad2(month)}-${pad2(day)}`;
+}
+function calendarEventMatchesDate(weekdaysStr, dateObj){
+  return String(weekdaysStr||"").split(",").filter(Boolean).map(n=>parseInt(n,10)).includes(dateObj.getDay());
+}
+function formatWeekdaysLabel(weekdaysStr){
+  return String(weekdaysStr||"").split(",").filter(Boolean).map(n=>WEEKDAY_LABELS[parseInt(n,10)]).join(", ");
+}
+
+const CAL_TYPE_META = {
+  holiday: {color:"#ff5c5c", label:"Feriado nacional", icon:Flag},
+  event: {color:"#a06bff", label:"Data comemorativa", icon:PartyPopper},
+  reminder: {color:"#3ecf6a", label:"Lembrete", icon:Bell},
+  birthday: {color:"#f0b429", label:"Aniversário", icon:Cake},
+  recurring: {color:"#4da3ff", label:"Recorrente", icon:Repeat2},
+  goal: {color:"#ff7ad9", label:"Meta de estudo", icon:Target},
+};
+
+// Junta feriados/comemorações, lembretes, aniversários, eventos recorrentes e metas de
+// estudo que caem num dia específico — usado tanto nos "pontinhos" do grid quanto no
+// painel de detalhes do dia selecionado.
+function getDayEvents(year, month, day, {specialDays, reminders, calendarEvents, studyGoals}){
+  const dateObj = new Date(year, month-1, day);
+  const items = [];
+  specialDays.filter(s=>s.month===month && s.day===day).forEach(s=>{
+    items.push({id:"special-"+s.title, title:s.title, subtitle:s.type==="holiday"?"Feriado nacional":"Data comemorativa", type:s.type});
+  });
+  reminders.forEach(r=>{
+    if(reminderMatchesDay(r.date, year, month, day)){
+      const isBday = r.kind==="Aniversário";
+      items.push({id:"rem-"+r.id, title:r.title, subtitle:isBday?"Aniversário":((r.kind||"Lembrete")+(r.time?" · "+r.time:"")), type:isBday?"birthday":"reminder"});
+    }
+  });
+  calendarEvents.forEach(e=>{
+    if(calendarEventMatchesDate(e.weekdays, dateObj)){
+      items.push({id:"cal-"+e.id, title:e.title, subtitle:"Recorrente"+(e.time?" · "+e.time:""), type:"recurring", recurringId:e.id});
+    }
+  });
+  studyGoals.forEach(g=>{
+    if(studyGoalMatchesDay(g.due_date, year, month, day)){
+      items.push({id:"goal-"+g.id, title:g.title, subtitle:"Meta de estudo · conclui hoje", type:"goal"});
+    }
+  });
+  return items;
+}
+
+function buildMonthGrid(year, monthIdx){
+  const startWeekday = new Date(year, monthIdx, 1).getDay();
+  const daysInMonth = new Date(year, monthIdx+1, 0).getDate();
+  const daysInPrevMonth = new Date(year, monthIdx, 0).getDate();
+  const cells = [];
+  for(let i=0;i<startWeekday;i++){
+    cells.push({day:daysInPrevMonth-startWeekday+1+i, current:false, month:monthIdx===0?12:monthIdx, year:monthIdx===0?year-1:year});
+  }
+  for(let d=1; d<=daysInMonth; d++) cells.push({day:d, current:true, month:monthIdx+1, year});
+  const totalCells = Math.ceil((startWeekday+daysInMonth)/7)*7;
+  const trailing = totalCells-(startWeekday+daysInMonth);
+  for(let d=1; d<=trailing; d++){
+    cells.push({day:d, current:false, month:monthIdx===11?1:monthIdx+2, year:monthIdx===11?year+1:year});
+  }
+  return cells;
 }
 
 function sortByProximity(list){
@@ -406,6 +537,8 @@ function notifIcon(kind, size=16){
   if(kind==="Fixo") return <CalendarClock size={size}/>;
   if(kind==="Recorrente") return <Repeat2 size={size}/>;
   if(kind==="Meta") return <Target size={size}/>;
+  if(kind==="Feriado") return <Flag size={size}/>;
+  if(kind==="Comemorativa") return <PartyPopper size={size}/>;
   return <Bell size={size}/>;
 }
 
@@ -510,6 +643,7 @@ function App({session,theme,setTheme}){
   const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true});
   const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true});
   const gameItems = useEntity("game_items", [], session, "asc", {orderable:true});
+  const calendarEvents = useEntity("calendar_recurring_events", [], session);
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
@@ -598,8 +732,29 @@ function App({session,theme,setTheme}){
         });
       }
     });
+    // Feriados nacionais, datas comemorativas e eventos recorrentes do Calendário: avisa um dia antes.
+    const tomorrow = new Date(); tomorrow.setHours(0,0,0,0); tomorrow.setDate(tomorrow.getDate()+1);
+    const tmYear = tomorrow.getFullYear(), tmMonth = tomorrow.getMonth()+1, tmDay = tomorrow.getDate();
+    computeSpecialDays(tmYear).forEach(s=>{
+      if(s.month===tmMonth && s.day===tmDay){
+        items.push({
+          id:"special-"+tmYear+"-"+s.title, title:s.title,
+          subtitle:(s.type==="holiday"?"Feriado nacional":"Data comemorativa")+" amanhã",
+          page:"Calendário", kind:s.type==="holiday"?"Feriado":"Comemorativa",
+        });
+      }
+    });
+    calendarEvents.data.forEach(e=>{
+      if(calendarEventMatchesDate(e.weekdays, tomorrow)){
+        items.push({
+          id:"calrec-"+e.id, title:e.title,
+          subtitle:"Evento recorrente amanhã"+(e.time?" · "+e.time:""),
+          page:"Calendário", kind:"Recorrente",
+        });
+      }
+    });
     return items;
-  },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data]);
+  },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data,calendarEvents.data]);
 
   // Dispara os Lembretes Comuns que têm uma HORA marcada assim que o relógio bate
   // esse horário no dia certo — notificação do navegador + som, mesmo com o app
@@ -677,6 +832,7 @@ function App({session,theme,setTheme}){
       { key:"Lembretes Comuns", label:"Lembretes comuns", icon:Bell },
       { key:"Aniversários", icon:Cake },
     ]},
+    { type:"single", key:"Calendário", icon:CalendarDays },
     { type:"single", key:"Notas", icon:StickyNote },
     { type:"group", key:"livros", label:"Livros", icon:BookOpen, children:[
       { key:"Livros Lidos", label:"Livros que já li", icon:BookCheck },
@@ -788,6 +944,7 @@ function App({session,theme,setTheme}){
       {page==="Lista de Compras" && <ShoppingList entity={shoppingItems}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
+      {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
@@ -1286,6 +1443,176 @@ function Birthdays({entity}){
       {filtered.length===0 && <p className="emptyHint">Nenhum aniversário cadastrado ainda.</p>}
     </div>
   </div>
+}
+
+function CalendarPage({remindersEntity, calendarEventsEntity, studyGoalsEntity}){
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonthIdx, setViewMonthIdx] = useState(today.getMonth());
+  const [selected, setSelected] = useState({year:today.getFullYear(), month:today.getMonth()+1, day:today.getDate()});
+  const [showSearch, setShowSearch] = useState(false);
+  const [showAddRecurring, setShowAddRecurring] = useState(false);
+
+  const reminders = remindersEntity.data;
+  const calendarEventsList = calendarEventsEntity.data;
+  // Só metas de estudo no modo "Data" (com prazo) fazem sentido aparecer num dia específico do calendário.
+  const studyGoalsList = studyGoalsEntity.data.filter(g=>g.mode!=="count" && g.due_date);
+
+  const specialDays = useMemo(()=>computeSpecialDays(viewYear), [viewYear]);
+  const cells = useMemo(()=>buildMonthGrid(viewYear, viewMonthIdx), [viewYear, viewMonthIdx]);
+
+  const eventsFor = (cell) => getDayEvents(cell.year, cell.month, cell.day, {
+    specialDays: cell.year===viewYear ? specialDays : computeSpecialDays(cell.year),
+    reminders, calendarEvents: calendarEventsList, studyGoals: studyGoalsList,
+  });
+  const selectedSpecialDays = selected.year===viewYear ? specialDays : computeSpecialDays(selected.year);
+  const selectedEvents = getDayEvents(selected.year, selected.month, selected.day, {
+    specialDays: selectedSpecialDays, reminders, calendarEvents: calendarEventsList, studyGoals: studyGoalsList,
+  });
+
+  const prevMonth = ()=>{ if(viewMonthIdx===0){ setViewMonthIdx(11); setViewYear(y=>y-1); } else setViewMonthIdx(m=>m-1); };
+  const nextMonth = ()=>{ if(viewMonthIdx===11){ setViewMonthIdx(0); setViewYear(y=>y+1); } else setViewMonthIdx(m=>m+1); };
+  const goToday = ()=>{ setViewYear(today.getFullYear()); setViewMonthIdx(today.getMonth()); setSelected({year:today.getFullYear(), month:today.getMonth()+1, day:today.getDate()}); };
+  const jumpTo = (y,m,d)=>{ setViewYear(y); setViewMonthIdx(m-1); setSelected({year:y, month:m, day:d}); setShowSearch(false); };
+
+  return <div className="content">
+    <div className="panel calToolbar">
+      <div className="calNav">
+        <button type="button" onClick={prevMonth}><ChevronLeft size={18}/></button>
+        <div className="calNavLabel"><b>{MONTH_LABELS[viewMonthIdx]}</b><span>{viewYear}</span></div>
+        <button type="button" onClick={nextMonth}><ChevronRight size={18}/></button>
+      </div>
+      <div className="calNavYear">
+        <button type="button" onClick={()=>setViewYear(y=>y-1)}>−1 ano</button>
+        <button type="button" className="ghost" onClick={goToday}>Hoje</button>
+        <button type="button" onClick={()=>setViewYear(y=>y+1)}>+1 ano</button>
+      </div>
+      <div className="calActions">
+        <button type="button" onClick={()=>setShowSearch(true)}><Search size={16}/> Buscar</button>
+        <button type="button" className="add" onClick={()=>setShowAddRecurring(true)}><Plus size={16}/> Evento recorrente</button>
+      </div>
+    </div>
+
+    <div className="panel calGridPanel">
+      <div className="calWeekHead">{WEEKDAY_LABELS.map(w=><span key={w}>{w}</span>)}</div>
+      <div className="calGrid">
+        {cells.map((cell,i)=>{
+          const evts = eventsFor(cell);
+          const types = Array.from(new Set(evts.map(e=>e.type)));
+          const isToday = cell.year===today.getFullYear() && cell.month===today.getMonth()+1 && cell.day===today.getDate();
+          const isSelected = cell.year===selected.year && cell.month===selected.month && cell.day===selected.day;
+          return <button
+            type="button" key={i}
+            className={"calDay "+(cell.current?"":"muted ")+(isToday?"today ":"")+(isSelected?"selected":"")}
+            onClick={()=>setSelected({year:cell.year, month:cell.month, day:cell.day})}
+          >
+            <span className="calDayNum">{cell.day}</span>
+            {types.length>0 && <span className="calDots">{types.slice(0,4).map(t=><i key={t} style={{background:CAL_TYPE_META[t].color}}/>)}</span>}
+          </button>;
+        })}
+      </div>
+    </div>
+
+    <div className="panel">
+      <div className="panelTitle"><h2>{selected.day} de {MONTH_LABELS[selected.month-1]} de {selected.year}</h2></div>
+      <div className="calDayEventList">
+        {selectedEvents.map(e=>{
+          const meta = CAL_TYPE_META[e.type];
+          const Icon = meta.icon;
+          return <div className="calDayEventRow" key={e.id}>
+            <div className="calDayEventIcon" style={{background:meta.color+"22", color:meta.color}}><Icon size={16}/></div>
+            <div><b>{e.title}</b><small>{e.subtitle}</small></div>
+          </div>;
+        })}
+        {selectedEvents.length===0 && <p className="emptyHint">Nenhum evento neste dia.</p>}
+      </div>
+    </div>
+
+    <div className="panel">
+      <div className="panelTitle"><h2>Eventos recorrentes</h2><span>dias fixos da semana</span></div>
+      <div className="calRecurringList">
+        {calendarEventsList.map(e=><div className="calRecurringRow" key={e.id}>
+          <div className="calDayEventIcon" style={{background:"#4da3ff22", color:"#4da3ff"}}><Repeat2 size={16}/></div>
+          <div><b>{e.title}</b><small>{formatWeekdaysLabel(e.weekdays)}{e.time?" · "+e.time:""}</small></div>
+          <button type="button" className="reminderCardMenu" onClick={()=>calendarEventsEntity.remove(e.id)}><Trash2 size={15}/></button>
+        </div>)}
+        {calendarEventsList.length===0 && <p className="emptyHint">Nenhum evento recorrente cadastrado. Use "Evento recorrente" para adicionar dias de treino, aulas etc.</p>}
+      </div>
+    </div>
+
+    {showAddRecurring && <AddRecurringEventModal
+      onSave={(row)=>{ calendarEventsEntity.add(row); setShowAddRecurring(false); }}
+      onClose={()=>setShowAddRecurring(false)}
+    />}
+    {showSearch && <CalendarSearchModal
+      reminders={reminders} calendarEvents={calendarEventsList} studyGoals={studyGoalsList}
+      onJump={jumpTo} onClose={()=>setShowSearch(false)}
+    />}
+  </div>;
+}
+
+function AddRecurringEventModal({onSave, onClose}){
+  const [title,setTitle] = useState("");
+  const [time,setTime] = useState("");
+  const [days,setDays] = useState([]);
+  const toggleDay = (d)=> setDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev, d].sort());
+  const submit = ()=>{
+    if(!title.trim() || days.length===0) return;
+    onSave({title:title.trim(), weekdays:days.join(","), time:time||null});
+  };
+  return <div className="modalBack" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modalHead"><h2>Novo evento recorrente</h2><button type="button" onClick={onClose}><X/></button></div>
+    <label>Título<input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ex.: Treino, Aula de inglês..."/></label>
+    <label>Repete em
+      <div className="calWeekdayPicker">
+        {WEEKDAY_LABELS.map((w,i)=><button type="button" key={i} className={days.includes(i)?"active":""} onClick={()=>toggleDay(i)}>{w}</button>)}
+      </div>
+    </label>
+    <label>Hora (opcional)<input type="time" value={time} onChange={e=>setTime(e.target.value)}/></label>
+    <button type="button" className="add" onClick={submit}><Plus size={16}/> Salvar evento</button>
+  </div></div>;
+}
+
+function CalendarSearchModal({reminders, calendarEvents, studyGoals, onJump, onClose}){
+  const [q,setQ] = useState("");
+  const results = useMemo(()=>{
+    const query = q.trim().toLowerCase();
+    if(!query) return [];
+    const out = [];
+    const thisYear = new Date().getFullYear();
+    // Feriados/comemorações: procura no ano atual e no próximo, cobrindo os próximos 12 meses.
+    [thisYear, thisYear+1].forEach(y=>{
+      computeSpecialDays(y).filter(s=>s.title.toLowerCase().includes(query)).forEach(s=>{
+        out.push({id:"sp-"+y+"-"+s.title, title:s.title, subtitle:(s.type==="holiday"?"Feriado":"Data comemorativa")+" · "+pad2(s.day)+"/"+pad2(s.month)+"/"+y, year:y, month:s.month, day:s.day});
+      });
+    });
+    reminders.filter(r=>r.title.toLowerCase().includes(query)).forEach(r=>{
+      const parts = String(r.date||"").split("/").map(p=>parseInt(p,10));
+      if(parts.length<2 || Number.isNaN(parts[0])) return;
+      const [d,m,y] = parts;
+      const year = y || thisYear;
+      out.push({id:"rem-"+r.id, title:r.title, subtitle:(r.kind==="Aniversário"?"Aniversário":(r.kind||"Lembrete"))+" · "+pad2(d)+"/"+pad2(m), year, month:m, day:d});
+    });
+    studyGoals.filter(g=>g.due_date && g.title.toLowerCase().includes(query)).forEach(g=>{
+      const [y,m,d] = g.due_date.split("-").map(Number);
+      out.push({id:"goal-"+g.id, title:g.title, subtitle:"Meta de estudo · "+pad2(d)+"/"+pad2(m)+"/"+y, year:y, month:m, day:d});
+    });
+    calendarEvents.filter(e=>e.title.toLowerCase().includes(query)).forEach(e=>{
+      out.push({id:"cal-"+e.id, title:e.title, subtitle:"Recorrente · "+formatWeekdaysLabel(e.weekdays), recurring:true});
+    });
+    return out;
+  },[q, reminders, calendarEvents, studyGoals]);
+
+  return <div className="modalBack" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modalHead"><h2>Buscar no calendário</h2><button type="button" onClick={onClose}><X/></button></div>
+    <label>Nome do evento<input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Ex.: Natal, treino, aniversário..."/></label>
+    <div className="calSearchResults">
+      {results.map(r=><button type="button" key={r.id} className="calSearchResultRow" disabled={r.recurring} onClick={()=>!r.recurring && onJump(r.year, r.month, r.day)}>
+        <b>{r.title}</b><small>{r.subtitle}</small>
+      </button>)}
+      {q.trim() && results.length===0 && <p className="emptyHint">Nada encontrado.</p>}
+    </div>
+  </div></div>;
 }
 
 // Lê uma foto escolhida pelo usuário e devolve um data URL já redimensionado/comprimido
