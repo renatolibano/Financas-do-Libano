@@ -1874,6 +1874,7 @@ function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRen
         type="file"
         accept="image/*"
         style={{display:"none"}}
+        onClick={(e)=>e.stopPropagation()}
         onChange={(e)=>{
           const file = e.target.files?.[0];
           e.target.value = "";
@@ -4932,6 +4933,7 @@ function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRe
         type="file"
         accept="image/*"
         style={{ display: "none" }}
+        onClick={(e) => e.stopPropagation()}
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = "";
@@ -5429,6 +5431,7 @@ function MediaGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onR
         type="file"
         accept="image/*"
         style={{ display: "none" }}
+        onClick={(e) => e.stopPropagation()}
         onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onSetCover(file); }}
       />
       <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
