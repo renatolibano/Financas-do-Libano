@@ -2005,6 +2005,19 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [addingPage, setAddingPage] = useState(false);
   const [pastePulse, setPastePulse] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
+
+  // --- Cronômetro (contagem regressiva) do leitor: útil pra simular tempo de
+  // prova. Os campos de horas/min/seg definem o tempo; ao começar, conta
+  // regressivamente até zero, toca um alarme e pisca até ser zerado.
+  const [timerH, setTimerH] = useState(0);
+  const [timerM, setTimerM] = useState(0);
+  const [timerS, setTimerS] = useState(0);
+  const [timerLeft, setTimerLeft] = useState(0); // segundos restantes, só existe depois de "Começar"
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [timerDone, setTimerDone] = useState(false); // true = tempo zerou, tocando/piscando
+  const timerIntervalRef = useRef(null);
+  const alarmIntervalRef = useRef(null);
+  const audioCtxRef = useRef(null);
   // Cursor customizado: uma bolinha da cor/espessura da ferramenta atual,
   // que segue o ponteiro (mouse/caneta) e some enquanto o traço está sendo feito.
   const [showPenCursor, setShowPenCursor] = useState(false);
@@ -2364,7 +2377,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   // Some com a bolinha sempre que sair do modo caneta ou trocar para uma
   // ferramenta que não desenha traço (borracha, seleção, texto, forma).
   useEffect(() => {
-    if (!penMode || (tool !== "pen" && tool !== "highlighter")) setShowPenCursor(false);
+    if (!penMode || (tool !== "pen" && tool !== "highlighter" && tool !== "eraser")) setShowPenCursor(false);
   }, [penMode, tool]);
 
   // Some com a seleção do laço sempre que trocar de ferramenta.
@@ -2433,7 +2446,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const list = drawings[pageNum] || [];
     const hit = findAnnotationAt(list, x, y, 8);
     if (!hit) return;
-    pushHistory();
+    if (!eraseGestureRef.current) { pushHistory(); eraseGestureRef.current = true; }
     setDrawings(prev => {
       const next = { ...prev, [pageNum]: (prev[pageNum] || []).filter(a => a.id !== hit.id) };
       scheduleDrawingsSave(next);
@@ -2560,6 +2573,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         movePenCursor(e.clientX, e.clientY);
         setShowPenCursor(true);
       }
+    } else if (tool === "eraser" && (e.pointerType === "mouse" || e.pointerType === "pen")) {
+      movePenCursor(e.clientX, e.clientY);
+      setShowPenCursor(true);
     } else if (showPenCursor) {
       setShowPenCursor(false);
     }
@@ -2598,8 +2614,8 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       setLiveAnn(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
     } else if (tool === "shape") {
       setLiveAnn(prev => prev ? { ...prev, x2: x, y2: y } : prev);
-    } else if (tool === "eraser" && eraserMode === "partial") {
-      eraseRadiusAt(x, y);
+    } else if (tool === "eraser") {
+      if (eraserMode === "object") eraseObjectAt(x, y); else eraseRadiusAt(x, y);
     }
   };
 
@@ -2737,6 +2753,80 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     scheduleNotesSave();
   };
 
+  // Toca um "bip" curto via Web Audio API (não depende de nenhum arquivo de
+  // áudio externo, então funciona offline como o resto do app).
+  const playTimerBeep = () => {
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+      o.connect(g); g.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.5);
+    } catch (err) { console.log("[timer] não foi possível tocar o alarme", err); }
+  };
+
+  // Contagem regressiva: decrementa 1s por vez enquanto timerRunning.
+  useEffect(() => {
+    clearInterval(timerIntervalRef.current);
+    if (timerRunning) {
+      timerIntervalRef.current = setInterval(() => {
+        setTimerLeft(s => {
+          if (s <= 1) {
+            clearInterval(timerIntervalRef.current);
+            setTimerRunning(false);
+            setTimerDone(true);
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timerIntervalRef.current);
+  }, [timerRunning]);
+
+  // Enquanto o tempo tiver zerado (timerDone), repete o bipe até a pessoa zerar.
+  useEffect(() => {
+    clearInterval(alarmIntervalRef.current);
+    if (timerDone) {
+      playTimerBeep();
+      alarmIntervalRef.current = setInterval(playTimerBeep, 900);
+    }
+    return () => clearInterval(alarmIntervalRef.current);
+  }, [timerDone]);
+
+  const timerTotalInput = timerH * 3600 + timerM * 60 + timerS;
+  const startTimer = () => {
+    if (timerTotalInput <= 0) return;
+    setTimerDone(false);
+    setTimerLeft(timerTotalInput);
+    setTimerRunning(true);
+  };
+  const pauseTimer = () => setTimerRunning(false);
+  const resumeTimer = () => { if (timerLeft > 0) setTimerRunning(true); };
+  const resetTimer = () => {
+    clearInterval(timerIntervalRef.current);
+    clearInterval(alarmIntervalRef.current);
+    setTimerRunning(false);
+    setTimerDone(false);
+    setTimerLeft(0);
+    setTimerH(0); setTimerM(0); setTimerS(0);
+  };
+  const fmtTimer = (totalSeconds) => {
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  };
+  const timerStarted = timerRunning || timerDone || timerLeft > 0;
+
   const togglePanel = (name) => {
     setPanel(p => {
       if (p==="notas" && name!=="notas") flushNotes(); // fechando notas ao trocar de painel
@@ -2748,6 +2838,8 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     if (panel==="notas") flushNotes();
     flushDrawings();
     searchToken.current++;
+    clearInterval(timerIntervalRef.current);
+    clearInterval(alarmIntervalRef.current);
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
   };
@@ -2784,6 +2876,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             </button>
             <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
               <StickyNote size={15}/> <span>Anotações</span>
+            </button>
+            <button className={`ghost${panel==="timer" ? " active" : ""}${timerDone ? " pdfTimerBlink" : ""}`} onClick={()=>togglePanel("timer")}>
+              <Clock3 size={15}/> <span>{timerStarted ? fmtTimer(timerLeft) : "Cronômetro"}</span>
             </button>
             <button className="ghost" onClick={downloadCurrentPdf}>
               <Download size={15}/> <span>Baixar PDF</span>
@@ -2910,14 +3005,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                       position:"absolute", inset:0, width:"100%", height:"100%",
                       pointerEvents: penMode?"auto":"none",
                       touchAction: penMode?"none":undefined,
-                      cursor: penMode ? (tool==="eraser"?"cell":tool==="select"?"default":tool==="text"?"text":(tool==="pen"||tool==="highlighter")?"none":"crosshair") : undefined,
+                      cursor: penMode ? (tool==="eraser"?(showPenCursor?"none":"cell"):tool==="select"?"default":tool==="text"?"text":(tool==="pen"||tool==="highlighter")?"none":"crosshair") : undefined,
                     }}
                     onPointerDown={handleDrawPointerDown}
                     onPointerMove={handleDrawPointerMove}
                     onPointerUp={handleDrawPointerUp}
                     onContextMenu={(e)=>{ if (penMode) e.preventDefault(); }}
                     onPointerEnter={(e)=>{
-                      if (penMode && (tool==="pen"||tool==="highlighter") && (e.pointerType==="mouse"||e.pointerType==="pen")) {
+                      if (penMode && (tool==="pen"||tool==="highlighter"||tool==="eraser") && (e.pointerType==="mouse"||e.pointerType==="pen")) {
                         movePenCursor(e.clientX, e.clientY);
                         setShowPenCursor(true);
                       }
@@ -2943,6 +3038,17 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                       height: Math.min(60, Math.max(6, (tool==="highlighter"?hlThickness:thickness) * zoom)) + "px",
                       background: tool==="highlighter" ? hlColor : color,
                       opacity: tool==="highlighter" ? Math.max(0.5, hlOpacity) : 1,
+                    }}
+                  />
+                )}
+                {penMode && tool==="eraser" && (
+                  <div
+                    ref={penCursorRef}
+                    className="eraserCursorCircle"
+                    style={{
+                      display: showPenCursor ? "block" : "none",
+                      width: (eraserRadius * 2 * zoom) + "px",
+                      height: (eraserRadius * 2 * zoom) + "px",
                     }}
                   />
                 )}
@@ -3102,6 +3208,41 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   onBlur={flushNotes}
                   data-placeholder="Escreva suas anotações sobre este PDF..."
                 />
+              </div>
+            </div>
+          )}
+
+          {panel==="timer" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Cronômetro</b><span>contagem regressiva</span></div>
+              <div className="notesPaneBody pdfTimerBody">
+                {!timerStarted ? (
+                  <>
+                    <div className="pdfTimerInputs">
+                      <label>Horas<input type="number" min="0" max="23" value={timerH} onChange={e=>setTimerH(Math.max(0, Math.min(23, +e.target.value || 0)))}/></label>
+                      <label>Minutos<input type="number" min="0" max="59" value={timerM} onChange={e=>setTimerM(Math.max(0, Math.min(59, +e.target.value || 0)))}/></label>
+                      <label>Segundos<input type="number" min="0" max="59" value={timerS} onChange={e=>setTimerS(Math.max(0, Math.min(59, +e.target.value || 0)))}/></label>
+                    </div>
+                    <div className="pdfTimerDisplay">{fmtTimer(timerTotalInput)}</div>
+                    <button className="add" disabled={timerTotalInput<=0} onClick={startTimer}><Play size={15}/> Começar</button>
+                  </>
+                ) : (
+                  <>
+                    <div className={`pdfTimerDisplay${timerDone ? " pdfTimerBlink" : ""}`}>{fmtTimer(timerLeft)}</div>
+                    {timerDone ? (
+                      <p className="emptyHint">Tempo esgotado! Toque em "Zerar" para parar o alarme.</p>
+                    ) : (
+                      <div className="pdfTimerBtnRow">
+                        {timerRunning ? (
+                          <button className="ghost" onClick={pauseTimer}><Pause size={15}/> Pausar</button>
+                        ) : (
+                          <button className="add" onClick={resumeTimer}><Play size={15}/> Continuar</button>
+                        )}
+                      </div>
+                    )}
+                    <button className="penDeleteBtn" onClick={resetTimer}><RotateCcw size={14}/> Zerar</button>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -3697,7 +3838,7 @@ function Whiteboard({ board, onClose, onSave }) {
 
   // Some com a bolinha sempre que trocar pra uma ferramenta que não desenha traço.
   useEffect(() => {
-    if (tool !== "pen" && tool !== "highlighter") setShowPenCursor(false);
+    if (tool !== "pen" && tool !== "highlighter" && tool !== "eraser") setShowPenCursor(false);
   }, [tool]);
 
   // Some com a seleção do laço sempre que trocar de ferramenta.
@@ -3831,7 +3972,7 @@ function Whiteboard({ board, onClose, onSave }) {
     // selecioná-lo e excluir manualmente.
     const hit = findElementAt(elements.filter(el => el.type !== "image"), x, y, 8);
     if (!hit) return;
-    pushHistory();
+    if (!eraseGestureRef.current) { pushHistory(); eraseGestureRef.current = true; }
     setElements(prev => prev.filter(a => a.id !== hit.id));
   };
   const deleteSelected = () => {
@@ -3844,9 +3985,10 @@ function Whiteboard({ board, onClose, onSave }) {
   const handleSelectPointerDown = (x, y, pointerId) => {
     if (selectedId) {
       const sel = elements.find(a => a.id === selectedId);
-      if (sel && (sel.type === "shape" || sel.type === "image")) {
-        const cx = sel.type === "image" ? sel.x + sel.width : sel.x2;
-        const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
+      if (sel && (sel.type === "shape" || sel.type === "image" || sel.type === "text")) {
+        const b = elementBBox(sel);
+        const cx = sel.type === "shape" ? sel.x2 : b.x + b.w;
+        const cy = sel.type === "shape" ? sel.y2 : b.y + b.h;
         if (Math.hypot(x - cx, y - cy) < 20 / view.zoom) {
           pushHistory();
           dragRef.current = { mode: "resize", id: sel.id, pointerId };
@@ -4071,7 +4213,8 @@ function Whiteboard({ board, onClose, onSave }) {
     // verdade — mouse/trackpad nesse quadro não desenha, então não precisa
     // dela; e enquanto está desenhando, o próprio traço já mostra onde está,
     // então a bolinha deve SUMIR, não ficar parada no ponto onde o traço
-    // começou).
+    // começou). Já a borracha continua mostrando o círculo mesmo enquanto
+    // apaga, pra dar pra ver o alcance dela durante o gesto.
     if ((tool === "pen" || tool === "highlighter") && e.pointerType === "pen") {
       if (isDrawingRef.current) {
         if (showPenCursor) setShowPenCursor(false);
@@ -4079,6 +4222,9 @@ function Whiteboard({ board, onClose, onSave }) {
         movePenCursor(e.clientX, e.clientY);
         setShowPenCursor(true);
       }
+    } else if (tool === "eraser" && e.pointerType === "pen") {
+      movePenCursor(e.clientX, e.clientY);
+      setShowPenCursor(true);
     } else if (showPenCursor) {
       setShowPenCursor(false);
     }
@@ -4121,8 +4267,8 @@ function Whiteboard({ board, onClose, onSave }) {
       setLiveEl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
     } else if (tool === "shape") {
       setLiveEl(prev => prev ? { ...prev, x2: x, y2: y } : prev);
-    } else if (tool === "eraser" && eraserMode === "partial") {
-      eraseRadiusAt(x, y);
+    } else if (tool === "eraser") {
+      if (eraserMode === "object") eraseObjectAt(x, y); else eraseRadiusAt(x, y);
     }
   };
 
@@ -4256,7 +4402,7 @@ function Whiteboard({ board, onClose, onSave }) {
                 ))}
                 {liveEl && liveEl.type !== "text" && <AnnotationShape ann={liveEl} preview/>}
                 {elements.filter(el => el.type === "text").map(el => (
-                  <foreignObject key={el.id} x={el.x} y={el.y} width={Math.max(160, (el.content?.length || 10) * el.fontSize * 0.6)} height={el.fontSize * 4}>
+                  <foreignObject key={el.id} x={el.x} y={el.y} width={el.width ?? Math.max(160, (el.content?.length || 10) * el.fontSize * 0.6)} height={el.height ?? el.fontSize * 4}>
                     {editingTextId === el.id ? (
                       <textarea
                         autoFocus
@@ -4286,9 +4432,9 @@ function Whiteboard({ board, onClose, onSave }) {
                   return (
                     <g>
                       <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>
-                      {(el.type === "shape" || el.type === "image") && (() => {
-                        const hx = el.type === "image" ? el.x + el.width : el.x2;
-                        const hy = el.type === "image" ? el.y + el.height : el.y2;
+                      {(el.type === "shape" || el.type === "image" || el.type === "text") && (() => {
+                        const hx = el.type === "shape" ? el.x2 : b.x + b.w;
+                        const hy = el.type === "shape" ? el.y2 : b.y + b.h;
                         const onResizeStart = e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; };
                         return (
                           <g style={{ cursor: "nwse-resize" }} onPointerDown={onResizeStart}>
@@ -4342,6 +4488,17 @@ function Whiteboard({ board, onClose, onSave }) {
                   height: Math.min(60, Math.max(6, (tool === "highlighter" ? hlThickness : thickness) * view.zoom)) + "px",
                   background: tool === "highlighter" ? hlColor : color,
                   opacity: tool === "highlighter" ? Math.max(0.5, hlOpacity) : 1,
+                }}
+              />
+            )}
+            {tool === "eraser" && (
+              <div
+                ref={penCursorRef}
+                className="eraserCursorCircle"
+                style={{
+                  display: showPenCursor ? "block" : "none",
+                  width: (eraserRadius * 2 * view.zoom) + "px",
+                  height: (eraserRadius * 2 * view.zoom) + "px",
                 }}
               />
             )}

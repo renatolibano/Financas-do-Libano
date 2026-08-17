@@ -149,8 +149,8 @@ export function detectShapeFromPoints(points) {
 
 export function hitTestAnnotation(ann, x, y, tol = 6) {
   if (ann.type === "text") {
-    const w = Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
-    const h = ann.fontSize * 1.3;
+    const w = ann.width ?? Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
+    const h = ann.height ?? ann.fontSize * 1.3;
     return x >= ann.x - tol && x <= ann.x + w + tol && y >= ann.y - tol && y <= ann.y + h + tol;
   }
   if (ann.type === "shape") {
@@ -189,8 +189,8 @@ export function findAnnotationAt(list, x, y, tol = 6) {
 
 export function annotationBBox(ann) {
   if (ann.type === "text") {
-    const w = Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
-    const h = ann.fontSize * 1.3;
+    const w = ann.width ?? Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
+    const h = ann.height ?? ann.fontSize * 1.3;
     return { x: ann.x, y: ann.y, w, h };
   }
   if (ann.type === "shape") {
@@ -223,8 +223,12 @@ export function translateAnnotation(ann, dx, dy) {
   return ann;
 }
 
-// Redimensiona uma forma arrastando o "cantinho" (o ponto final x2,y2).
+// Redimensiona uma forma (ou a caixa de um texto) arrastando o "cantinho".
 export function resizeShapeAnnotation(ann, x, y) {
+  if (ann.type === "text") {
+    const minW = 60, minH = Math.max(24, ann.fontSize * 1.3);
+    return { ...ann, width: Math.max(minW, x - ann.x), height: Math.max(minH, y - ann.y) };
+  }
   if (ann.type !== "shape") return ann;
   const next = { ...ann, x2: x, y2: y };
   if (ann.cx != null) {

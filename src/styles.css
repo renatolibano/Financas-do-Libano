@@ -558,6 +558,17 @@ h1{font-size:23px}
   z-index:5;
   box-shadow:0 0 0 1px rgba(0,0,0,.35), 0 0 0 2.5px rgba(255,255,255,.9);
 }
+.eraserCursorCircle{
+  position:absolute;
+  top:0; left:0;
+  border-radius:50%;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
+  z-index:5;
+  border:1.5px dashed rgba(0,0,0,.75);
+  box-shadow:0 0 0 1px rgba(255,255,255,.9);
+  background:rgba(255,255,255,.12);
+}
 .pdfTextAnn{position:absolute;z-index:4;white-space:pre-wrap;max-width:60%;line-height:1.25;cursor:default;font-weight:600}
 .pdfTextAnn textarea{background:#fffbe6cc;color:#1f2937;border:1px dashed #0007;border-radius:4px;padding:2px 5px;font:inherit;font-size:inherit;min-width:140px;min-height:1.4em;resize:both}
 .pdfSelectionBox{position:absolute;z-index:5;border:1.5px dashed var(--accent);border-radius:3px;pointer-events:none}
@@ -771,6 +782,15 @@ h1{font-size:23px}
 .notesPaneHead span{font-size:11px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .notesPaneBody{flex:1;overflow:auto}
 .notesPaneBody .noteTextarea{min-height:100%;padding:16px}
+
+.pdfTimerBody{display:flex;flex-direction:column;align-items:center;gap:16px;padding:24px 16px}
+.pdfTimerInputs{display:flex;gap:10px}
+.pdfTimerInputs label{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--text-2)}
+.pdfTimerInputs input{width:56px;text-align:center;font-size:16px;padding:6px 4px;border-radius:8px;border:1px solid var(--border);background:var(--bg-surface-2,var(--bg-surface));color:var(--text-1)}
+.pdfTimerDisplay{font-size:38px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;color:var(--text-1)}
+.pdfTimerBtnRow{display:flex;gap:10px}
+@keyframes pdfTimerBlink{0%,100%{opacity:1}50%{opacity:.2}}
+.pdfTimerBlink{animation:pdfTimerBlink 1s step-start infinite;color:#ff4d4f !important}
 
 @media(max-width:760px){
 .shelf{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:16px 10px}
