@@ -3014,9 +3014,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <input ref={addPageFileInputRef} type="file" accept="image/*" multiple hidden
               onChange={(e)=>{ handleAddPageFiles(e.target.files); e.target.value=""; }}/>
           </div>
-          <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>
-            {addingPage ? "Adicionando página..." : <>Cole um print com <b>Ctrl+V</b> para virar uma nova página</>}
-          </p>
+          {addingPage && (
+            <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>Adicionando página...</p>
+          )}
         </div>
 
         <div className="readerMain">
