@@ -448,7 +448,30 @@ alter table media_items enable row level security;
 -- Atualização: foto de capa para cada filme/série (avulso ou dentro de um universo)
 alter table media_items add column if not exists photo text;
 
-do $$ declare t text; begin foreach t in array array['media_groups','media_items'] loop
+create table if not exists game_groups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  cover_image text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table game_groups enable row level security;
+
+create table if not exists game_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  group_id uuid references game_groups(id) on delete cascade,
+  title text not null,
+  link text,
+  status text not null default 'quero_jogar' check (status in ('quero_jogar','jogando','zerado')),
+  photo text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table game_items enable row level security;
+
+do $$ declare t text; begin foreach t in array array['media_groups','media_items','game_groups','game_items'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);

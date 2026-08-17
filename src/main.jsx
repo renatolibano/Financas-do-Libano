@@ -106,8 +106,10 @@ const maskMoney = (n, hidden) => hidden ? "R$ ••••" : money(n);
 // Passe { native: false } pra pular a Fullscreen API de propósito e usar só a classe CSS — o próprio
 // navegador mostra um botão de "sair da tela cheia" por cima do conteúdo ao mexer o mouse quando a API
 // real está ativa, e em algumas telas (como o quadro infinito) isso atrapalha mais do que ajuda.
-function useFullscreen(ref, { native = true } = {}) {
-  const [fullscreen, setFullscreen] = useState(false);
+// Passe { startOpen: true } pra já nascer com a classe CSS de tela cheia aplicada (sem chamar a
+// Fullscreen API sozinha, que exige gesto do usuário) — é o mesmo efeito visual do quadro infinito.
+function useFullscreen(ref, { native = true, startOpen = false } = {}) {
+  const [fullscreen, setFullscreen] = useState(startOpen);
 
   useEffect(() => {
     if (!native) return;
@@ -506,6 +508,8 @@ function App({session,theme,setTheme}){
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
   const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true});
   const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true});
+  const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true});
+  const gameItems = useEntity("game_items", [], session, "asc", {orderable:true});
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
@@ -793,7 +797,7 @@ function App({session,theme,setTheme}){
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems}/>}
-      {page==="Jogos" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems}/>}
 
       <ToastHost/>
 
@@ -1448,7 +1452,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
@@ -2133,7 +2137,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
   const textLayerRef = useRef(null);
   const pageWrapRef = useRef(null);
   const notesBodyRef = useRef(null);
@@ -5721,6 +5725,280 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
             <button type="button" className="ghost" onClick={addSeason}><Plus size={14}/> Adicionar temporada</button>
           </div>
         </>)}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Jogos (Área de Lazer) ----------
+// Guarda os jogos que a pessoa quer jogar, está jogando ou já zerou.
+// "game_groups" funciona como pasta: agrupa jogos de uma mesma franquia
+// (ex.: God of War, Zelda), cada uma com seu próprio progresso.
+
+function gameFranchisePct(items) {
+  if (!items.length) return 0;
+  const done = items.filter(i => i.status === "zerado").length;
+  return Math.round((done / items.length) * 100);
+}
+
+function GameShelf({ groupsEntity, itemsEntity }) {
+  const { data: groups, add: addGroup, remove: removeGroup, update: updateGroup } = groupsEntity;
+  const { data: items, add: addItem, remove: removeItem, update: updateItem } = itemsEntity;
+
+  const [currentGroupId, setCurrentGroupId] = useState(null);
+  const [groupModal, setGroupModal] = useState(null); // null | "new" | grupo sendo renomeado
+  const [itemForm, setItemForm] = useState(null); // null | "new" | item sendo editado
+  const [openMenuId, setOpenMenuId] = useState(null);
+
+  const currentGroup = currentGroupId ? groups.find(g => g.id === currentGroupId) : null;
+  const visibleItems = currentGroupId
+    ? items.filter(i => i.group_id === currentGroupId)
+    : items.filter(i => !i.group_id);
+
+  const handleSaveGroup = (name) => {
+    if (groupModal === "new") addGroup({ name, cover_image: null });
+    else updateGroup(groupModal.id, { name });
+    setGroupModal(null);
+  };
+
+  const handleSetCover = async (group, file) => {
+    setOpenMenuId(null);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+      await updateGroup(group.id, { cover_image: dataUrl });
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    }
+  };
+  const handleRemoveCover = (group) => { setOpenMenuId(null); updateGroup(group.id, { cover_image: null }); };
+
+  const confirmDeleteGroup = (group) => {
+    setOpenMenuId(null);
+    const count = items.filter(i => i.group_id === group.id).length;
+    const msg = count > 0
+      ? `Excluir "${group.name}"? Os ${count} jogo(s) dentro dela também serão apagados.`
+      : `Excluir "${group.name}"?`;
+    if (!confirm(msg)) return;
+    items.filter(i => i.group_id === group.id).forEach(i => removeItem(i.id));
+    removeGroup(group.id);
+    if (currentGroupId === group.id) setCurrentGroupId(null);
+  };
+
+  const confirmDeleteItem = (item) => {
+    setOpenMenuId(null);
+    if (confirm(`Excluir "${item.title}"?`)) removeItem(item.id);
+  };
+
+  if (itemForm !== null) {
+    return <GameItemForm
+      item={itemForm === "new" ? null : itemForm}
+      onCancel={() => setItemForm(null)}
+      onSave={(payload) => {
+        if (itemForm === "new") addItem({ group_id: currentGroupId, ...payload });
+        else updateItem(itemForm.id, payload);
+        setItemForm(null);
+      }}
+    />;
+  }
+
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><Gamepad2 size={22}/></div>
+          <div>
+            <small>ÁREA DE LAZER</small>
+            <h2>{currentGroup ? currentGroup.name : "Jogos"}</h2>
+            <p>{currentGroup
+              ? `${visibleItems.length} jogo(s) aqui.`
+              : "Guarde os jogos que você quer jogar, acompanhe o progresso e organize por franquia."}</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          {currentGroup && <button className="ghost" onClick={() => setCurrentGroupId(null)}><ChevronLeft size={16}/> Voltar</button>}
+          <button className="add" onClick={(e) => { e.stopPropagation(); setItemForm("new"); }}><Plus size={16}/> Adicionar jogo</button>
+        </div>
+      </div>
+
+      {!currentGroup && (
+        <div className="flashSection">
+          <h3>Franquias</h3>
+          <div className="shelf">
+            <div className="bookTile addTile" onClick={() => setGroupModal("new")}>
+              <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Nova franquia</span></div>
+            </div>
+            {groups.map(group => {
+              const groupItems = items.filter(i => i.group_id === group.id);
+              return (
+                <GameGroupTile
+                  key={group.id}
+                  group={group}
+                  count={groupItems.length}
+                  pct={gameFranchisePct(groupItems)}
+                  menuOpen={openMenuId === "g:" + group.id}
+                  onToggleMenu={(e) => { e?.stopPropagation?.(); setOpenMenuId(id => id === "g:" + group.id ? null : "g:" + group.id); }}
+                  onOpen={() => setCurrentGroupId(group.id)}
+                  onRename={() => { setOpenMenuId(null); setGroupModal(group); }}
+                  onDelete={() => confirmDeleteGroup(group)}
+                  onSetCover={(file) => handleSetCover(group, file)}
+                  onRemoveCover={() => handleRemoveCover(group)}
+                />
+              );
+            })}
+            {groups.length === 0 && <p className="emptyHint">Nenhuma franquia criada ainda.</p>}
+          </div>
+        </div>
+      )}
+
+      <div className="flashSection">
+        {!currentGroup && <h3>Jogos avulsos</h3>}
+        {visibleItems.length === 0 ? (
+          <p className="emptyHint">{currentGroup ? "Nenhum jogo nessa franquia ainda." : "Nenhum jogo por aqui ainda."}</p>
+        ) : (
+          <div className="exerciseList">
+            {visibleItems.map(item => (
+              <GameItemRow
+                key={item.id}
+                item={item}
+                menuOpen={openMenuId === item.id}
+                onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(id => id === item.id ? null : item.id); }}
+                onEdit={() => { setOpenMenuId(null); setItemForm(item); }}
+                onDelete={() => confirmDeleteItem(item)}
+                onStatusChange={(status) => updateItem(item.id, { status })}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {groupModal && (
+        <FolderModal
+          folder={groupModal === "new" ? null : groupModal}
+          onClose={() => setGroupModal(null)}
+          onSave={handleSaveGroup}
+        />
+      )}
+    </div>
+  );
+}
+
+function GameGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
+  const coverInputRef = useRef(null);
+  return (
+    <div className="bookTile groupTile" onClick={onOpen}>
+      <div className="bookCoverWrap groupCover">
+        {group.cover_image
+          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
+          : <Gamepad2 size={34}/>}
+      </div>
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onSetCover(file); }}
+      />
+      <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
+        <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
+        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        <button onClick={onRename}><Pencil size={13}/> Renomear</button>
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+      </div>}
+      <b className="bookTitle">{group.name}</b>
+      <div className="progress" style={{ marginTop: 6 }}><i style={{ width: pct + "%" }}/></div>
+      <small className="bookProgressLabel">{count} jogo{count === 1 ? "" : "s"} · {pct}%</small>
+    </div>
+  );
+}
+
+function GameItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusChange }) {
+  return (
+    <div className="exerciseRow">
+      <div className="exerciseThumb">
+        {item.photo ? <img src={item.photo} alt={item.title}/> : <Gamepad2 size={22}/>}
+      </div>
+      <div className="exerciseInfo">
+        <b>{item.title}</b>
+        <small>
+          <select className="mediaStatusSelect" value={item.status || "quero_jogar"} onClick={e => e.stopPropagation()} onChange={e => onStatusChange(e.target.value)}>
+            <option value="quero_jogar">Quero jogar</option>
+            <option value="jogando">Jogando</option>
+            <option value="zerado">Zerado</option>
+          </select>
+        </small>
+      </div>
+      <div className="mediaItemActions">
+        {item.link && <a className="ghost" href={item.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}><ExternalLink size={13}/> Abrir</a>}
+      </div>
+      <button className="exerciseMenuBtn" onClick={onToggleMenu}><MoreVertical size={16}/></button>
+      {menuOpen && (
+        <div className="exerciseMenuPop flashMenuPop" onClick={e => e.stopPropagation()}>
+          <button onClick={onEdit}><Pencil size={13}/> Editar</button>
+          <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GameItemForm({ item, onCancel, onSave }) {
+  const [title, setTitle] = useState(item?.title || "");
+  const [link, setLink] = useState(item?.link || "");
+  const [status, setStatus] = useState(item?.status || "quero_jogar");
+  const [photo, setPhoto] = useState(item?.photo || "");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+
+  const handlePhotoFile = async (file) => {
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+      setPhoto(dataUrl);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleSubmit = () => {
+    if (!title.trim()) return;
+    onSave({ title: title.trim(), link: link.trim() || null, status, photo: photo || null });
+  };
+
+  return (
+    <div className="content">
+      <div className="flashFormHead">
+        <h2>{item ? "Editar" : "Adicionar"} jogo</h2>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onCancel}>Cancelar</button>
+          <button className="add" disabled={!title.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+
+      <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
+        <label>Foto (opcional)
+          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
+            {photo ? <img src={photo} alt="Prévia"/> : <Gamepad2 size={28}/>}
+          </div>
+          <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
+          <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
+          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+        </label>
+        <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: The Legend of Zelda: Tears of the Kingdom"/></label>
+        <label>Link (loja, wiki etc. — opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
+        <label>Status
+          <div className="themeToggle exerciseModeToggle">
+            <button type="button" className={status === "quero_jogar" ? "active" : ""} onClick={() => setStatus("quero_jogar")}>Quero jogar</button>
+            <button type="button" className={status === "jogando" ? "active" : ""} onClick={() => setStatus("jogando")}>Jogando</button>
+            <button type="button" className={status === "zerado" ? "active" : ""} onClick={() => setStatus("zerado")}>Zerado</button>
+          </div>
+        </label>
       </div>
     </div>
   );
