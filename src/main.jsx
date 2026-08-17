@@ -1336,7 +1336,7 @@ function BookCoverThumb({ book }) {
       try {
         const blob = await downloadBookFile(book.file_path);
         const buf = await blob.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const pdf = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
         const page = await pdf.getPage(1);
         const baseViewport = page.getViewport({ scale: 1 });
         const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -1465,7 +1465,12 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
         setLoading(true);
         const blob = await downloadBookFile(book.file_path);
         const buf = await blob.arrayBuffer();
-        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        // isOffscreenCanvasSupported: false — alguns PDFs (ex.: provas escaneadas,
+        // que trazem os desenhos das questões como imagem CCITT/fax 1-bit) somem
+        // silenciosamente em cima da página quando o pdf.js usa OffscreenCanvas
+        // pra compor essas imagens; desligar isso força o caminho de composição
+        // no canvas normal, que é mais confiável pra esse tipo de imagem.
+        const doc = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
         if (!active) return;
         setPdf(doc);
         setNumPages(doc.numPages);
@@ -1798,7 +1803,7 @@ function BookShelf({ entity, status, session, studyGoals }) {
     try {
       setUploading(true);
       const buf = await file.arrayBuffer();
-      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const doc = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
       const totalPages = doc.numPages;
       const id = crypto.randomUUID();
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
@@ -1897,7 +1902,7 @@ function StudyPdfCoverThumb({ pdfDoc }) {
       try {
         const blob = await downloadStudyPdfFile(pdfDoc.file_path);
         const buf = await blob.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const pdf = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
         const page = await pdf.getPage(1);
         const baseViewport = page.getViewport({ scale: 1 });
         const dpr = Math.min(3, window.devicePixelRatio || 1);
@@ -2157,7 +2162,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         // recebe (transferable), então o que sobra pra reaproveitar depois
         // (colar uma página nova) precisa ser um buffer separado.
         pdfBytesRef.current = buf.slice(0);
-        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        const doc = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
         if (!active) return;
         setPdf(doc);
         setNumPages(doc.numPages);
@@ -2200,7 +2205,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, img.width, img.height, bg);
       const newBuf = await blob.arrayBuffer();
       pdfBytesRef.current = newBuf.slice(0);
-      const newDoc = await pdfjsLib.getDocument({ data: newBuf }).promise;
+      const newDoc = await pdfjsLib.getDocument({ data: newBuf, isOffscreenCanvasSupported: false }).promise;
       setPdf(newDoc);
       setNumPages(newDoc.numPages);
       setPageNum(newDoc.numPages);
@@ -3434,7 +3439,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
     try {
       setUploading(true);
       const buf = await file.arrayBuffer();
-      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const doc = await pdfjsLib.getDocument({ data: buf, isOffscreenCanvasSupported: false }).promise;
       const totalPages = doc.numPages;
       const id = crypto.randomUUID();
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
