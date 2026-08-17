@@ -458,3 +458,6 @@ do $$ declare t text; begin foreach t in array array['media_groups','media_items
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Atualização: hora opcional para Lembretes Comuns (notificação com horário marcado)
+alter table reminders add column if not exists time text;
