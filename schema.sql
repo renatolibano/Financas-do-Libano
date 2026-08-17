@@ -439,10 +439,14 @@ create table if not exists media_items (
   current_episode int not null default 0,
   current_season int not null default 1,
   seasons jsonb not null default '[]'::jsonb,
+  photo text,
   sort_order int,
   created_at timestamptz not null default now()
 );
 alter table media_items enable row level security;
+
+-- Atualização: foto de capa para cada filme/série (avulso ou dentro de um universo)
+alter table media_items add column if not exists photo text;
 
 do $$ declare t text; begin foreach t in array array['media_groups','media_items'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);

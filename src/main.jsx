@@ -5303,7 +5303,15 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
       if (!currentSeason) return;
       const total = Number(currentSeason.total_episodes) || 0;
       const next = Math.min(total, (Number(currentSeason.current_episode) || 0) + 1);
-      onPatch({ seasons: seasons.map(s => s.season === currentSeason.season ? { ...s, current_episode: next } : s) });
+      const patch = { seasons: seasons.map(s => s.season === currentSeason.season ? { ...s, current_episode: next } : s) };
+      // Zerou os episódios da temporada atual: já avança pra próxima automaticamente, se existir.
+      if (total > 0 && next >= total) {
+        const nextSeason = seasons
+          .filter(s => Number(s.season) > Number(currentSeason.season))
+          .sort((a, b) => Number(a.season) - Number(b.season))[0];
+        if (nextSeason) patch.current_season = Number(nextSeason.season);
+      }
+      onPatch(patch);
     } else {
       const total = Number(item.total_episodes) || 0;
       const next = Math.min(total, (Number(item.current_episode) || 0) + 1);
@@ -5313,7 +5321,9 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
 
   return (
     <div className="exerciseRow">
-      <div className="exerciseThumb">{isSeries ? <Clapperboard size={22}/> : <Film size={22}/>}</div>
+      <div className="exerciseThumb">
+        {item.photo ? <img src={item.photo} alt={item.title}/> : (isSeries ? <Clapperboard size={22}/> : <Film size={22}/>)}
+      </div>
       <div className="exerciseInfo">
         <b>{item.title}</b>
         <small>
@@ -5348,11 +5358,28 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
   const [title, setTitle] = useState(item?.title || "");
   const [link, setLink] = useState(item?.link || "");
   const [status, setStatus] = useState(item?.status || "quero_ver");
+  const [photo, setPhoto] = useState(item?.photo || "");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
   const [hasSeasons, setHasSeasons] = useState(item?.has_seasons || false);
   const [totalEpisodes, setTotalEpisodes] = useState(item?.total_episodes ?? 0);
   const [currentEpisode, setCurrentEpisode] = useState(item?.current_episode ?? 0);
   const [currentSeason, setCurrentSeason] = useState(item?.current_season ?? 1);
   const [seasons, setSeasons] = useState(item?.seasons?.length ? item.seasons : [{ season: 1, total_episodes: 0, current_episode: 0 }]);
+
+  const handlePhotoFile = async (file) => {
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+      setPhoto(dataUrl);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const setSeasonField = (season, field, value) => setSeasons(ss => ss.map(s => s.season === season ? { ...s, [field]: value } : s));
   const addSeason = () => setSeasons(ss => [...ss, { season: (Math.max(0, ...ss.map(s => Number(s.season) || 0)) + 1), total_episodes: 0, current_episode: 0 }]);
@@ -5360,7 +5387,7 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
 
   const handleSubmit = () => {
     if (!title.trim()) return;
-    const payload = { title: title.trim(), link: link.trim() || null, status };
+    const payload = { title: title.trim(), link: link.trim() || null, status, photo: photo || null };
     if (isSeries) {
       payload.has_seasons = hasSeasons;
       if (hasSeasons) {
@@ -5394,6 +5421,14 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
       </div>
 
       <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
+        <label>Foto (opcional)
+          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
+            {photo ? <img src={photo} alt="Prévia"/> : (isSeries ? <Clapperboard size={28}/> : <Film size={28}/>)}
+          </div>
+          <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
+          <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
+          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+        </label>
         <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder={isSeries ? "Ex.: Breaking Bad" : "Ex.: Interestelar"}/></label>
         <label>Link para assistir (opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
         <label>Status
