@@ -2073,6 +2073,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [searching, setSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState(0);
   const [jumpValue, setJumpValue] = useState("");
+  const [jumpFlyoutOpen, setJumpFlyoutOpen] = useState(false);
 
   // --- Modo Caneta: desenho à mão livre por cima do PDF, guardado como uma
   // camada separada (nunca altera o PDF original) e sincronizado em drawings.
@@ -2339,6 +2340,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const n = parseInt(jumpValue, 10);
     if (!isNaN(n)) goTo(n);
     setJumpValue("");
+    setJumpFlyoutOpen(false);
   };
 
   const toggleFavorite = () => {
@@ -2986,40 +2988,40 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
           </div>
         </div>
 
-        <div className="pdfToolbar">
-          <div className="pdfToolbarGroup">
-            <button title={penMode?"Sair do modo caneta":"Modo caneta — escrever no PDF"} className={penMode?"active":""} onClick={togglePenMode}>
-              <PenTool size={16}/> <span>Escrever</span>
-            </button>
-          </div>
-          <div className="pdfToolbarGroup">
-            <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
-            <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
-            <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
-          </div>
-          <form className="pdfToolbarGroup pdfJumpForm" onSubmit={handleJump}>
-            <input type="number" min="1" max={numPages||undefined} placeholder={`Ir p/ página (1-${numPages||"?"})`} value={jumpValue} onChange={e=>setJumpValue(e.target.value)}/>
-            <button type="submit" title="Ir para a página"><ArrowRight size={15}/></button>
-          </form>
-          <div className="pdfToolbarGroup">
+        <div className="readerMain">
+        <div className={"pdfDockLeft"+(penMode?" pdfDockLeftPenOpen":"")}>
+          <div className="pdfDockRow">
+            <button title={penMode?"Sair do modo caneta":"Modo caneta — escrever no PDF"} className={penMode?"active":""} onClick={togglePenMode}><PenTool size={16}/></button>
+            <span className="pdfDockDivider"/>
             <button title={isFav?"Remover dos favoritos":"Favoritar esta página"} className={isFav?"active":""} onClick={toggleFavorite}><Star size={16} fill={isFav?"currentColor":"none"}/></button>
             <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
+            <span className="pdfDockDivider"/>
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
-          <div className="pdfToolbarGroup">
-            <button title="Adicionar página a partir de uma imagem" onClick={()=>addPageFileInputRef.current?.click()}>
-              <ImagePlus size={16}/> <span>Adicionar página</span>
-            </button>
+          <div className="pdfDockRow">
+            <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
+            <button title="Ajustar à largura da tela" className={"pdfDockZoomLabel"+(fitWidth?" active":"")} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
+            <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
+            <span className="pdfDockDivider"/>
+            <div className="pdfDockJumpWrap">
+              <button title="Ir para página" className={jumpFlyoutOpen?"active":""} onClick={()=>setJumpFlyoutOpen(v=>!v)}><ArrowRight size={16}/></button>
+              {jumpFlyoutOpen && (
+                <form className="pdfDockJumpFlyout" onSubmit={handleJump} onPointerDown={e=>e.stopPropagation()}>
+                  <input autoFocus type="number" min="1" max={numPages||undefined} placeholder={`Página (1-${numPages||"?"})`} value={jumpValue} onChange={e=>setJumpValue(e.target.value)}/>
+                  <button type="submit"><ArrowRight size={14}/> Ir</button>
+                </form>
+              )}
+            </div>
+            <span className="pdfDockDivider"/>
+            <button title="Adicionar página a partir de uma imagem" onClick={()=>addPageFileInputRef.current?.click()}><ImagePlus size={16}/></button>
             <input ref={addPageFileInputRef} type="file" accept="image/*" multiple hidden
               onChange={(e)=>{ handleAddPageFiles(e.target.files); e.target.value=""; }}/>
           </div>
-          <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>
-            {addingPage ? "Adicionando página..." : <>Cole um print com <b>Ctrl+V</b> para virar uma nova página</>}
+          <p className={"pdfDockPasteHint"+(pastePulse?" flash":"")}>
+            {addingPage ? "Adicionando página..." : <>Cole um print (<b>Ctrl+V</b>) para virar página</>}
           </p>
         </div>
-
-        <div className="readerMain">
         {penMode && (
           <div className="penOptionsBar">
             <div className="penToolGroup penToolGroupMain">
