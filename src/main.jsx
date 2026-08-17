@@ -256,8 +256,58 @@ function useDismissedToday(){
   return [dismissed, dismissAll];
 }
 
+// Toca um som de notificação (dois "bips" curtos) via Web Audio API — não depende de
+// nenhum arquivo de áudio externo, então funciona offline como o resto do app.
+// Reaproveitado por toda notificação do app (toasts, sininho de lembretes e os
+// lembretes com hora marcada), pra dar sempre o mesmo "clique sonoro" ao chegar.
+let notifAudioCtx = null;
+function playNotifSound() {
+  try {
+    if (!notifAudioCtx) notifAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = notifAudioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const playTone = (freq, startOffset, duration) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = freq;
+      const start = ctx.currentTime + startOffset;
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.28, start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(start);
+      o.stop(start + duration + 0.02);
+    };
+    playTone(880, 0, 0.14);
+    playTone(1180, 0.12, 0.18);
+  } catch (err) { console.log("[notificação] não foi possível tocar o som", err); }
+}
+
+// Pede permissão de notificações do navegador (uma vez só — se já foi concedida ou
+// negada antes, não pergunta de novo). Usado antes de agendar lembretes com hora.
+function requestNotificationPermission() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+// Dispara uma notificação nativa do navegador/SO (fora da aba, se possível) e toca
+// o som de notificação do app. Silenciosamente ignora se o navegador não suportar
+// ou se a permissão não tiver sido concedida.
+function fireBrowserNotification(title, body) {
+  playNotifSound();
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png" });
+    }
+  } catch (err) { console.log("[notificação] não foi possível exibir a notificação", err); }
+}
+
 // Notificações rápidas (toast) — usadas, por ex., quando uma Meta vinculada a um PDF é concluída automaticamente.
 function toast(message, type = "success") {
+  playNotifSound();
   window.dispatchEvent(new CustomEvent("app:toast", { detail: { message, type } }));
 }
 
@@ -361,12 +411,27 @@ function NotificationsBell({items, goTo}){
   const [open,setOpen] = useState(false);
   const [dismissed,dismissAll] = useDismissedToday();
   const ref = useRef(null);
+  const seenIdsRef = useRef(null);
 
   useEffect(()=>{
     const onDoc = (e)=>{ if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", onDoc);
     return ()=>document.removeEventListener("mousedown", onDoc);
   },[]);
+
+  // Toca o som de notificação sempre que um item NOVO aparece no sininho
+  // (ex.: um lembrete que passou a vencer amanhã). Na primeira renderização
+  // só registra o que já existe, sem tocar som — o som é só para chegadas novas.
+  useEffect(()=>{
+    const currentIds = new Set(items.map(it=>it.id));
+    if(seenIdsRef.current===null){
+      seenIdsRef.current = currentIds;
+      return;
+    }
+    const hasNew = items.some(it=>!seenIdsRef.current.has(it.id));
+    if(hasNew) playNotifSound();
+    seenIdsRef.current = currentIds;
+  },[items]);
 
   const visible = items.filter(it=>!dismissed.includes(it.id));
   const count = visible.length;
@@ -531,6 +596,35 @@ function App({session,theme,setTheme}){
     });
     return items;
   },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data]);
+
+  // Dispara os Lembretes Comuns que têm uma HORA marcada assim que o relógio bate
+  // esse horário no dia certo — notificação do navegador + som, mesmo com o app
+  // aberto em outra aba/página. Confere a cada 20s (não precisa ser por segundo:
+  // a notificação só precisa aparecer perto do minuto certo, e checar toda hora
+  // gastaria bateria à toa). Guarda no localStorage quais já dispararam hoje pra
+  // não repetir a notificação a cada nova checagem.
+  useEffect(()=>{
+    const check = ()=>{
+      const now = new Date();
+      const todayKey = now.toISOString().slice(0,10);
+      const storageKey = "libano-timed-reminders-fired-"+todayKey;
+      let fired = [];
+      try{ fired = JSON.parse(localStorage.getItem(storageKey)||"[]"); }catch(e){}
+      const nowHM = String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+      reminders.data.forEach(r=>{
+        if(r.kind==="Aniversário" || !r.time) return;
+        if(daysUntil(r.date)!==0) return; // só dispara no próprio dia do lembrete
+        if(r.time>nowHM) return; // ainda não chegou a hora
+        if(fired.includes(r.id)) return; // já disparou hoje
+        fireBrowserNotification(r.title, "Lembrete · "+(r.kind||"Geral")+" · "+r.time);
+        fired.push(r.id);
+        try{ localStorage.setItem(storageKey, JSON.stringify(fired)); }catch(e){}
+      });
+    };
+    check();
+    const interval = setInterval(check, 20000);
+    return ()=>clearInterval(interval);
+  },[reminders.data]);
 
   const [aiInsight,setAiInsight] = useState(null);
   const [aiLoading,setAiLoading] = useState(false);
@@ -1120,18 +1214,22 @@ function Cards({entity,bill}){
 function CommonReminders({entity}){
   const {data,add,remove} = entity;
   const filtered = sortByProximity(data.filter(x=>x.kind!=="Aniversário"));
-  const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro");
+  const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro"); const [time,setTime]=useState("");
   const [openMenuId,setOpenMenuId]=useState(null);
   const submit=()=>{
     if(!title.trim()||!date) return;
-    add({title,date,kind});
-    setTitle("");setDate("");setKind("Financeiro");
+    add({title,date,kind,time:time||null});
+    // Se a pessoa definiu uma hora, já aproveita e pede permissão de notificação
+    // (só pergunta de fato na primeira vez — depois disso o navegador lembra a escolha).
+    if(time) requestNotificationPermission();
+    setTitle("");setDate("");setKind("Financeiro");setTime("");
   };
   return <div className="content">
     <div className="panel">
       <div className="inlineAdd">
         <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Título do lembrete"/>
         <input value={date} onChange={e=>setDate(e.target.value)} placeholder="Data (dd/mm)"/>
+        <input value={time} onChange={e=>setTime(e.target.value)} type="time" title="Hora do lembrete (opcional)" placeholder="Hora"/>
         <select value={kind} onChange={e=>setKind(e.target.value)}><option>Financeiro</option><option>Outros</option></select>
         <button onClick={submit}><Plus/></button>
       </div>
@@ -1141,7 +1239,7 @@ function CommonReminders({entity}){
         key={x.id}
         icon={<Bell size={18}/>}
         title={x.title}
-        subtitle={x.kind+" · "+x.date}
+        subtitle={x.kind+" · "+x.date+(x.time?" às "+x.time:"")}
         days={daysUntil(x.date)}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
