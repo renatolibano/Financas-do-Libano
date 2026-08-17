@@ -412,3 +412,45 @@ alter table transactions add column if not exists bank_connection_id uuid refere
 -- continuam livres — só transações importadas duplicadas são bloqueadas.
 alter table transactions drop constraint if exists transactions_pluggy_transaction_id_key;
 alter table transactions add constraint transactions_pluggy_transaction_id_key unique (pluggy_transaction_id);
+
+-- Área de Lazer: Filmes e Séries (o que a pessoa quer ver, está vendo ou já viu,
+-- com progresso de episódios/temporadas e franquias/universos agrupados em pastas)
+create table if not exists media_groups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  kind text not null check (kind in ('filme','serie')),
+  cover_image text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table media_groups enable row level security;
+
+create table if not exists media_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  group_id uuid references media_groups(id) on delete cascade,
+  kind text not null check (kind in ('filme','serie')),
+  title text not null,
+  link text,
+  status text not null default 'quero_ver' check (status in ('quero_ver','assistindo','concluido')),
+  has_seasons boolean not null default false,
+  total_episodes int not null default 0,
+  current_episode int not null default 0,
+  current_season int not null default 1,
+  seasons jsonb not null default '[]'::jsonb,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table media_items enable row level security;
+
+do $$ declare t text; begin foreach t in array array['media_groups','media_items'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

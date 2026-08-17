@@ -439,6 +439,8 @@ function App({session,theme,setTheme}){
   const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true});
   const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true});
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
+  const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true});
+  const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true});
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
@@ -696,7 +698,7 @@ function App({session,theme,setTheme}){
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises}/>}
-      {page==="Filmes e Séries" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
+      {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems}/>}
       {page==="Jogos" && <div className="content"><p className="emptyHint">Em breve.</p></div>}
 
       <ToastHost/>
@@ -5062,6 +5064,370 @@ function WorkoutPlayer({ folder, exercises, onClose }) {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Filmes e Séries (Área de Lazer) ----------
+// Guarda tanto filmes quanto séries que a pessoa quer/está/já assistiu.
+// "media_groups" funciona como pasta: agrupa filmes de uma mesma franquia
+// (ex.: trilogia) ou séries de um mesmo universo (ex.: Breaking Bad +
+// Better Call Saul), cada uma com seu próprio progresso.
+
+// % de episódios assistidos de UMA série (considera temporadas, se houver).
+function mediaSeriesPct(item) {
+  if (item.has_seasons) {
+    const seasons = item.seasons || [];
+    const total = seasons.reduce((a, s) => a + (Number(s.total_episodes) || 0), 0);
+    const current = seasons.reduce((a, s) => a + Math.min(Number(s.current_episode) || 0, Number(s.total_episodes) || 0), 0);
+    return total ? Math.round((current / total) * 100) : 0;
+  }
+  const total = Number(item.total_episodes) || 0;
+  const current = Math.min(Number(item.current_episode) || 0, total);
+  return total ? Math.round((current / total) * 100) : 0;
+}
+
+// % de filmes já assistidos dentro de uma franquia.
+function mediaFranchisePct(items) {
+  if (!items.length) return 0;
+  const watched = items.filter(i => i.status === "concluido").length;
+  return Math.round((watched / items.length) * 100);
+}
+
+function mediaStatusLabel(status) {
+  if (status === "assistindo") return "Assistindo";
+  if (status === "concluido") return "Concluído";
+  return "Quero ver";
+}
+
+function MediaShelf({ groupsEntity, itemsEntity }) {
+  const { data: groups, add: addGroup, remove: removeGroup, update: updateGroup } = groupsEntity;
+  const { data: items, add: addItem, remove: removeItem, update: updateItem } = itemsEntity;
+
+  const [tab, setTab] = useState("filme"); // "filme" | "serie"
+  const [currentGroupId, setCurrentGroupId] = useState(null);
+  const [groupModal, setGroupModal] = useState(null); // null | "new" | grupo sendo renomeado
+  const [itemForm, setItemForm] = useState(null); // null | "new" | item sendo editado
+  const [openMenuId, setOpenMenuId] = useState(null);
+
+  useEffect(() => { setCurrentGroupId(null); setOpenMenuId(null); }, [tab]);
+
+  const currentGroup = currentGroupId ? groups.find(g => g.id === currentGroupId) : null;
+  const kindGroups = groups.filter(g => g.kind === tab);
+  const visibleItems = currentGroupId
+    ? items.filter(i => i.group_id === currentGroupId)
+    : items.filter(i => i.kind === tab && !i.group_id);
+
+  const handleSaveGroup = (name) => {
+    if (groupModal === "new") addGroup({ name, kind: tab, cover_image: null });
+    else updateGroup(groupModal.id, { name });
+    setGroupModal(null);
+  };
+
+  const handleSetCover = async (group, file) => {
+    setOpenMenuId(null);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+      await updateGroup(group.id, { cover_image: dataUrl });
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    }
+  };
+  const handleRemoveCover = (group) => { setOpenMenuId(null); updateGroup(group.id, { cover_image: null }); };
+
+  const confirmDeleteGroup = (group) => {
+    setOpenMenuId(null);
+    const count = items.filter(i => i.group_id === group.id).length;
+    const msg = count > 0
+      ? `Excluir "${group.name}"? Os ${count} título(s) dentro dela também serão apagados.`
+      : `Excluir "${group.name}"?`;
+    if (!confirm(msg)) return;
+    items.filter(i => i.group_id === group.id).forEach(i => removeItem(i.id));
+    removeGroup(group.id);
+    if (currentGroupId === group.id) setCurrentGroupId(null);
+  };
+
+  const confirmDeleteItem = (item) => {
+    setOpenMenuId(null);
+    if (confirm(`Excluir "${item.title}"?`)) removeItem(item.id);
+  };
+
+  if (itemForm !== null) {
+    return <MediaItemForm
+      item={itemForm === "new" ? null : itemForm}
+      kind={tab}
+      onCancel={() => setItemForm(null)}
+      onSave={(payload) => {
+        if (itemForm === "new") addItem({ kind: tab, group_id: currentGroupId, ...payload });
+        else updateItem(itemForm.id, payload);
+        setItemForm(null);
+      }}
+    />;
+  }
+
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><Clapperboard size={22}/></div>
+          <div>
+            <small>ÁREA DE LAZER</small>
+            <h2>{currentGroup ? currentGroup.name : "Filmes e Séries"}</h2>
+            <p>{currentGroup
+              ? `${visibleItems.length} título(s) aqui.`
+              : "Guarde o que você quer assistir, acompanhe episódios e organize franquias e universos."}</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          {currentGroup && <button className="ghost" onClick={() => setCurrentGroupId(null)}><ChevronLeft size={16}/> Voltar</button>}
+          <button className="add" onClick={(e) => { e.stopPropagation(); setItemForm("new"); }}><Plus size={16}/> Adicionar {tab === "filme" ? "filme" : "série"}</button>
+        </div>
+      </div>
+
+      {!currentGroup && (
+        <div className="themeToggle exerciseModeToggle" style={{ marginBottom: 16, maxWidth: 320 }}>
+          <button type="button" className={tab === "filme" ? "active" : ""} onClick={() => setTab("filme")}><Film size={14}/> Filmes</button>
+          <button type="button" className={tab === "serie" ? "active" : ""} onClick={() => setTab("serie")}><Clapperboard size={14}/> Séries</button>
+        </div>
+      )}
+
+      {!currentGroup && (
+        <div className="flashSection">
+          <h3>{tab === "filme" ? "Franquias" : "Universos"}</h3>
+          <div className="shelf">
+            <div className="bookTile addTile" onClick={() => setGroupModal("new")}>
+              <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>{tab === "filme" ? "Nova franquia" : "Novo universo"}</span></div>
+            </div>
+            {kindGroups.map(group => {
+              const groupItems = items.filter(i => i.group_id === group.id);
+              return (
+                <MediaGroupTile
+                  key={group.id}
+                  group={group}
+                  count={groupItems.length}
+                  pct={tab === "filme" ? mediaFranchisePct(groupItems) : null}
+                  menuOpen={openMenuId === "g:" + group.id}
+                  onToggleMenu={(e) => { e?.stopPropagation?.(); setOpenMenuId(id => id === "g:" + group.id ? null : "g:" + group.id); }}
+                  onOpen={() => setCurrentGroupId(group.id)}
+                  onRename={() => { setOpenMenuId(null); setGroupModal(group); }}
+                  onDelete={() => confirmDeleteGroup(group)}
+                  onSetCover={(file) => handleSetCover(group, file)}
+                  onRemoveCover={() => handleRemoveCover(group)}
+                />
+              );
+            })}
+            {kindGroups.length === 0 && <p className="emptyHint">{tab === "filme" ? "Nenhuma franquia criada ainda." : "Nenhum universo criado ainda."}</p>}
+          </div>
+        </div>
+      )}
+
+      <div className="flashSection">
+        {!currentGroup && <h3>{tab === "filme" ? "Filmes avulsos" : "Séries avulsas"}</h3>}
+        {visibleItems.length === 0 ? (
+          <p className="emptyHint">{currentGroup
+            ? `Nenhum título nesse ${tab === "filme" ? "franquia" : "universo"} ainda.`
+            : `Nenhum${tab === "filme" ? " filme" : "a série"} por aqui ainda.`}</p>
+        ) : (
+          <div className="exerciseList">
+            {visibleItems.map(item => (
+              <MediaItemRow
+                key={item.id}
+                item={item}
+                menuOpen={openMenuId === item.id}
+                onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(id => id === item.id ? null : item.id); }}
+                onEdit={() => { setOpenMenuId(null); setItemForm(item); }}
+                onDelete={() => confirmDeleteItem(item)}
+                onStatusChange={(status) => updateItem(item.id, { status })}
+                onPatch={(patch) => updateItem(item.id, patch)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {groupModal && (
+        <FolderModal
+          folder={groupModal === "new" ? null : groupModal}
+          onClose={() => setGroupModal(null)}
+          onSave={handleSaveGroup}
+        />
+      )}
+    </div>
+  );
+}
+
+function MediaGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
+  const coverInputRef = useRef(null);
+  return (
+    <div className="bookTile groupTile" onClick={onOpen}>
+      <div className="bookCoverWrap groupCover">
+        {group.cover_image
+          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
+          : <Clapperboard size={34}/>}
+      </div>
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onSetCover(file); }}
+      />
+      <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
+      {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
+        <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
+        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        <button onClick={onRename}><Pencil size={13}/> Renomear</button>
+        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+      </div>}
+      <b className="bookTitle">{group.name}</b>
+      {pct != null && <div className="progress" style={{ marginTop: 6 }}><i style={{ width: pct + "%" }}/></div>}
+      <small className="bookProgressLabel">{count} título{count === 1 ? "" : "s"}{pct != null ? ` · ${pct}%` : ""}</small>
+    </div>
+  );
+}
+
+function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusChange, onPatch }) {
+  const isSeries = item.kind === "serie";
+  const pct = isSeries ? mediaSeriesPct(item) : null;
+  const seasons = item.seasons || [];
+  const currentSeason = isSeries && item.has_seasons
+    ? (seasons.find(s => Number(s.season) === Number(item.current_season)) || seasons[0])
+    : null;
+
+  // Soma 1 episódio assistido — respeita a temporada atual quando a série tem temporadas.
+  const bumpEpisode = () => {
+    if (!isSeries) return;
+    if (item.has_seasons) {
+      if (!currentSeason) return;
+      const total = Number(currentSeason.total_episodes) || 0;
+      const next = Math.min(total, (Number(currentSeason.current_episode) || 0) + 1);
+      onPatch({ seasons: seasons.map(s => s.season === currentSeason.season ? { ...s, current_episode: next } : s) });
+    } else {
+      const total = Number(item.total_episodes) || 0;
+      const next = Math.min(total, (Number(item.current_episode) || 0) + 1);
+      onPatch({ current_episode: next });
+    }
+  };
+
+  return (
+    <div className="exerciseRow">
+      <div className="exerciseThumb">{isSeries ? <Clapperboard size={22}/> : <Film size={22}/>}</div>
+      <div className="exerciseInfo">
+        <b>{item.title}</b>
+        <small>
+          <select className="mediaStatusSelect" value={item.status || "quero_ver"} onClick={e => e.stopPropagation()} onChange={e => onStatusChange(e.target.value)}>
+            <option value="quero_ver">Quero ver</option>
+            <option value="assistindo">Assistindo</option>
+            <option value="concluido">Concluído</option>
+          </select>
+          {isSeries && (item.has_seasons
+            ? (currentSeason ? <>· Temp. {currentSeason.season} · Ep. {currentSeason.current_episode || 0}/{currentSeason.total_episodes || 0}</> : "· Sem temporadas cadastradas")
+            : <>· Ep. {item.current_episode || 0}/{item.total_episodes || 0}</>)}
+        </small>
+        {isSeries && <div className="progress" style={{ marginTop: 6, maxWidth: 320 }}><i style={{ width: pct + "%" }}/></div>}
+      </div>
+      <div className="mediaItemActions">
+        {isSeries && <button className="ghost" title="Somar 1 episódio assistido" onClick={bumpEpisode}><Plus size={13}/> Ep.</button>}
+        {item.link && <a className="ghost" href={item.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}><ExternalLink size={13}/> Assistir</a>}
+      </div>
+      <button className="exerciseMenuBtn" onClick={onToggleMenu}><MoreVertical size={16}/></button>
+      {menuOpen && (
+        <div className="exerciseMenuPop flashMenuPop" onClick={e => e.stopPropagation()}>
+          <button onClick={onEdit}><Pencil size={13}/> Editar</button>
+          <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MediaItemForm({ item, kind, onCancel, onSave }) {
+  const isSeries = kind === "serie";
+  const [title, setTitle] = useState(item?.title || "");
+  const [link, setLink] = useState(item?.link || "");
+  const [status, setStatus] = useState(item?.status || "quero_ver");
+  const [hasSeasons, setHasSeasons] = useState(item?.has_seasons || false);
+  const [totalEpisodes, setTotalEpisodes] = useState(item?.total_episodes ?? 0);
+  const [currentEpisode, setCurrentEpisode] = useState(item?.current_episode ?? 0);
+  const [currentSeason, setCurrentSeason] = useState(item?.current_season ?? 1);
+  const [seasons, setSeasons] = useState(item?.seasons?.length ? item.seasons : [{ season: 1, total_episodes: 0, current_episode: 0 }]);
+
+  const setSeasonField = (season, field, value) => setSeasons(ss => ss.map(s => s.season === season ? { ...s, [field]: value } : s));
+  const addSeason = () => setSeasons(ss => [...ss, { season: (Math.max(0, ...ss.map(s => Number(s.season) || 0)) + 1), total_episodes: 0, current_episode: 0 }]);
+  const removeSeason = (season) => setSeasons(ss => ss.length > 1 ? ss.filter(s => s.season !== season) : ss);
+
+  const handleSubmit = () => {
+    if (!title.trim()) return;
+    const payload = { title: title.trim(), link: link.trim() || null, status };
+    if (isSeries) {
+      payload.has_seasons = hasSeasons;
+      if (hasSeasons) {
+        const cleanSeasons = seasons.map(s => ({
+          season: Number(s.season) || 1,
+          total_episodes: Number(s.total_episodes) || 0,
+          current_episode: Math.min(Number(s.current_episode) || 0, Number(s.total_episodes) || 0),
+        }));
+        payload.seasons = cleanSeasons;
+        payload.current_season = Number(currentSeason) || cleanSeasons[0]?.season || 1;
+        payload.total_episodes = 0;
+        payload.current_episode = 0;
+      } else {
+        payload.total_episodes = Number(totalEpisodes) || 0;
+        payload.current_episode = Math.min(Number(currentEpisode) || 0, Number(totalEpisodes) || 0);
+        payload.seasons = [];
+        payload.current_season = 1;
+      }
+    }
+    onSave(payload);
+  };
+
+  return (
+    <div className="content">
+      <div className="flashFormHead">
+        <h2>{item ? "Editar" : "Adicionar"} {isSeries ? "série" : "filme"}</h2>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onCancel}>Cancelar</button>
+          <button className="add" disabled={!title.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+
+      <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
+        <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder={isSeries ? "Ex.: Breaking Bad" : "Ex.: Interestelar"}/></label>
+        <label>Link para assistir (opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
+        <label>Status
+          <div className="themeToggle exerciseModeToggle">
+            <button type="button" className={status === "quero_ver" ? "active" : ""} onClick={() => setStatus("quero_ver")}>Quero ver</button>
+            <button type="button" className={status === "assistindo" ? "active" : ""} onClick={() => setStatus("assistindo")}>Assistindo</button>
+            <button type="button" className={status === "concluido" ? "active" : ""} onClick={() => setStatus("concluido")}>Concluído</button>
+          </div>
+        </label>
+
+        {isSeries && (
+          <label className="penCheckLabel"><input type="checkbox" checked={hasSeasons} onChange={e => setHasSeasons(e.target.checked)}/> Essa série tem temporadas separadas</label>
+        )}
+
+        {isSeries && !hasSeasons && (<>
+          <label>Total de episódios<input type="number" min="0" value={totalEpisodes} onChange={e => setTotalEpisodes(e.target.value)}/></label>
+          <label>Episódio atual<input type="number" min="0" value={currentEpisode} onChange={e => setCurrentEpisode(e.target.value)}/></label>
+        </>)}
+
+        {isSeries && hasSeasons && (<>
+          <label>Temporada atual<input type="number" min="1" value={currentSeason} onChange={e => setCurrentSeason(e.target.value)}/></label>
+          <div className="seasonsEditor">
+            <small className="bookMenuLabel">Temporadas</small>
+            {seasons.map(s => (
+              <div className="seasonRow" key={s.season}>
+                <span>Temp. {s.season}</span>
+                <input type="number" min="0" value={s.total_episodes} onChange={e => setSeasonField(s.season, "total_episodes", e.target.value)} placeholder="Total de episódios"/>
+                <input type="number" min="0" value={s.current_episode} onChange={e => setSeasonField(s.season, "current_episode", e.target.value)} placeholder="Episódio atual"/>
+                <button type="button" className="ghost" onClick={() => removeSeason(s.season)}><Trash2 size={13}/></button>
+              </div>
+            ))}
+            <button type="button" className="ghost" onClick={addSeason}><Plus size={14}/> Adicionar temporada</button>
+          </div>
+        </>)}
       </div>
     </div>
   );
