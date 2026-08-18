@@ -542,6 +542,19 @@ function notifIcon(kind, size=16){
   return <Bell size={size}/>;
 }
 
+// Categorias de notificação que aparecem no sininho — usado tanto pra montar a
+// lista quanto pra renderizar os toggles individuais na tela de Configurações.
+const NOTIF_KIND_DEFS = [
+  { key:"Lembrete", label:"Lembretes comuns" },
+  { key:"Aniversário", label:"Aniversários" },
+  { key:"Dívida", label:"Dívidas" },
+  { key:"Fixo", label:"Pagamentos fixos" },
+  { key:"Recorrente", label:"Recorrentes" },
+  { key:"Meta", label:"Metas de estudo" },
+  { key:"Feriado", label:"Feriados" },
+  { key:"Comemorativa", label:"Datas comemorativas" },
+];
+
 function NotificationsBell({items, goTo}){
   const [open,setOpen] = useState(false);
   const [dismissed,dismissAll] = useDismissedToday();
@@ -646,6 +659,10 @@ function App({session,theme,setTheme}){
   const calendarEvents = useEntity("calendar_recurring_events", [], session);
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  // Preferências de notificações: chave-mestra liga/desliga tudo; "kinds" guarda
+  // por categoria (ausente ou true = ligada, false = desligada). Persistido localmente.
+  const [notifSettings, setNotifSettings] = usePersistentState("libano-notif-settings", { enabled: true, kinds: {} });
+  const setNotifKind = (kind, on) => setNotifSettings(s => ({ ...s, kinds: { ...s.kinds, [kind]: on } }));
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
   const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
@@ -753,8 +770,8 @@ function App({session,theme,setTheme}){
         });
       }
     });
-    return items;
-  },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data,calendarEvents.data]);
+    return items.filter(it => notifSettings.enabled && notifSettings.kinds[it.kind] !== false);
+  },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data,calendarEvents.data,notifSettings]);
 
   // Dispara os Lembretes Comuns que têm uma HORA marcada assim que o relógio bate
   // esse horário no dia certo — notificação do navegador + som, mesmo com o app
@@ -764,6 +781,9 @@ function App({session,theme,setTheme}){
   // não repetir a notificação a cada nova checagem.
   useEffect(()=>{
     const check = ()=>{
+      // Respeita as preferências de notificação: mestre desligado ou categoria
+      // "Lembrete" desligada, não dispara notificação nativa nem som.
+      if(!notifSettings.enabled || notifSettings.kinds["Lembrete"]===false) return;
       const now = new Date();
       const todayKey = now.toISOString().slice(0,10);
       const storageKey = "libano-timed-reminders-fired-"+todayKey;
@@ -783,7 +803,7 @@ function App({session,theme,setTheme}){
     check();
     const interval = setInterval(check, 20000);
     return ()=>clearInterval(interval);
-  },[reminders.data]);
+  },[reminders.data,notifSettings]);
 
   const [aiInsight,setAiInsight] = useState(null);
   const [aiLoading,setAiLoading] = useState(false);
@@ -973,6 +993,31 @@ function App({session,theme,setTheme}){
             <button type="button" className={theme==="light"?"active":""} onClick={()=>setTheme("light")}><Sun size={14}/> Claro</button>
           </div>
         </label>
+        <div className="notifSettingsBlock">
+          <label className="notifToggleRow">
+            <span><Bell size={15}/> Notificações</span>
+            <span className={"switchPill"+(notifSettings.enabled?" on":"")}>
+              <input type="checkbox" checked={notifSettings.enabled} onChange={e=>setNotifSettings(s=>({...s, enabled:e.target.checked}))}/>
+              <span className="switchKnob"/>
+            </span>
+          </label>
+          {notifSettings.enabled && (
+            <div className="notifKindsList">
+              {NOTIF_KIND_DEFS.map(k => {
+                const on = notifSettings.kinds[k.key] !== false;
+                return (
+                  <label key={k.key} className="notifKindRow">
+                    <span className="notifKindLabel">{notifIcon(k.key, 14)} {k.label}</span>
+                    <span className={"switchPill sm"+(on?" on":"")}>
+                      <input type="checkbox" checked={on} onChange={e=>setNotifKind(k.key, e.target.checked)}/>
+                      <span className="switchKnob"/>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <div className="cloud">
           {cloudConfigured && session ? <Cloud size={20}/> : <CloudOff size={20}/>}
           <div>
@@ -7063,9 +7108,9 @@ function FlashcardFlipMode({ cards, onComplete }) {
         </div>
       )}
       <div className="flashPager">
-        <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>
+        {!trackMode && <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>}
         <span>{index+1} / {deck.length}</span>
-        <button disabled={trackMode && atLast} onClick={()=>go(1)}>{(!trackMode && atLast) ? <Check size={16}/> : <ArrowRight size={16}/>}</button>
+        {!trackMode && <button onClick={()=>go(1)}>{atLast ? <Check size={16}/> : <ArrowRight size={16}/>}</button>}
       </div>
     </div>
   );
