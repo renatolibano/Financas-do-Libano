@@ -6885,12 +6885,30 @@ function FlashcardFlipMode({ cards, onComplete }) {
   const [feedback, setFeedback] = useState(null); // null | "know" | "learning"
   const [results, setResults] = useState([]); // [{id, know}]
   const [finished, setFinished] = useState(false);
+  // Enquanto true, a virada da carta não anima (transição desligada) — usado
+  // só na troca automática de cartão pra trocar o conteúdo instantaneamente,
+  // sem mostrar nem a pergunta do cartão anterior nem a resposta do próximo
+  // durante o meio da animação.
+  const [noFlipAnim, setNoFlipAnim] = useState(false);
   const card = deck[index];
 
   const finishDeck = () => {
     setFinished(true);
     // Só conta como "lista estudada" quando o baralho revisado é o completo (não a rodada de refazer só os que faltam).
     if (deck.length === cards.length) onComplete && onComplete();
+  };
+
+  // Troca pro cartão seguinte/anterior sem transição de virada — usado depois
+  // do feedback e na navegação manual, pra nunca mostrar o cartão errado
+  // (nem o anterior, nem o próximo) durante a animação.
+  const swapCardInstantly = (updateFn) => {
+    setNoFlipAnim(true);
+    setFlipped(false);
+    updateFn();
+    // Duplo requestAnimationFrame: o 1º garante que o navegador já pintou o
+    // estado sem transição; o 2º reativa a transição só depois disso, senão
+    // o próprio "religamento" pode ser pego pelo navegador ainda no mesmo frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => setNoFlipAnim(false)));
   };
 
   const go = (dir) => {
@@ -6901,10 +6919,7 @@ function FlashcardFlipMode({ cards, onComplete }) {
       return;
     }
     if (flipped) {
-      // Mesma lógica do respond(): desvira primeiro, só troca de cartão depois
-      // que a animação termina, senão o verso do próximo cartão aparece rápido.
-      setFlipped(false);
-      setTimeout(() => setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir))), 420);
+      swapCardInstantly(() => setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir))));
     } else {
       setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir)));
     }
@@ -6915,16 +6930,14 @@ function FlashcardFlipMode({ cards, onComplete }) {
     setFeedback(type);
     setTimeout(() => {
       setFeedback(null);
-      // Desvira a carta ATUAL primeiro (sem trocar o conteúdo ainda) — só depois
-      // que a animação de virar de volta pra frente termina (.4s no CSS) é que
-      // troca pro próximo cartão. Trocar os dois juntos fazia o verso do
-      // PRÓXIMO cartão aparecer por uma fração de segundo durante a virada.
-      setFlipped(false);
-      setTimeout(() => {
+      // Assim que a tela de feedback some, troca direto pro próximo cartão já
+      // de frente, sem animação — nada de mostrar a pergunta do cartão
+      // anterior nem a resposta do próximo durante a virada.
+      swapCardInstantly(() => {
         setResults(r => [...r, { id: card.id, know: type==="know" }]);
         if (index < deck.length-1) { setIndex(i => i+1); }
         else finishDeck();
-      }, 420);
+      });
     }, 700);
   };
 
@@ -7029,7 +7042,7 @@ function FlashcardFlipMode({ cards, onComplete }) {
         </div>
       </div>
       <div className="flashFlipCard" onClick={()=>{ if(!feedback) setFlipped(f=>!f); }}>
-        <div className={"flashFlipInner"+(flipped?" flipped":"")}>
+        <div className={"flashFlipInner"+(flipped?" flipped":"")+(noFlipAnim?" noFlipAnim":"")}>
           <div className="flashFlipFace flashFlipFront">
             <small>TERMO</small>
             {card.image && <img className="flashFlipImage" src={card.image} alt=""/>}

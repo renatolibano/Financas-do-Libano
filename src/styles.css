@@ -695,6 +695,7 @@ h1{font-size:23px}
 .flashStudyArea{display:flex;flex-direction:column;align-items:center;gap:18px}
 .flashFlipCard{width:100%;max-width:640px;cursor:pointer;position:relative}
 .flashFlipInner{position:relative;height:280px;transition:transform .4s;transform-style:preserve-3d}
+.flashFlipInner.noFlipAnim{transition:none}
 .flashFlipInner.flipped{transform:rotateY(180deg)}
 .flashFlipFace{position:absolute;inset:0;backface-visibility:hidden;border:1px solid var(--border);background:var(--bg-surface-2);border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
 .flashFlipFace small{color:var(--accent);font-weight:700;letter-spacing:.05em;font-size:11px;position:absolute;top:16px;left:20px}
