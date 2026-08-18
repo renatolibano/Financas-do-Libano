@@ -2463,6 +2463,13 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const drawSaveTimer = useRef(null);
   const penCursorRef = useRef(null);
 
+  // --- Navegar segurando espaço: igual ao quadro (canvas infinito) — segurar a
+  // barra de espaço e arrastar rola o PDF, sem ativar o botão que estiver com foco.
+  const spaceDownRef = useRef(false);
+  const spacePanRef = useRef(null);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [spacePanning, setSpacePanning] = useState(false);
+
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
@@ -3280,16 +3287,73 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const handler = (e) => {
       if (panel==="notas") return; // não interfere na digitação das notas
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.code === "Space") {
+        // preventDefault aqui é essencial: sem ele, se o foco estiver num botão
+        // (ex.: o botão "Escrever" logo após ser clicado), o navegador trata o
+        // espaço como um clique nesse botão e ele fica abrindo/fechando sozinho.
+        e.preventDefault();
+        if (!spaceDownRef.current) { spaceDownRef.current = true; setSpaceHeld(true); }
+        return;
+      }
       if (!penMode && e.key === "ArrowRight") goTo(pageNum + 1);
       if (!penMode && e.key === "ArrowLeft") goTo(pageNum - 1);
       if (e.key === "Escape") { if (penMode && tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else if (penMode) togglePenMode(); else handleClose(); }
       if (penMode && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       if (penMode && (e.key === "Delete" || e.key === "Backspace") && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
     };
+    const onKeyUp = (e) => {
+      if (e.code === "Space") { spaceDownRef.current = false; setSpaceHeld(false); spacePanRef.current = null; setSpacePanning(false); }
+    };
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keyup", onKeyUp);
+    return () => { window.removeEventListener("keydown", handler); window.removeEventListener("keyup", onKeyUp); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageNum, numPages, panel, penMode, drawings, tool, lassoSelectedIds]);
+
+  // Se a aba perder o foco enquanto o espaço está pressionado, o "keyup" pode
+  // nunca chegar — isso soltaria o espaço "travado", igual já é tratado no quadro.
+  useEffect(() => {
+    const release = () => { spaceDownRef.current = false; setSpaceHeld(false); spacePanRef.current = null; setSpacePanning(false); };
+    window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", release);
+    return () => {
+      window.removeEventListener("blur", release);
+      document.removeEventListener("visibilitychange", release);
+    };
+  }, []);
+
+  // Arrastar com o espaço segurado rola o PDF (igual ao quadro/canvas infinito).
+  // Usa capture pra "roubar" o gesto antes que ele chegue no canvas da página ou
+  // na camada de desenho (modo caneta), que também escutam pointerdown/move/up.
+  const handleSpacePanPointerDown = (e) => {
+    if (!spaceDownRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = containerRef.current;
+    if (!el) return;
+    spacePanRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop };
+    setSpacePanning(true);
+    try { el.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[pdf] setPointerCapture falhou", err); }
+  };
+  const handleSpacePanPointerMove = (e) => {
+    const pan = spacePanRef.current;
+    if (!pan || pan.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollLeft = pan.scrollLeft - (e.clientX - pan.startX);
+    el.scrollTop = pan.scrollTop - (e.clientY - pan.startY);
+  };
+  const handleSpacePanPointerUp = (e) => {
+    const pan = spacePanRef.current;
+    if (!pan || pan.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { containerRef.current?.releasePointerCapture?.(e.pointerId); } catch (err) { console.log("[pdf] releasePointerCapture falhou", err); }
+    spacePanRef.current = null;
+    setSpacePanning(false);
+  };
 
   const isFav = favoritePages.includes(pageNum);
   const isImp = importantPages.includes(pageNum);
@@ -3421,7 +3485,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             </div>
           </div>
         )}
-          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
+          <div
+            className={`readerBody${nightMode?" readerBodyNight":""}${spaceHeld?(spacePanning?" readerBodyGrabbing":" readerBodyGrab"):""}`}
+            ref={containerRef}
+            onPointerDownCapture={handleSpacePanPointerDown}
+            onPointerMoveCapture={handleSpacePanPointerMove}
+            onPointerUpCapture={handleSpacePanPointerUp}
+            onPointerCancelCapture={handleSpacePanPointerUp}
+          >
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && (
