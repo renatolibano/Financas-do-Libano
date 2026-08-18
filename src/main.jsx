@@ -15,7 +15,7 @@ import {
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
-  CalendarDays, PartyPopper
+  CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -79,7 +79,7 @@ const STUDY_COLORS = [
   {key:"cyan", hex:"#31c4d6"},
 ];
 const colorHex = key => (STUDY_COLORS.find(c=>c.key===key)||STUDY_COLORS[0]).hex;
-const STUDY_ICONS = { target:Target, book:BookOpen, list:ClipboardList, dumbbell:Dumbbell, star:Star, flag:Flag, brain:Brain };
+const STUDY_ICONS = { target:Target, book:BookOpen, list:ClipboardList, dumbbell:Dumbbell, star:Star, flag:Flag, brain:Brain, flame:Flame };
 
 const initialStudyGoals = [
   {id:1, title:"Aprovação na EsPCEx", description:"Estudar com constância e conquistar minha vaga.", icon:"target", color:"red", mode:"percent", percent:80, current_value:0, target_value:0, unit:"", due_date:"2025-11-15", status:"andamento"},
@@ -7293,7 +7293,35 @@ function Goals({entity}){
   return <div className="content"><div className="panel"><div className="panelTitle"><h2>Metas financeiras</h2></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Computador"/><input value={target} onChange={e=>setTarget(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor da meta"/><input value={saved} onChange={e=>setSaved(e.target.value)} type="number" step="0.01" min="0" placeholder="Já guardado"/><button onClick={submit}><Plus/></button></div></div><div className="goalGrid">{data.map(x=>{const pct=x.target?Math.min(100,Math.round(x.saved/x.target*100)):0;return <div className="goalCard" key={x.id}><div className="panelTitle"><h3><Target size={17}/> {x.name}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><strong>{money(x.saved)}</strong><small> de {money(x.target)}</small><div className="progress"><i style={{width:pct+"%"}}/></div><div className="goalActions"><span>{pct}% concluído</span><button onClick={()=>{const n=Number(prompt("Quanto adicionar à meta?"));if(n>0)update(x.id,{saved:Math.min(x.target,x.saved+n)})}}>+ Adicionar</button></div></div>})}{!data.length&&<p className="emptyHint">Crie uma meta para acompanhar seu progresso.</p>}</div></div>;
 }
 
+// Data de hoje em ISO (yyyy-mm-dd), mesmo formato usado por due_date/start_date.
+function todayISO(){
+  const d = new Date();
+  return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+}
+// Quantos dias inteiros existem entre duas datas ISO (yyyy-mm-dd).
+function daysBetweenISO(fromISO, toISO){
+  const a = new Date(fromISO+"T00:00:00"), b = new Date(toISO+"T00:00:00");
+  if(Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 0;
+  return Math.round((b-a)/86400000);
+}
+// Progresso de uma meta "por dias": conta automaticamente 1 dia a cada dia corrido
+// desde a data de início, até bater a meta. Se ainda não chegou a data de início,
+// fica em 0 (Agendada). Se a meta foi marcada como Falha, o contador congela no
+// dia em que a falha foi registrada (failed_at).
+function studyGoalDaysProgress(g){
+  const target = Number(g.target_value)||0;
+  const start = g.start_date || todayISO();
+  const today = todayISO();
+  if(start > today) return {current:0, target, scheduled:true};
+  const limit = (g.status==="falhou" && g.failed_at) ? g.failed_at : today;
+  const current = Math.max(0, Math.min(target, daysBetweenISO(start, limit) + 1));
+  return {current, target, scheduled:false};
+}
 function studyGoalPct(g){
+  if(g.mode==="dias"){
+    const {current, target} = studyGoalDaysProgress(g);
+    return target ? Math.min(100, Math.round(current/target*100)) : 0;
+  }
   if(g.mode==="count"){
     const t = Number(g.target_value)||0;
     return t ? Math.min(100, Math.round((Number(g.current_value)||0)/t*100)) : 0;
@@ -7306,8 +7334,10 @@ function studyGoalFmtDate(d){
   return (dd && m && y) ? `${dd}/${m}/${y}` : d;
 }
 function studyGoalBadge(g){
+  if(g.status==="falhou") return {label:"Falhou", color:"#ff5c5c"};
   if(g.status==="concluida") return {label:"Concluída", color:"#3ecf6a"};
   if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
+  if(g.start_date && g.start_date > todayISO()) return {label:"Agendada", color:"#3ea0ff"};
   return {label:"Em andamento", color: colorHex(g.color)};
 }
 
@@ -7538,6 +7568,18 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
   const [openMenuId,setOpenMenuId] = useState(null);
   const [modal,setModal] = useState(null); // null | "new" | goal being edited
 
+  // Metas "por dias" completam sozinhas assim que o contador (dias corridos desde
+  // o início, sem contar os dias congelados por uma Falha) bate a meta.
+  useEffect(()=>{
+    data.forEach(g=>{
+      if(g.mode==="dias" && g.status==="andamento"){
+        const {current,target} = studyGoalDaysProgress(g);
+        if(target>0 && current>=target) update(g.id,{status:"concluida"});
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[data]);
+
   const total = data.length;
   const emAndamento = data.filter(g=>g.status==="andamento").length;
   const concluidas = data.filter(g=>g.status==="concluida").length;
@@ -7566,6 +7608,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
         <option value="andamento">Em andamento</option>
         <option value="concluida">Concluídas</option>
         <option value="pausada">Pausadas</option>
+        <option value="falhou">Falhadas</option>
       </select></div>
     </div>
 
@@ -7575,6 +7618,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
         const hex = colorHex(g.color);
         const Icon = STUDY_ICONS[g.icon] || Target;
         const badge = studyGoalBadge(g);
+        const daysInfo = g.mode==="dias" ? studyGoalDaysProgress(g) : null;
         return <div className="studyGoalCard" key={g.id}>
           <div className="studyGoalIcon" style={{background:hex+"22", color:hex}}><Icon size={20}/></div>
           <div className="studyGoalBody">
@@ -7589,9 +7633,15 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
             <div className="studyGoalFoot">
               <div className="studyGoalFootInfoStack">
                 <span className="studyGoalFootInfo">
-                  {g.mode==="count"
-                    ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
-                    : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : "")}
+                  {g.mode==="dias"
+                    ? (daysInfo.scheduled
+                        ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
+                        : <><Flame size={13}/> Dia {daysInfo.current} de {daysInfo.target}{g.status==="falhou" ? " · congelado na falha" : ""}</>)
+                    : g.mode==="count"
+                      ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
+                      : (g.start_date && g.start_date>todayISO()
+                          ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
+                          : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : ""))}
                 </span>
                 {g.link_source && g.link_source!=="none" && (
                   <span className="studyGoalFootInfo studyGoalFootLink">
@@ -7609,7 +7659,8 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
             <button onClick={()=>{setOpenMenuId(null); setModal(g);}}><Pencil size={13}/> Editar</button>
             {g.status!=="concluida" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"concluida"});}}><CheckCircle2 size={13}/> Marcar como concluída</button>}
             {g.status==="andamento" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"pausada"});}}><Hourglass size={13}/> Pausar</button>}
-            {(g.status==="pausada"||g.status==="concluida") && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"andamento"});}}><RotateCcw size={13}/> Reativar</button>}
+            {g.status!=="falhou" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"falhou", failed_at:todayISO()});}}><XCircle size={13}/> Marcar como falha</button>}
+            {(g.status==="pausada"||g.status==="concluida"||g.status==="falhou") && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"andamento", failed_at:null});}}><RotateCcw size={13}/> Reativar</button>}
             <button className="danger" onClick={()=>confirmRemove(g.id)}><Trash2 size={13}/> Excluir</button>
           </div>}
         </div>;
@@ -7635,6 +7686,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
   const [targetValue,setTargetValue] = useState(goal?.target_value ?? "");
   const [unit,setUnit] = useState(goal?.unit || "");
   const [dueDate,setDueDate] = useState(goal?.due_date || "");
+  const [startDate,setStartDate] = useState(goal?.start_date || "");
   const [status,setStatus] = useState(goal?.status || "andamento");
   const [linkSource,setLinkSource] = useState(goal?.link_source || "none");
   const [linkPdfId,setLinkPdfId] = useState(goal?.link_pdf_id || "");
@@ -7669,7 +7721,9 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       description: description.trim(),
       icon, color, mode, status,
       percent: mode==="percent" ? Math.min(100,Math.max(0,Number(percent)||0)) : 0,
-      due_date: dueDate || null,
+      due_date: mode==="dias" ? null : (dueDate || null),
+      start_date: startDate || null,
+      failed_at: status==="falhou" ? (goal?.failed_at || todayISO()) : null,
       link_source: "none",
       link_pdf_id: null,
       link_page_start: null,
@@ -7700,8 +7754,8 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       if (target>0 && current>=target) payload.status = "concluida";
     } else {
       payload.current_value = mode==="count" ? Number(currentValue)||0 : 0;
-      payload.target_value = mode==="count" ? Number(targetValue)||0 : 0;
-      payload.unit = mode==="count" ? unit.trim() : "";
+      payload.target_value = (mode==="count" || mode==="dias") ? Number(targetValue)||0 : 0;
+      payload.unit = mode==="count" ? unit.trim() : (mode==="dias" ? "dias" : "");
     }
 
     onSave(payload);
@@ -7732,10 +7786,16 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
         <div className="modeToggle">
           <button type="button" className={mode==="percent"?"active":""} onClick={()=>setMode("percent")}>Percentual</button>
           <button type="button" className={mode==="count"?"active":""} onClick={()=>setMode("count")}>Quantidade</button>
+          <button type="button" className={mode==="dias"?"active":""} onClick={()=>setMode("dias")}>Por dias</button>
         </div>
       </label>
 
       {mode==="percent" && <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>}
+
+      {mode==="dias" && <>
+        <label>Meta (em dias)<input type="number" min="1" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="Ex.: 7"/></label>
+        <p className="fieldHint"><Flame size={13}/> A cada dia corrido a partir da data de início, o progresso avança sozinho, sem precisar marcar nada. Se em algum dia você não conseguir manter a meta, marque-a como Falha na lista — o contador congela nesse dia.</p>
+      </>}
 
       {mode==="count" && <>
         <label>Vincular a (opcional)
@@ -7787,13 +7847,17 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
         </>}
       </>}
 
-      <label>Data de conclusão (opcional)<input type="date" value={dueDate||""} onChange={e=>setDueDate(e.target.value)}/></label>
+      <label>Data de início (opcional)<input type="date" value={startDate||""} onChange={e=>setStartDate(e.target.value)}/></label>
+      <p className="fieldHint"><CalendarPlus size={13}/> Deixe em branco pra começar imediatamente, ou escolha uma data futura pra programar a meta (ela fica como "Agendada" até chegar o dia).</p>
+
+      {mode!=="dias" && <label>Data de conclusão (opcional)<input type="date" value={dueDate||""} onChange={e=>setDueDate(e.target.value)}/></label>}
 
       <label>Status
         <select value={status} onChange={e=>setStatus(e.target.value)}>
           <option value="andamento">Em andamento</option>
           <option value="concluida">Concluída</option>
           <option value="pausada">Pausada</option>
+          <option value="falhou">Falhou</option>
         </select>
       </label>
 

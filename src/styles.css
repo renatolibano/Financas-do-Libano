@@ -926,6 +926,7 @@ h1{font-size:23px}
 .fieldRow{display:flex;gap:10px}
 .fieldRow>label{flex:1}
 .fieldHint{color:var(--text-3);font-size:11.5px;margin:-4px 0 2px;line-height:1.4}
+.fieldHint svg{vertical-align:-2px;margin-right:2px}
 .flashLinkList{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px;background:var(--bg-surface-2)}
 .flashLinkCheckRow{display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:7px;font-size:13px;font-weight:600;color:var(--text-1);cursor:pointer}
 .flashLinkCheckRow:hover{background:var(--bg-hover-2)}
