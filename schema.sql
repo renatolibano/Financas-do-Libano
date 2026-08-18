@@ -163,13 +163,13 @@ create table if not exists study_goals (
   description text,
   icon text not null default 'target',
   color text not null default 'red',
-  mode text not null default 'percent' check (mode in ('percent','count')),
+  mode text not null default 'percent' check (mode in ('percent','count','dias')),
   percent numeric not null default 0,
   current_value numeric not null default 0,
   target_value numeric not null default 0,
   unit text,
   due_date date,
-  status text not null default 'andamento' check (status in ('andamento','concluida','pausada')),
+  status text not null default 'andamento' check (status in ('andamento','concluida','pausada','falhou')),
   created_at timestamptz not null default now()
 );
 alter table study_goals enable row level security;
@@ -511,3 +511,13 @@ do $$ declare t text; begin foreach t in array array['calendar_recurring_events'
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Atualização: Metas "por dias" (conta automaticamente 1 dia por dia corrido a partir
+-- da data de início, até bater a meta), data de início opcional (pra programar metas
+-- futuras, em qualquer tipo de meta) e status "falhou" (disponível em todas as metas).
+alter table study_goals add column if not exists start_date date;
+alter table study_goals add column if not exists failed_at date;
+alter table study_goals drop constraint if exists study_goals_mode_check;
+alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias'));
+alter table study_goals drop constraint if exists study_goals_status_check;
+alter table study_goals add constraint study_goals_status_check check (status in ('andamento','concluida','pausada','falhou'));
