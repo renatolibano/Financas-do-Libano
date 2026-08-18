@@ -6874,7 +6874,12 @@ function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
 }
 
 function FlashcardFlipMode({ cards, onComplete }) {
-  const [deck, setDeck] = useState(cards);
+  // Modo "sei / não sei" (com marcação e estatísticas) vs. modo "só passar os
+  // cartões" (só virar e navegar, sem marcar nada). Fica salvo entre sessões.
+  const [trackMode, setTrackMode] = usePersistentState("flashFlipTrackMode", true);
+  // Embaralhar a ordem dos cartões. Também fica salvo entre sessões.
+  const [shuffleMode, setShuffleMode] = usePersistentState("flashFlipShuffleMode", false);
+  const [deck, setDeck] = useState(() => shuffleMode ? shuffleArr(cards) : cards);
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [feedback, setFeedback] = useState(null); // null | "know" | "learning"
@@ -6882,36 +6887,103 @@ function FlashcardFlipMode({ cards, onComplete }) {
   const [finished, setFinished] = useState(false);
   const card = deck[index];
 
-  const go = (dir) => { setFlipped(false); setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir))); };
+  const finishDeck = () => {
+    setFinished(true);
+    // Só conta como "lista estudada" quando o baralho revisado é o completo (não a rodada de refazer só os que faltam).
+    if (deck.length === cards.length) onComplete && onComplete();
+  };
+
+  const go = (dir) => {
+    // No modo "só passar", chegar ao fim do baralho encerra a revisão em vez
+    // de simplesmente travar no último cartão sem fazer nada.
+    if (!trackMode && dir > 0 && index === deck.length - 1) {
+      if (flipped) { setFlipped(false); setTimeout(finishDeck, 420); } else finishDeck();
+      return;
+    }
+    if (flipped) {
+      // Mesma lógica do respond(): desvira primeiro, só troca de cartão depois
+      // que a animação termina, senão o verso do próximo cartão aparece rápido.
+      setFlipped(false);
+      setTimeout(() => setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir))), 420);
+    } else {
+      setIndex(i => Math.max(0, Math.min(deck.length-1, i+dir)));
+    }
+  };
 
   const respond = (type) => {
     if (feedback) return;
     setFeedback(type);
     setTimeout(() => {
       setFeedback(null);
-      setResults(r => [...r, { id: card.id, know: type==="know" }]);
-      if (index < deck.length-1) { setIndex(i => i+1); setFlipped(false); }
-      else {
-        setFinished(true);
-        // Só conta como "lista estudada" quando o baralho revisado é o completo (não a rodada de refazer só os que faltam).
-        if (deck.length === cards.length) onComplete && onComplete();
-      }
+      // Desvira a carta ATUAL primeiro (sem trocar o conteúdo ainda) — só depois
+      // que a animação de virar de volta pra frente termina (.4s no CSS) é que
+      // troca pro próximo cartão. Trocar os dois juntos fazia o verso do
+      // PRÓXIMO cartão aparecer por uma fração de segundo durante a virada.
+      setFlipped(false);
+      setTimeout(() => {
+        setResults(r => [...r, { id: card.id, know: type==="know" }]);
+        if (index < deck.length-1) { setIndex(i => i+1); }
+        else finishDeck();
+      }, 420);
     }, 700);
   };
 
-  const restartAll = () => { setDeck(cards); setIndex(0); setResults([]); setFinished(false); setFlipped(false); };
+  const restartAll = () => { setDeck(shuffleMode ? shuffleArr(cards) : cards); setIndex(0); setResults([]); setFinished(false); setFlipped(false); };
   const restartFailed = () => {
     const failedIds = new Set(results.filter(r => !r.know).map(r => r.id));
     const failedCards = cards.filter(c => failedIds.has(c.id));
     if (failedCards.length === 0) return;
-    setDeck(failedCards); setIndex(0); setResults([]); setFinished(false); setFlipped(false);
+    setDeck(shuffleMode ? shuffleArr(failedCards) : failedCards); setIndex(0); setResults([]); setFinished(false); setFlipped(false);
+  };
+  // Liga/desliga o embaralhamento no meio da revisão: reordena o baralho atual
+  // (mantendo os mesmos cartões, mudando só a ordem) e volta pro início, já
+  // que os índices deixam de fazer sentido com a nova ordem.
+  const toggleShuffle = (checked) => {
+    setShuffleMode(checked);
+    setDeck(checked ? shuffleArr(deck) : cards);
+    setIndex(0); setFlipped(false); setResults([]); setFinished(false); setFeedback(null);
   };
 
   useEffect(() => {
-    const onKey = (e) => { if (e.code==="Space" && !finished) { e.preventDefault(); setFlipped(f=>!f); } };
+    const onKey = (e) => {
+      if (finished) return;
+      if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.code === "Space") { e.preventDefault(); if (!feedback) setFlipped(f=>!f); return; }
+      if (trackMode) {
+        // Modo com marcação: ←/→ já respondem "ainda aprendendo"/"já sei"; ↑/↓ só vira o cartão.
+        if (e.key === "ArrowRight") { e.preventDefault(); respond("know"); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); respond("learning"); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); if (!feedback) setFlipped(f=>!f); }
+      } else {
+        // Modo "só passar": ←/→ só navegam entre os cartões.
+        if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [finished]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished, trackMode, feedback, flipped, index, deck.length]);
+
+  const trackToggle = (
+    <label className="flashTrackToggle">
+      <span>{trackMode ? "Marcar sei / não sei" : "Só passar os cartões"}</span>
+      <span className={"switchPill"+(trackMode?" on":"")}>
+        <input type="checkbox" checked={trackMode} onChange={e=>setTrackMode(e.target.checked)}/>
+        <span className="switchKnob"/>
+      </span>
+    </label>
+  );
+
+  const shuffleToggle = (
+    <label className="flashTrackToggle">
+      <span>Embaralhar</span>
+      <span className={"switchPill"+(shuffleMode?" on":"")}>
+        <input type="checkbox" checked={shuffleMode} onChange={e=>toggleShuffle(e.target.checked)}/>
+        <span className="switchKnob"/>
+      </span>
+    </label>
+  );
 
   if (finished) {
     const knowCount = results.filter(r => r.know).length;
@@ -6921,13 +6993,15 @@ function FlashcardFlipMode({ cards, onComplete }) {
         <div className="flashFlipDone">
           <div className="flashFlipDoneIcon"><Trophy size={32}/></div>
           <h3>Boa! Você revisou os {deck.length} cartão{deck.length===1?"":"s"} 🎉</h3>
-          <div className="flashFlipDoneStats">
-            <div className="flashFlipDoneStat know"><strong>{knowCount}</strong><span>Já sei</span></div>
-            <div className="flashFlipDoneStat learning"><strong>{learningCount}</strong><span>Ainda aprendendo</span></div>
-          </div>
+          {trackMode && (
+            <div className="flashFlipDoneStats">
+              <div className="flashFlipDoneStat know"><strong>{knowCount}</strong><span>Já sei</span></div>
+              <div className="flashFlipDoneStat learning"><strong>{learningCount}</strong><span>Ainda aprendendo</span></div>
+            </div>
+          )}
           <div className="flashFlipDoneActions">
             <button className="ghost flashFlipDoneBtn" onClick={restartAll}><RotateCcw size={15}/> Estudar tudo de novo</button>
-            {learningCount > 0 && (
+            {trackMode && learningCount > 0 && (
               <button className="flashFlipRetryBtn" onClick={restartFailed}><Zap size={15}/> Só os que falta aprender ({learningCount})</button>
             )}
           </div>
@@ -6936,8 +7010,24 @@ function FlashcardFlipMode({ cards, onComplete }) {
     );
   }
 
+  const knowSoFar = results.filter(r => r.know).length;
+  const learningSoFar = results.filter(r => !r.know).length;
+  const atLast = index === deck.length - 1;
+
   return (
     <div className="flashStudyArea">
+      <div className="flashFlipTopBar">
+        {trackMode ? (
+          <div className="flashFlipLiveStats">
+            <span className="flashFlipLiveStat know"><Check size={13}/> {knowSoFar}</span>
+            <span className="flashFlipLiveStat learning"><X size={13}/> {learningSoFar}</span>
+          </div>
+        ) : <span/>}
+        <div className="flashFlipToggles">
+          {shuffleToggle}
+          {trackToggle}
+        </div>
+      </div>
       <div className="flashFlipCard" onClick={()=>{ if(!feedback) setFlipped(f=>!f); }}>
         <div className={"flashFlipInner"+(flipped?" flipped":"")}>
           <div className="flashFlipFace flashFlipFront">
@@ -6952,20 +7042,22 @@ function FlashcardFlipMode({ cards, onComplete }) {
             {feedback==="know" ? "Já sei" : "Ainda aprendendo"}
           </div>
         )}
-        <p className="flashFlipHint">Clique ou aperte espaço para virar</p>
       </div>
-      <div className="flashFlipActions">
-        <button className="flashFlipNo" disabled={!!feedback} onClick={()=>respond("learning")}><X size={16}/> Ainda aprendendo</button>
-        <button className="flashFlipYes" disabled={!!feedback} onClick={()=>respond("know")}><Check size={16}/> Já sei</button>
-      </div>
+      {trackMode && (
+        <div className="flashFlipActions">
+          <button className="flashFlipNo" disabled={!!feedback} onClick={()=>respond("learning")}><X size={16}/> Ainda aprendendo</button>
+          <button className="flashFlipYes" disabled={!!feedback} onClick={()=>respond("know")}><Check size={16}/> Já sei</button>
+        </div>
+      )}
       <div className="flashPager">
         <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>
         <span>{index+1} / {deck.length}</span>
-        <button disabled={index===deck.length-1} onClick={()=>go(1)}><ArrowRight size={16}/></button>
+        <button disabled={trackMode && atLast} onClick={()=>go(1)}>{(!trackMode && atLast) ? <Check size={16}/> : <ArrowRight size={16}/>}</button>
       </div>
     </div>
   );
 }
+
 
 function FlashcardLearnMode({ cards, onComplete }) {
   const [deck, setDeck] = useState(cards);

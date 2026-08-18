@@ -711,6 +711,18 @@ h1{font-size:23px}
 .flashFlipNo{color:#ff9d43}
 .flashFlipYes{color:#3ecf6a}
 .flashPager{display:flex;align-items:center;gap:16px;color:var(--text-2);font-size:13px}
+.flashFlipLiveStats{display:flex;align-items:center;gap:10px}
+.flashFlipLiveStat{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:999px;border:1px solid var(--border);background:var(--bg-surface);font-size:13px;font-weight:700}
+.flashFlipLiveStat.know{color:#3ecf6a;border-color:rgba(62,207,106,.35)}
+.flashFlipLiveStat.learning{color:#ff9d43;border-color:rgba(255,157,67,.35)}
+.flashFlipTopBar{width:100%;max-width:640px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.flashFlipToggles{display:flex;align-items:center;gap:18px}
+.flashTrackToggle{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);user-select:none}
+.switchPill{position:relative;width:38px;height:22px;border-radius:999px;background:var(--border);flex-shrink:0;transition:background .18s}
+.switchPill.on{background:var(--accent)}
+.switchPill input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+.switchKnob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .18s;box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.switchPill.on .switchKnob{transform:translateX(16px)}
 .flashPager button{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);display:grid;place-items:center;color:var(--text-1)}
 .flashPager button:disabled{opacity:.35}
 
