@@ -15,7 +15,7 @@ import {
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
-  CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame
+  CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -969,7 +969,7 @@ function App({session,theme,setTheme}){
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
-      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data}/>}
+      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals}/>}
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
@@ -7680,17 +7680,66 @@ function Nivelamento(){
   </div>;
 }
 
-function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=[]}){
+function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=[], session}){
   const {data,add,remove,update} = entity;
   const [filter,setFilter] = useState("todas");
   const [openMenuId,setOpenMenuId] = useState(null);
   const [modal,setModal] = useState(null); // null | "new" | goal being edited
 
+  const myId = session?.user?.id;
+  const canShare = cloudConfigured && !!session;
+
+  const [partners,setPartners] = useState([]);
+  const [inviteModal,setInviteModal] = useState(null); // null | "generate" | "accept"
+  const [inviteCode,setInviteCode] = useState("");
+  const [acceptCode,setAcceptCode] = useState("");
+  const [inviteBusy,setInviteBusy] = useState(false);
+  const [inviteError,setInviteError] = useState(null);
+
+  const loadPartners = async ()=>{
+    try{ setPartners(await getMyPartners()); }catch(e){ console.error(e); }
+  };
+  useEffect(()=>{ if(canShare) loadPartners(); }, [canShare, myId]);
+
+  // Se a pessoa abriu um link de convite (?invite=CODIGO), já deixa o código pronto pra aceitar.
+  useEffect(()=>{
+    if(!canShare) return;
+    const code = new URLSearchParams(window.location.search).get("invite");
+    if(code){ setAcceptCode(code.toUpperCase()); setInviteModal("accept"); }
+  }, [canShare]);
+
+  const partnerEmail = (userId)=> partners.find(p=>p.partner_user_id===userId)?.partner_email;
+
+  const openGenerate = async ()=>{
+    setInviteError(null); setInviteBusy(true); setInviteModal("generate"); setInviteCode("");
+    try{ setInviteCode(await createInviteCode()); }
+    catch(e){ setInviteError(e.message); }
+    finally{ setInviteBusy(false); }
+  };
+
+  const submitAccept = async ()=>{
+    if(!acceptCode.trim()) return;
+    setInviteError(null); setInviteBusy(true);
+    try{
+      await acceptInviteCode(acceptCode);
+      await loadPartners();
+      setInviteModal(null); setAcceptCode("");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("invite");
+      window.history.replaceState({}, "", url.pathname + url.search);
+      toast("Conta vinculada! Agora vocês podem criar metas de estudo em conjunto.");
+    }catch(e){ setInviteError(e.message); }
+    finally{ setInviteBusy(false); }
+  };
+
+  const inviteLink = inviteCode ? (window.location.origin + window.location.pathname + "?invite=" + inviteCode) : "";
+
   // Metas "por dias" completam sozinhas assim que o contador (dias corridos desde
   // o início, sem contar os dias congelados por uma Falha) bate a meta.
   useEffect(()=>{
     data.forEach(g=>{
-      if(g.mode==="dias" && g.status==="andamento"){
+      const mine = !canShare || g.user_id===myId;
+      if(mine && g.mode==="dias" && g.status==="andamento"){
         const {current,target} = studyGoalDaysProgress(g);
         if(target>0 && current>=target) update(g.id,{status:"concluida"});
       }
@@ -7709,8 +7758,15 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
   return <div className="content">
     <div className="studyGoalsHead">
       <div><h2>Metas</h2><p>Acompanhe suas metas e conquistas.</p></div>
-      <button className="add" onClick={()=>setModal("new")}><Plus size={17}/> Nova meta</button>
+      <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+        {canShare && <button className="ghost" onClick={()=>{setInviteError(null); setInviteModal("accept");}}>Tenho um código</button>}
+        {canShare && <button className="ghost" onClick={openGenerate}>Convidar parceiro(a)</button>}
+        <button className="add" onClick={()=>setModal("new")}><Plus size={17}/> Nova meta</button>
+      </div>
     </div>
+
+    {canShare && partners.length>0 && <p className="emptyHint">Vinculado com: {partners.map(p=>p.partner_email).join(", ")}</p>}
+    {!canShare && <p className="emptyHint">Ative a sincronização (Supabase) para criar metas de estudo em conjunto com outra conta.</p>}
 
     <div className="studyStats">
       <div className="studyStat"><div className="studyStatIcon" style={{background:"#ff5c5c22",color:"#ff5c5c"}}><Target size={17}/></div><strong>{total}</strong><small>Metas no total</small></div>
@@ -7737,6 +7793,8 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
         const Icon = STUDY_ICONS[g.icon] || Target;
         const badge = studyGoalBadge(g);
         const daysInfo = g.mode==="dias" ? studyGoalDaysProgress(g) : null;
+        const mine = !canShare || g.user_id===myId;
+        const otherEmail = partnerEmail(g.user_id);
         return <div className="studyGoalCard" key={g.id}>
           <div className="studyGoalIcon" style={{background:hex+"22", color:hex}}><Icon size={20}/></div>
           <div className="studyGoalBody">
@@ -7769,6 +7827,9 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
                           {g.link_page_start ? ` · pág. ${g.link_page_start}–${g.link_page_end}` : ""} (atualiza sozinha)</>}
                   </span>
                 )}
+                {g.shared && <span className="studyGoalFootInfo studyGoalFootLink">
+                  <Users size={13}/> {mine ? `Em conjunto com ${otherEmail||"parceiro(a)"}` : `Meta de ${otherEmail||"parceiro(a)"} · em conjunto`}
+                </span>}
               </div>
               <span className="studyGoalBadge" style={{color:badge.color, borderColor:badge.color}}>{badge.label}</span>
             </div>
@@ -7779,21 +7840,42 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
             {g.status==="andamento" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"pausada"});}}><Hourglass size={13}/> Pausar</button>}
             {g.status!=="falhou" && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"falhou", failed_at:todayISO()});}}><XCircle size={13}/> Marcar como falha</button>}
             {(g.status==="pausada"||g.status==="concluida"||g.status==="falhou") && <button onClick={()=>{setOpenMenuId(null); update(g.id,{status:"andamento", failed_at:null});}}><RotateCcw size={13}/> Reativar</button>}
-            <button className="danger" onClick={()=>confirmRemove(g.id)}><Trash2 size={13}/> Excluir</button>
+            {mine && <button className="danger" onClick={()=>confirmRemove(g.id)}><Trash2 size={13}/> Excluir</button>}
           </div>}
         </div>;
       })}
       {filtered.length===0 && <p className="emptyHint">{data.length===0 ? "Crie sua primeira meta de estudo." : "Nenhuma meta nesse filtro."}</p>}
     </div>
 
-    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} flashcardListsList={flashcardListsList} onClose={()=>setModal(null)} onSave={(payload)=>{
+    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} flashcardListsList={flashcardListsList}
+      canShare={canShare} partners={partners}
+      onClose={()=>setModal(null)} onSave={(payload)=>{
       if(modal==="new") add(payload); else update(modal.id, payload);
       setModal(null);
     }}/>}
+
+    {inviteModal==="generate" && <div className="modalBack" onClick={()=>setInviteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modalHead"><h2>Convidar parceiro(a)</h2><button type="button" onClick={()=>setInviteModal(null)}><X/></button></div>
+      <p className="authSub">Envie este código (ou o link) para quem você quer compartilhar metas de estudo. A pessoa precisa ter conta no FinLife e usar o botão "Tenho um código". Válido por 7 dias.</p>
+      {inviteBusy && <p className="emptyHint">Gerando código...</p>}
+      {inviteError && <p className="aiErrorMsg">{inviteError}</p>}
+      {inviteCode && <>
+        <label>Código<input readOnly value={inviteCode} onFocus={e=>e.target.select()}/></label>
+        <label>Link<input readOnly value={inviteLink} onFocus={e=>e.target.select()}/></label>
+        <button type="button" className="ghost" onClick={()=>{navigator.clipboard?.writeText(inviteLink); toast("Link copiado!");}}>Copiar link</button>
+      </>}
+    </div></div>}
+
+    {inviteModal==="accept" && <div className="modalBack" onClick={()=>setInviteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modalHead"><h2>Aceitar convite</h2><button type="button" onClick={()=>setInviteModal(null)}><X/></button></div>
+      <label>Código recebido<input value={acceptCode} onChange={e=>setAcceptCode(e.target.value.toUpperCase())} placeholder="Ex.: 7K9QXZ" autoFocus/></label>
+      {inviteError && <p className="aiErrorMsg">{inviteError}</p>}
+      <button className="primary" type="button" disabled={inviteBusy} onClick={submitAccept}>{inviteBusy?"Vinculando...":"Vincular contas"}</button>
+    </div></div>}
   </div>;
 }
 
-function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsList=[], onClose, onSave}){
+function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsList=[], canShare=false, partners=[], onClose, onSave}){
   const [title,setTitle] = useState(goal?.title||"");
   const [description,setDescription] = useState(goal?.description||"");
   const [icon,setIcon] = useState(goal?.icon||"target");
@@ -7811,6 +7893,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
   const [linkPageStart,setLinkPageStart] = useState(goal?.link_page_start ?? "");
   const [linkPageEnd,setLinkPageEnd] = useState(goal?.link_page_end ?? "");
   const [linkListIds,setLinkListIds] = useState(goal?.link_list_ids || []);
+  const [shared,setShared] = useState(goal?.shared || false);
 
   const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
   const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
@@ -7838,6 +7921,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       title: title.trim(),
       description: description.trim(),
       icon, color, mode, status,
+      ...(canShare ? {shared} : {}),
       percent: mode==="percent" ? Math.min(100,Math.max(0,Number(percent)||0)) : 0,
       due_date: mode==="dias" ? null : (dueDate || null),
       start_date: startDate || null,
@@ -7884,6 +7968,10 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       <div className="modalHead"><h2>{goal?"Editar meta":"Nova meta"}</h2><button type="button" onClick={onClose}><X/></button></div>
       <label>Título<input value={title} onChange={e=>setTitle(e.target.value)} required placeholder="Ex.: Aprovação na EsPCEx"/></label>
       <label>Descrição<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ex.: Estudar com constância e conquistar minha vaga."/></label>
+
+      {canShare && partners.length>0 && <label className="penCheckLabel">
+        <input type="checkbox" checked={shared} onChange={e=>setShared(e.target.checked)}/> Meta em conjunto (visível para {partners.map(p=>p.partner_email).join(", ")})
+      </label>}
 
       <label>Ícone
         <div className="iconColorPicker">

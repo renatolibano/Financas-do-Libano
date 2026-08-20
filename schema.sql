@@ -624,3 +624,28 @@ create policy "update_shared_goals" on goals for update using (
        or (pl.user_b = goals.user_id and pl.user_a = auth.uid())
   )
 );
+
+-- Atualização: Metas de estudo em conjunto — mesmo mecanismo já usado nas metas
+-- financeiras (tabela "goals"), reaproveitando os mesmos partner_links/invite_codes.
+alter table study_goals add column if not exists shared boolean not null default false;
+
+drop policy if exists "select_own_study_goals" on study_goals;
+drop policy if exists "select_shared_study_goals" on study_goals;
+create policy "select_own_study_goals" on study_goals for select using (auth.uid() = user_id);
+create policy "select_shared_study_goals" on study_goals for select using (
+  shared = true and exists (
+    select 1 from partner_links pl
+    where (pl.user_a = study_goals.user_id and pl.user_b = auth.uid())
+       or (pl.user_b = study_goals.user_id and pl.user_a = auth.uid())
+  )
+);
+drop policy if exists "update_own_study_goals" on study_goals;
+drop policy if exists "update_shared_study_goals" on study_goals;
+create policy "update_own_study_goals" on study_goals for update using (auth.uid() = user_id);
+create policy "update_shared_study_goals" on study_goals for update using (
+  shared = true and exists (
+    select 1 from partner_links pl
+    where (pl.user_a = study_goals.user_id and pl.user_b = auth.uid())
+       or (pl.user_b = study_goals.user_id and pl.user_a = auth.uid())
+  )
+);
