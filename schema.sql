@@ -521,3 +521,106 @@ alter table study_goals drop constraint if exists study_goals_mode_check;
 alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias'));
 alter table study_goals drop constraint if exists study_goals_status_check;
 alter table study_goals add constraint study_goals_status_check check (status in ('andamento','concluida','pausada','falhou'));
+
+-- Atualização: Metas em conjunto — duas contas vinculadas por um código de convite
+-- passam a ver e contribuir na mesma meta financeira (tabela "goals").
+
+-- Vínculo entre duas contas (sem direção — user_a/user_b é só a ordem de criação).
+create table if not exists partner_links (
+  id uuid primary key default gen_random_uuid(),
+  user_a uuid not null references auth.users(id) on delete cascade,
+  user_b uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  constraint partner_links_no_self check (user_a <> user_b)
+);
+-- Evita vincular o mesmo par de contas duas vezes, independente da ordem.
+create unique index if not exists partner_links_unique_pair
+  on partner_links (least(user_a,user_b), greatest(user_a,user_b));
+alter table partner_links enable row level security;
+drop policy if exists "select_own_partner_links" on partner_links;
+create policy "select_own_partner_links" on partner_links for select
+  using (auth.uid() = user_a or auth.uid() = user_b);
+
+-- Código de convite temporário (7 dias) gerado por quem quer convidar um parceiro.
+create table if not exists invite_codes (
+  code text primary key,
+  created_by uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '7 days'),
+  consumed_by uuid references auth.users(id),
+  consumed_at timestamptz
+);
+alter table invite_codes enable row level security;
+drop policy if exists "select_own_invite_codes" on invite_codes;
+drop policy if exists "insert_own_invite_codes" on invite_codes;
+create policy "select_own_invite_codes" on invite_codes for select
+  using (auth.uid() = created_by);
+create policy "insert_own_invite_codes" on invite_codes for insert
+  with check (auth.uid() = created_by);
+
+-- Aceita um código de convite: valida, marca como usado e cria o vínculo entre as contas.
+-- security definer porque quem aceita não tem (e não deve ter) permissão de leitura
+-- sobre o código de outra pessoa antes de ele ser validado.
+create or replace function accept_invite_code(p_code text)
+returns table(partner_id uuid) as $$
+declare
+  v_row invite_codes%rowtype;
+begin
+  select * into v_row from invite_codes where code = p_code for update;
+  if not found then
+    raise exception 'Código inválido.';
+  end if;
+  if v_row.consumed_by is not null then
+    raise exception 'Este código já foi usado.';
+  end if;
+  if v_row.expires_at < now() then
+    raise exception 'Este código expirou.';
+  end if;
+  if v_row.created_by = auth.uid() then
+    raise exception 'Você não pode aceitar seu próprio código.';
+  end if;
+  update invite_codes set consumed_by = auth.uid(), consumed_at = now() where code = p_code;
+  insert into partner_links (user_a, user_b) values (v_row.created_by, auth.uid())
+    on conflict (least(user_a,user_b), greatest(user_a,user_b)) do nothing;
+  return query select v_row.created_by;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+-- Lista as contas já vinculadas à conta atual, com o e-mail de cada uma (pra exibir no app).
+create or replace function get_my_partners()
+returns table(partner_user_id uuid, partner_email text) as $$
+begin
+  return query
+    select u.id, u.email::text from auth.users u
+    join partner_links pl
+      on (pl.user_a = auth.uid() and pl.user_b = u.id)
+      or (pl.user_b = auth.uid() and pl.user_a = u.id);
+end;
+$$ language plpgsql security definer set search_path = public;
+
+-- Marca se uma meta é "em conjunto" (visível/editável por quem está vinculado ao dono).
+alter table goals add column if not exists shared boolean not null default false;
+
+-- Substitui a política genérica de select/update de "goals" (criada no bloco de
+-- budgets/goals/recurring_payments/study_goals) por versões que também liberam
+-- acesso ao parceiro vinculado, quando a meta está marcada como "shared".
+drop policy if exists "select_own_goals" on goals;
+drop policy if exists "select_shared_goals" on goals;
+create policy "select_own_goals" on goals for select using (auth.uid() = user_id);
+create policy "select_shared_goals" on goals for select using (
+  shared = true and exists (
+    select 1 from partner_links pl
+    where (pl.user_a = goals.user_id and pl.user_b = auth.uid())
+       or (pl.user_b = goals.user_id and pl.user_a = auth.uid())
+  )
+);
+drop policy if exists "update_own_goals" on goals;
+drop policy if exists "update_shared_goals" on goals;
+create policy "update_own_goals" on goals for update using (auth.uid() = user_id);
+create policy "update_shared_goals" on goals for update using (
+  shared = true and exists (
+    select 1 from partner_links pl
+    where (pl.user_a = goals.user_id and pl.user_b = auth.uid())
+       or (pl.user_b = goals.user_id and pl.user_a = auth.uid())
+  )
+);

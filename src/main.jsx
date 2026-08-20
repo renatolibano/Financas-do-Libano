@@ -20,6 +20,7 @@ import {
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
+import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState, loadLocal, saveLocal } from "./lib/storage";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
@@ -959,7 +960,7 @@ function App({session,theme,setTheme}){
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
       {page==="Orçamento" && <Budgets entity={budgets} transactions={monthTransactions} month={selectedMonth}/>}
-      {page==="Metas" && <Goals entity={goals}/>}
+      {page==="Metas" && <Goals entity={goals} session={session}/>}
       {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
       {page==="Lista de Compras" && <ShoppingList entity={shoppingItems}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
@@ -7287,10 +7288,127 @@ function Budgets({entity,transactions,month}){
   return <div className="content"><div className="panel"><div className="panelTitle"><h2>Orçamento mensal</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div><div className="inlineAdd"><input value={cat} onChange={e=>setCat(e.target.value)} placeholder="Categoria (ex.: Alimentação)"/><input value={limit} onChange={e=>setLimit(e.target.value)} type="number" step="0.01" min="0" placeholder="Limite mensal"/><button onClick={submit}><Plus/></button></div></div><div className="budgetGrid">{data.map(x=>{const s=spent(x.cat),pct=x.limit_value?Math.round(s/x.limit_value*100):0;return <div className="budgetCard" key={x.id}><div className="panelTitle"><h3>{x.cat}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><b>{money(s)} <small>/ {money(x.limit_value)}</small></b><div className="progress"><i style={{width:Math.min(100,pct)+"%"}}/></div><p>{pct>100?`Você ultrapassou ${money(s-x.limit_value)}.`:`Restam ${money(Math.max(0,x.limit_value-s))}.`}</p></div>})}{!data.length&&<p className="emptyHint">Cadastre limites por categoria para acompanhar seus gastos.</p>}</div></div>;
 }
 
-function Goals({entity}){
-  const {data,add,remove,update}=entity; const [name,setName]=useState(""); const [target,setTarget]=useState(""); const [saved,setSaved]=useState("");
-  const submit=()=>{if(!name.trim()||!target)return;add({name,target:Number(target),saved:Number(saved)||0});setName("");setTarget("");setSaved("");};
-  return <div className="content"><div className="panel"><div className="panelTitle"><h2>Metas financeiras</h2></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Computador"/><input value={target} onChange={e=>setTarget(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor da meta"/><input value={saved} onChange={e=>setSaved(e.target.value)} type="number" step="0.01" min="0" placeholder="Já guardado"/><button onClick={submit}><Plus/></button></div></div><div className="goalGrid">{data.map(x=>{const pct=x.target?Math.min(100,Math.round(x.saved/x.target*100)):0;return <div className="goalCard" key={x.id}><div className="panelTitle"><h3><Target size={17}/> {x.name}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><strong>{money(x.saved)}</strong><small> de {money(x.target)}</small><div className="progress"><i style={{width:pct+"%"}}/></div><div className="goalActions"><span>{pct}% concluído</span><button onClick={()=>{const n=Number(prompt("Quanto adicionar à meta?"));if(n>0)update(x.id,{saved:Math.min(x.target,x.saved+n)})}}>+ Adicionar</button></div></div>})}{!data.length&&<p className="emptyHint">Crie uma meta para acompanhar seu progresso.</p>}</div></div>;
+function Goals({entity, session}){
+  const {data,add,remove,update}=entity;
+  const [name,setName]=useState(""); const [target,setTarget]=useState(""); const [saved,setSaved]=useState(""); const [shareNew,setShareNew]=useState(false);
+  const myId = session?.user?.id;
+  const canShare = cloudConfigured && !!session;
+
+  const [partners,setPartners] = useState([]);
+  const [inviteModal,setInviteModal] = useState(null); // null | "generate" | "accept"
+  const [inviteCode,setInviteCode] = useState("");
+  const [acceptCode,setAcceptCode] = useState("");
+  const [inviteBusy,setInviteBusy] = useState(false);
+  const [inviteError,setInviteError] = useState(null);
+
+  const loadPartners = async ()=>{
+    try{ setPartners(await getMyPartners()); }catch(e){ console.error(e); }
+  };
+  useEffect(()=>{ if(canShare) loadPartners(); }, [canShare, myId]);
+
+  // Se a pessoa abriu um link de convite (?invite=CODIGO), já deixa o código pronto pra aceitar.
+  useEffect(()=>{
+    if(!canShare) return;
+    const code = new URLSearchParams(window.location.search).get("invite");
+    if(code){ setAcceptCode(code.toUpperCase()); setInviteModal("accept"); }
+  }, [canShare]);
+
+  const partnerEmail = (userId)=> partners.find(p=>p.partner_user_id===userId)?.partner_email;
+
+  const submit=()=>{
+    if(!name.trim()||!target)return;
+    add({name,target:Number(target),saved:Number(saved)||0, ...(canShare?{shared:shareNew}:{})});
+    setName("");setTarget("");setSaved("");setShareNew(false);
+  };
+
+  const openGenerate = async ()=>{
+    setInviteError(null); setInviteBusy(true); setInviteModal("generate"); setInviteCode("");
+    try{ setInviteCode(await createInviteCode()); }
+    catch(e){ setInviteError(e.message); }
+    finally{ setInviteBusy(false); }
+  };
+
+  const submitAccept = async ()=>{
+    if(!acceptCode.trim()) return;
+    setInviteError(null); setInviteBusy(true);
+    try{
+      await acceptInviteCode(acceptCode);
+      await loadPartners();
+      setInviteModal(null); setAcceptCode("");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("invite");
+      window.history.replaceState({}, "", url.pathname + url.search);
+      toast("Conta vinculada! Agora vocês podem criar metas em conjunto.");
+    }catch(e){ setInviteError(e.message); }
+    finally{ setInviteBusy(false); }
+  };
+
+  const inviteLink = inviteCode ? (window.location.origin + window.location.pathname + "?invite=" + inviteCode) : "";
+
+  return <div className="content">
+    <div className="panel">
+      <div className="panelTitle">
+        <h2>Metas financeiras</h2>
+        {canShare && <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+          <button className="ghost" onClick={()=>{setInviteError(null); setInviteModal("accept");}}>Tenho um código</button>
+          <button className="ghost" onClick={openGenerate}>Convidar parceiro(a)</button>
+        </div>}
+      </div>
+      {canShare && partners.length>0 && <p className="emptyHint">Vinculado com: {partners.map(p=>p.partner_email).join(", ")}</p>}
+      {!canShare && <p className="emptyHint">Ative a sincronização (Supabase) para criar metas em conjunto com outra conta.</p>}
+      <div className="inlineAdd">
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Computador"/>
+        <input value={target} onChange={e=>setTarget(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor da meta"/>
+        <input value={saved} onChange={e=>setSaved(e.target.value)} type="number" step="0.01" min="0" placeholder="Já guardado"/>
+        <button onClick={submit}><Plus/></button>
+      </div>
+      {canShare && partners.length>0 && <label className="penCheckLabel" style={{marginTop:8}}>
+        <input type="checkbox" checked={shareNew} onChange={e=>setShareNew(e.target.checked)}/> Meta em conjunto (visível para {partners.map(p=>p.partner_email).join(", ")})
+      </label>}
+    </div>
+    <div className="goalGrid">
+      {data.map(x=>{
+        const pct=x.target?Math.min(100,Math.round(x.saved/x.target*100)):0;
+        const mine = !canShare || x.user_id===myId;
+        const otherEmail = partnerEmail(x.user_id);
+        return <div className="goalCard" key={x.id}>
+          <div className="panelTitle">
+            <h3><Target size={17}/> {x.name}</h3>
+            {mine && <button onClick={()=>remove(x.id)}><Trash2 size={15}/></button>}
+          </div>
+          {x.shared && <small style={{opacity:0.7, display:"block", marginBottom:4}}>
+            {mine ? `Em conjunto com ${otherEmail||"parceiro(a)"}` : `Meta de ${otherEmail||"parceiro(a)"} · em conjunto`}
+          </small>}
+          <strong>{money(x.saved)}</strong><small> de {money(x.target)}</small>
+          <div className="progress"><i style={{width:pct+"%"}}/></div>
+          <div className="goalActions">
+            <span>{pct}% concluído</span>
+            <button onClick={()=>{const n=Number(prompt("Quanto adicionar à meta?"));if(n>0)update(x.id,{saved:Math.min(x.target,x.saved+n)})}}>+ Adicionar</button>
+          </div>
+        </div>;
+      })}
+      {!data.length&&<p className="emptyHint">Crie uma meta para acompanhar seu progresso.</p>}
+    </div>
+
+    {inviteModal==="generate" && <div className="modalBack" onClick={()=>setInviteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modalHead"><h2>Convidar parceiro(a)</h2><button type="button" onClick={()=>setInviteModal(null)}><X/></button></div>
+      <p className="authSub">Envie este código (ou o link) para quem você quer compartilhar metas. A pessoa precisa ter conta no FinLife e usar o botão "Tenho um código". Válido por 7 dias.</p>
+      {inviteBusy && <p className="emptyHint">Gerando código...</p>}
+      {inviteError && <p className="aiErrorMsg">{inviteError}</p>}
+      {inviteCode && <>
+        <label>Código<input readOnly value={inviteCode} onFocus={e=>e.target.select()}/></label>
+        <label>Link<input readOnly value={inviteLink} onFocus={e=>e.target.select()}/></label>
+        <button type="button" className="ghost" onClick={()=>{navigator.clipboard?.writeText(inviteLink); toast("Link copiado!");}}>Copiar link</button>
+      </>}
+    </div></div>}
+
+    {inviteModal==="accept" && <div className="modalBack" onClick={()=>setInviteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modalHead"><h2>Aceitar convite</h2><button type="button" onClick={()=>setInviteModal(null)}><X/></button></div>
+      <label>Código recebido<input value={acceptCode} onChange={e=>setAcceptCode(e.target.value.toUpperCase())} placeholder="Ex.: 7K9QXZ" autoFocus/></label>
+      {inviteError && <p className="aiErrorMsg">{inviteError}</p>}
+      <button className="primary" type="button" disabled={inviteBusy} onClick={submitAccept}>{inviteBusy?"Vinculando...":"Vincular contas"}</button>
+    </div></div>}
+  </div>;
 }
 
 // Data de hoje em ISO (yyyy-mm-dd), mesmo formato usado por due_date/start_date.
