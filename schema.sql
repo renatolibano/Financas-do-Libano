@@ -106,6 +106,9 @@ alter table notes add column if not exists sort_order int;
 alter table books add column if not exists favorite_pages int[] not null default '{}';
 alter table books add column if not exists important_pages int[] not null default '{}';
 
+-- Atualização: caneta de marca-texto no leitor de livros (aba Livros)
+alter table books add column if not exists drawings jsonb not null default '{}'::jsonb;
+
 insert into storage.buckets (id, name, public)
 values ('books', 'books', false)
 on conflict (id) do nothing;

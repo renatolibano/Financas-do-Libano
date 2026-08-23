@@ -1801,7 +1801,14 @@ function PenSwatches({ colors, onColorsChange, value, onPick, max = 8 }) {
   );
 }
 
-function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange }) {
+// Marca-texto do leitor de livros: cor/espessura/opacidade fixas — é só um
+// botão único de ligar/desligar, sem paleta de opções (diferente do modo
+// caneta completo do leitor de PDF de estudo).
+const BOOK_HL_COLOR = "#ffd54a";
+const BOOK_HL_THICKNESS = 16;
+const BOOK_HL_OPACITY = 0.4;
+
+function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
   const [numPages, setNumPages] = useState(book.total_pages || 0);
@@ -1811,6 +1818,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
   const [nightMode, setNightMode] = useState(false);
+  const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
 
   const [favoritePages, setFavoritePages] = useState(book.favorite_pages || []);
   const [importantPages, setImportantPages] = useState(book.important_pages || []);
@@ -1821,6 +1829,16 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [searching, setSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState(0);
   const [jumpValue, setJumpValue] = useState("");
+
+  // --- Marca-texto: desenho à mão livre por cima da página, guardado numa
+  // camada separada por página (nunca altera o PDF original).
+  const [highlightMode, setHighlightMode] = useState(false);
+  const [drawings, setDrawings] = useState(book.drawings || {});
+  const [liveHl, setLiveHl] = useState(null);
+  const drawSvgRef = useRef(null);
+  const pageWrapRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  const drawSaveTimer = useRef(null);
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -1860,6 +1878,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
       const page = await pdf.getPage(pageNum);
       const containerWidth = containerRef.current?.clientWidth || 800;
       const baseViewport = page.getViewport({ scale: 1 });
+      setBasePageSize({ width: baseViewport.width, height: baseViewport.height });
       const scale = fitWidth
         ? Math.min(2.2, Math.max(0.3, (containerWidth - 24) / baseViewport.width))
         : zoom;
@@ -1930,6 +1949,76 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     const n = parseInt(jumpValue, 10);
     if (!isNaN(n)) goTo(n);
     setJumpValue("");
+  };
+
+  // ---------------------------------------------------------------------
+  // Marca-texto (botão único: liga/desliga o desenho do marcador)
+  // ---------------------------------------------------------------------
+
+  const scheduleDrawingsSave = (next) => {
+    clearTimeout(drawSaveTimer.current);
+    drawSaveTimer.current = setTimeout(() => onDrawingsChange(book.id, next), 500);
+  };
+  const flushDrawings = () => {
+    clearTimeout(drawSaveTimer.current);
+    onDrawingsChange(book.id, drawings);
+  };
+
+  const toggleHighlightMode = () => {
+    setHighlightMode(m => {
+      if (m) flushDrawings(); // saindo do modo: garante que o último traço foi salvo
+      return !m;
+    });
+  };
+
+  const toPageCoords = (clientX, clientY) => {
+    const rect = drawSvgRef.current.getBoundingClientRect();
+    const scale = basePageSize.width / (rect.width || 1);
+    return { x: (clientX - rect.left) * scale, y: (clientY - rect.top) * scale };
+  };
+
+  const handleHlPointerDown = (e) => {
+    if (!highlightMode || !basePageSize.width) return;
+    e.preventDefault();
+    try { drawSvgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    isDrawingRef.current = true;
+    setLiveHl({
+      id: crypto.randomUUID(), type: "stroke", tool: "highlighter",
+      color: BOOK_HL_COLOR, width: BOOK_HL_THICKNESS, opacity: BOOK_HL_OPACITY, style: "marker",
+      points: [{ x, y, p: 0.5 }],
+    });
+  };
+
+  const handleHlPointerMove = (e) => {
+    if (!highlightMode || !isDrawingRef.current) return;
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    setLiveHl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: 0.5 }] } : prev);
+  };
+
+  const handleHlPointerUp = () => {
+    if (!isDrawingRef.current) return;
+    isDrawingRef.current = false;
+    setLiveHl(prev => {
+      if (prev && prev.points.length > 1) {
+        setDrawings(d => {
+          const next = { ...d, [pageNum]: [...(d[pageNum] || []), prev] };
+          scheduleDrawingsSave(next);
+          return next;
+        });
+      }
+      return null;
+    });
+  };
+
+  const clearPageHighlights = () => {
+    if (!(drawings[pageNum] || []).length) return;
+    if (!confirm(`Apagar todo o marca-texto da página ${pageNum}?`)) return;
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: [] };
+      scheduleDrawingsSave(next);
+      return next;
+    });
   };
 
   const toggleFavorite = () => {
@@ -2013,6 +2102,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
   const handleClose = () => {
     if (panel==="notas") flushNotes();
+    flushDrawings();
     searchToken.current++;
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
@@ -2055,6 +2145,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
         <div className="pdfToolbar">
           <div className="pdfToolbarGroup">
+            <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} onClick={toggleHighlightMode}>
+              <Highlighter size={16}/> <span>Marca-texto</span>
+            </button>
+            {highlightMode && (drawings[pageNum]||[]).length>0 && (
+              <button title="Apagar marca-texto desta página" onClick={clearPageHighlights}><Trash2 size={16}/></button>
+            )}
+          </div>
+          <div className="pdfToolbarGroup">
             <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
             <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
             <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
@@ -2075,7 +2173,32 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
           <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
-            {!loading && !err && <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>goTo(pageNum+1)}/>}
+            {!loading && !err && (
+              <div ref={pageWrapRef} className="pdfPageWrap">
+                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode) goTo(pageNum+1); }}/>
+                {basePageSize.width>0 && (
+                  <svg
+                    ref={drawSvgRef}
+                    className="pdfDrawLayer"
+                    viewBox={`0 0 ${basePageSize.width} ${basePageSize.height}`}
+                    style={{
+                      position:"absolute", inset:0, width:"100%", height:"100%",
+                      pointerEvents: highlightMode?"auto":"none",
+                      touchAction: highlightMode?"none":undefined,
+                      cursor: highlightMode?"crosshair":undefined,
+                    }}
+                    onPointerDown={handleHlPointerDown}
+                    onPointerMove={handleHlPointerMove}
+                    onPointerUp={handleHlPointerUp}
+                    onPointerLeave={handleHlPointerUp}
+                    onContextMenu={(e)=>{ if (highlightMode) e.preventDefault(); }}
+                  >
+                    {(drawings[pageNum]||[]).map(ann => <AnnotationShape key={ann.id} ann={ann}/>)}
+                    {liveHl && <AnnotationShape ann={liveHl} preview/>}
+                  </svg>
+                )}
+              </div>
+            )}
           </div>
 
           {panel==="busca" && (
@@ -2203,6 +2326,7 @@ function BookShelf({ entity, status, session, studyGoals }) {
 
   const onFavoritesChange = (bookId, favorite_pages) => update(bookId, { favorite_pages });
   const onImportantChange = (bookId, important_pages) => update(bookId, { important_pages });
+  const onDrawingsChange = (bookId, drawings) => update(bookId, { drawings });
 
   const handleDelete = async (book) => {
     if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
@@ -2256,7 +2380,7 @@ function BookShelf({ entity, status, session, studyGoals }) {
       </div>
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
       {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
-      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange} onFavoritesChange={onFavoritesChange} onImportantChange={onImportantChange}/>}
+      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange} onFavoritesChange={onFavoritesChange} onImportantChange={onImportantChange} onDrawingsChange={onDrawingsChange}/>}
     </div>
   );
 }
@@ -2429,6 +2553,309 @@ const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPo
   return null;
 });
 
+// =====================================================================
+// Configurações do quadro/leitor: fundo, comportamento, ferramentas e
+// atalhos de teclado configuráveis. Compartilhado entre o quadro infinito
+// e o leitor de PDF de estudo (os dois lugares com um conjunto completo
+// de ferramentas de desenho).
+// =====================================================================
+
+// Aceita tanto o formato antigo (string "white"/"black") quanto o novo
+// ({ type, color }), sempre devolvendo o formato novo.
+function normalizeBoardBg(raw) {
+  if (!raw) return { type: "white", color: "#f4f4f5" };
+  if (typeof raw === "string") {
+    return raw === "black" ? { type: "color", color: "#0b0b0c" } : { type: "white", color: "#f4f4f5" };
+  }
+  return { type: raw.type || "white", color: raw.color || "#f4f4f5" };
+}
+
+function isLightHex(hex) {
+  const c = (hex || "#ffffff").replace("#", "");
+  const full = c.length === 3 ? c.split("").map(ch => ch + ch).join("") : c;
+  const r = parseInt(full.substring(0, 2), 16) || 0;
+  const g = parseInt(full.substring(2, 4), 16) || 0;
+  const b = parseInt(full.substring(4, 6), 16) || 0;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
+}
+
+// Estilo CSS do fundo (cor sólida, quadriculado ou pontinhos). Quando "view"
+// é informado, o padrão acompanha o pan/zoom pra dar sensação de profundidade.
+function boardBgStyle(bg, view) {
+  const light = isLightHex(bg.color);
+  const base = { backgroundColor: bg.color };
+  const zoom = view?.zoom || 1;
+  const posX = view?.x || 0, posY = view?.y || 0;
+  if (bg.type === "grid") {
+    const line = light ? "rgba(0,0,0,0.09)" : "rgba(255,255,255,0.13)";
+    return {
+      ...base,
+      backgroundImage: `linear-gradient(${line} 1px, transparent 1px), linear-gradient(90deg, ${line} 1px, transparent 1px)`,
+      backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
+      backgroundPosition: `${posX}px ${posY}px`,
+    };
+  }
+  if (bg.type === "dots") {
+    const dot = light ? "rgba(0,0,0,0.24)" : "rgba(255,255,255,0.3)";
+    return {
+      ...base,
+      backgroundImage: `radial-gradient(${dot} 1.6px, transparent 1.6px)`,
+      backgroundSize: `${22 * zoom}px ${22 * zoom}px`,
+      backgroundPosition: `${posX}px ${posY}px`,
+    };
+  }
+  return base;
+}
+
+const BOARD_SHORTCUT_META = [
+  { id: "pan", label: "Mover quadro (segurar)", desc: "Segura a tecla pra entrar no modo de pan" },
+  { id: "zoomModifier", label: "Zoom (scroll do mouse)", desc: "Modificador + scroll aplica zoom" },
+  { id: "undo", label: "Desfazer", desc: "Volta o último traço/forma desenhado" },
+  { id: "redo", label: "Refazer", desc: "Refaz o que foi desfeito" },
+  { id: "deleteSelection", label: "Apagar seleção", desc: "Remove formas selecionadas" },
+  { id: "straightLine", label: "Linha reta", desc: "Segure enquanto desenha — o traço vira linha reta" },
+  { id: "toolPen", label: "Selecionar caneta", desc: "Atalho rápido pra ativar a caneta" },
+  { id: "toolHighlighter", label: "Selecionar marca-texto", desc: "Atalho rápido pra ativar o marca-texto" },
+  { id: "toolEraser", label: "Selecionar borracha", desc: "Atalho rápido pra ativar a borracha" },
+  { id: "toolShape", label: "Selecionar formas", desc: "Atalho rápido pra ativar formas" },
+  { id: "toolText", label: "Selecionar texto", desc: "Atalho rápido pra ativar texto" },
+  { id: "toolSelect", label: "Selecionar (ponteiro)", desc: "Atalho rápido pra ativar a seleção" },
+  { id: "toolLasso", label: "Selecionar laço", desc: "Atalho rápido pra ativar o laço" },
+];
+
+const BOARD_SHORTCUT_DEFAULTS = {
+  pan: { key: "Space" },
+  zoomModifier: { modifierOnly: "control" },
+  undo: { key: "z", ctrl: true },
+  redo: { key: "z", ctrl: true, shift: true },
+  deleteSelection: { key: "Delete" },
+  straightLine: { key: "Shift" },
+  toolPen: { key: "1" },
+  toolHighlighter: { key: "2" },
+  toolEraser: { key: "3" },
+  toolShape: { key: "4" },
+  toolText: { key: "5" },
+  toolSelect: { key: "6" },
+  toolLasso: { key: "7" },
+};
+
+// Sempre usar esta função pra ler um atalho: cobre o caso de o usuário ter
+// atalhos salvos de uma versão antiga, sem as chaves mais novas.
+function getBinding(shortcuts, id) {
+  return (shortcuts && shortcuts[id]) || BOARD_SHORTCUT_DEFAULTS[id];
+}
+
+function formatShortcut(binding) {
+  if (!binding) return "—";
+  if (binding.modifierOnly) return { control: "Ctrl", alt: "Alt", shift: "Shift", meta: "Cmd" }[binding.modifierOnly] || binding.modifierOnly;
+  const parts = [];
+  if (binding.ctrl) parts.push("Ctrl");
+  if (binding.alt) parts.push("Alt");
+  if (binding.shift) parts.push("Shift");
+  let keyLabel = binding.key === "Space" ? "Espaço" : binding.key;
+  if (keyLabel && keyLabel.length === 1) keyLabel = keyLabel.toUpperCase();
+  parts.push(keyLabel);
+  return parts.join(" + ");
+}
+
+// Deriva um "binding" a partir do evento de teclado capturado ao clicar em
+// "Editar". Uma tecla modificadora sozinha (Ctrl/Alt/Shift) vira um atalho
+// do tipo "enquanto segurada" (usado por zoom e linha reta).
+function bindingFromKeyEvent(e) {
+  const rawKey = e.code === "Space" ? "Space" : e.key;
+  if (["Control", "Alt", "Shift", "Meta"].includes(rawKey)) return { modifierOnly: rawKey.toLowerCase() };
+  return { key: rawKey, ctrl: !!e.ctrlKey, shift: !!e.shiftKey, alt: !!e.altKey };
+}
+
+function matchesShortcut(e, binding) {
+  if (!binding) return false;
+  if (binding.modifierOnly) {
+    const map = { control: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+    return !!map[binding.modifierOnly];
+  }
+  const keyMatches = binding.key === "Space" ? e.code === "Space" : e.key.toLowerCase() === String(binding.key).toLowerCase();
+  return keyMatches && !!(e.ctrlKey || e.metaKey) === !!binding.ctrl && !!e.shiftKey === !!binding.shift && !!e.altKey === !!binding.alt;
+}
+
+// Detecta o "keyup" que corresponde a um atalho do tipo "enquanto segurada".
+function isShortcutReleaseKey(e, binding) {
+  if (!binding) return false;
+  if (binding.modifierOnly) {
+    const keyName = { control: "Control", alt: "Alt", shift: "Shift", meta: "Meta" }[binding.modifierOnly];
+    return e.key === keyName;
+  }
+  return binding.key === "Space" ? e.code === "Space" : e.key === binding.key;
+}
+
+// O evento de "wheel" (scroll) não é um KeyboardEvent, mas já traz os
+// modificadores pressionados no momento do scroll (ctrlKey/altKey/...).
+function wheelMatchesModifier(e, binding) {
+  if (!binding) return e.ctrlKey || e.metaKey;
+  if (binding.modifierOnly) {
+    const map = { control: e.ctrlKey || e.metaKey, alt: e.altKey, shift: e.shiftKey, meta: e.metaKey };
+    return !!map[binding.modifierOnly];
+  }
+  return e.ctrlKey || e.metaKey;
+}
+
+// "Segure Shift enquanto desenha" (ou o atalho configurado): trava o traço
+// numa linha reta, com o ângulo arredondado pro múltiplo de 45° mais
+// próximo — igual ao comportamento clássico de Illustrator/Photoshop.
+function snapPointToAngle(p0, p1) {
+  const dx = p1.x - p0.x, dy = p1.y - p0.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.0001) return p1;
+  const step = Math.PI / 4;
+  const angle = Math.round(Math.atan2(dy, dx) / step) * step;
+  return { x: p0.x + Math.cos(angle) * dist, y: p0.y + Math.sin(angle) * dist, p: p1.p };
+}
+
+function BoardSettingsModal({
+  onClose, tabs = ["fundo", "comportamento", "ferramentas", "atalhos"],
+  bg, setBg,
+  autoShape, setAutoShape, eraserMode, setEraserMode,
+  dockPosition, setDockPosition,
+  penStyle, onPenStyleChange, thickness, setThickness, opacity, setOpacity,
+  hlThickness, setHlThickness, hlOpacity, setHlOpacity,
+  eraserRadius, setEraserRadius,
+  shortcuts, setShortcuts,
+}) {
+  const [activeTab, setActiveTab] = useState(tabs[0]);
+  const [editingShortcut, setEditingShortcut] = useState(null);
+
+  useEffect(() => {
+    if (!editingShortcut) return;
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setEditingShortcut(null); return; }
+      setShortcuts(prev => ({ ...prev, [editingShortcut]: bindingFromKeyEvent(e) }));
+      setEditingShortcut(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [editingShortcut, setShortcuts]);
+
+  const restoreDefaults = () => {
+    if (!confirm("Restaurar todos os atalhos para o padrão?")) return;
+    setShortcuts({ ...BOARD_SHORTCUT_DEFAULTS });
+  };
+
+  const BG_OPTIONS = [
+    { type: "white", label: "Branco" },
+    { type: "grid", label: "Quadriculado" },
+    { type: "dots", label: "Pontinhos" },
+    { type: "color", label: "Cor" },
+  ];
+
+  return (
+    <div className="readerBack" onClick={onClose}>
+      <div className="readerModal boardSettingsModal" onClick={e => e.stopPropagation()}>
+        <div className="readerHead">
+          <b>Configurações do quadro</b>
+          <button onClick={onClose}><X size={18}/></button>
+        </div>
+        <div className="boardSettingsTabs">
+          {tabs.includes("fundo") && <button className={activeTab === "fundo" ? "active" : ""} onClick={() => setActiveTab("fundo")}>Fundo</button>}
+          {tabs.includes("comportamento") && <button className={activeTab === "comportamento" ? "active" : ""} onClick={() => setActiveTab("comportamento")}>Comportamento</button>}
+          {tabs.includes("ferramentas") && <button className={activeTab === "ferramentas" ? "active" : ""} onClick={() => setActiveTab("ferramentas")}>Ferramentas</button>}
+          {tabs.includes("atalhos") && <button className={activeTab === "atalhos" ? "active" : ""} onClick={() => setActiveTab("atalhos")}>Atalhos</button>}
+        </div>
+        <div className="boardSettingsBody">
+          {activeTab === "fundo" && bg && (
+            <>
+              <b className="boardSettingsSectionTitle">Tipo de fundo</b>
+              <div className="boardBgTypeGrid">
+                {BG_OPTIONS.map(opt => (
+                  <button key={opt.type} type="button" className={"boardBgTypeCard" + (bg.type === opt.type ? " active" : "")} onClick={() => setBg(b => ({ ...b, type: opt.type }))}>
+                    <div className="boardBgTypePreview" style={boardBgStyle(opt.type === "white" ? { type: "white", color: "#ffffff" } : { type: opt.type, color: bg.color })}/>
+                    <span>{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+              <small className="boardSettingsHint">Escolha a cor de fundo:</small>
+              <div className="boardBgColorPicker">
+                <input type="color" value={bg.color} onChange={e => setBg(b => ({ ...b, type: b.type === "white" ? "color" : b.type, color: e.target.value }))}/>
+              </div>
+            </>
+          )}
+          {activeTab === "comportamento" && (
+            <div className="boardSettingsList">
+              <label className="boardSettingsRow">
+                <div><b>Corrigir forma automaticamente</b><small>Traços parecidos com linha, retângulo ou círculo viram a forma perfeita</small></div>
+                <input type="checkbox" checked={!!autoShape} onChange={e => setAutoShape(e.target.checked)}/>
+              </label>
+              <div className="boardSettingsRow">
+                <div><b>Borracha padrão</b><small>Modo usado ao trocar pra ferramenta de borracha</small></div>
+                <div className="penToolGroup">
+                  <button type="button" className={eraserMode === "partial" ? "active" : ""} onClick={() => setEraserMode("partial")}>Parcial</button>
+                  <button type="button" className={eraserMode === "object" ? "active" : ""} onClick={() => setEraserMode("object")}>Objeto</button>
+                </div>
+              </div>
+              {dockPosition && (
+                <div className="boardSettingsRow">
+                  <div><b>Posição da barra flutuante</b><small>Onde a barra de ferramentas fica ancorada na tela</small></div>
+                  <div className="penToolGroup">
+                    <button type="button" className={dockPosition === "left" ? "active" : ""} onClick={() => setDockPosition("left")}>Esquerda</button>
+                    <button type="button" className={dockPosition === "right" ? "active" : ""} onClick={() => setDockPosition("right")}>Direita</button>
+                    <button type="button" className={dockPosition === "top" ? "active" : ""} onClick={() => setDockPosition("top")}>Cima</button>
+                    <button type="button" className={dockPosition === "bottom" ? "active" : ""} onClick={() => setDockPosition("bottom")}>Baixo</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {activeTab === "ferramentas" && (
+            <div className="boardSettingsList">
+              <div className="boardSettingsRow boardSettingsRowWrap">
+                <div><b>Caneta</b><small>Estilo, espessura e opacidade padrão</small></div>
+                <div className="boardSettingsRowControls">
+                  <select value={penStyle} onChange={e => onPenStyleChange(e.target.value)}>
+                    <option value="normal">Normal</option>
+                    <option value="pencil">Lápis</option>
+                    <option value="marker">Marcador/brush</option>
+                  </select>
+                  <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
+                </div>
+              </div>
+              <div className="boardSettingsRow boardSettingsRowWrap">
+                <div><b>Marca-texto</b><small>Espessura e opacidade padrão</small></div>
+                <div className="boardSettingsRowControls">
+                  <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e => setHlThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e => setHlOpacity(+e.target.value)}/></label>
+                </div>
+              </div>
+              <div className="boardSettingsRow boardSettingsRowWrap">
+                <div><b>Borracha</b><small>Tamanho padrão (modo parcial)</small></div>
+                <div className="boardSettingsRowControls">
+                  <label className="penSliderLabel">Tamanho<input type="range" min="4" max="30" step="1" value={eraserRadius} onChange={e => setEraserRadius(+e.target.value)}/></label>
+                </div>
+              </div>
+            </div>
+          )}
+          {activeTab === "atalhos" && (
+            <div className="boardShortcutsList">
+              <b className="boardSettingsSectionTitle">Teclas de atalho</b>
+              <p className="boardSettingsHint">Clique em "Editar" e pressione a combinação desejada. Use Esc pra cancelar.</p>
+              {BOARD_SHORTCUT_META.map(meta => (
+                <div className="boardShortcutRow" key={meta.id}>
+                  <div><b>{meta.label}</b><small>{meta.desc}</small></div>
+                  <div className="boardShortcutRowActions">
+                    <span className="boardShortcutKey">{editingShortcut === meta.id ? "Pressione uma tecla..." : formatShortcut(getBinding(shortcuts, meta.id))}</span>
+                    <button type="button" onClick={() => setEditingShortcut(meta.id)}>Editar</button>
+                  </div>
+                </div>
+              ))}
+              <button type="button" className="boardSettingsRestoreBtn" onClick={restoreDefaults}><RotateCcw size={14}/> Restaurar padrões</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange, onTotalPagesChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
@@ -2470,6 +2897,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const [hlOpacity, setHlOpacity] = useState(0.4);
   const [eraserRadius, setEraserRadius] = useState(12);
   const [autoShape, setAutoShape] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcuts, setShortcuts] = usePersistentState("studyPdfShortcuts", BOARD_SHORTCUT_DEFAULTS);
+  const [dockPosition, setDockPosition] = usePersistentState("studyPdfDockPosition", "left");
+  const [styleFlyoutOpen, setStyleFlyoutOpen] = useState(false);
+  const straightLineHeldRef = useRef(false);
   const [drawings, setDrawings] = useState(pdfDoc.drawings || {});
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [liveAnn, setLiveAnn] = useState(null);
@@ -2711,14 +3143,17 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const el = containerRef.current;
     if (!el) return;
     const handleWheelZoom = (e) => {
-      if (!e.ctrlKey) return;
+      // O pinça no touchpad sempre chega com ctrlKey=true (convenção do navegador,
+      // não é a tecla Ctrl real sendo apertada) — por isso continua funcionando
+      // mesmo que o atalho de zoom tenha sido trocado para outro modificador.
+      if (!e.ctrlKey && !wheelMatchesModifier(e, getBinding(shortcuts, "zoomModifier"))) return;
       e.preventDefault();
       setFitWidth(false);
       setZoom(z => Math.min(3, Math.max(0.3, +(z - e.deltaY * 0.01).toFixed(2))));
     };
     el.addEventListener("wheel", handleWheelZoom, { passive: false });
     return () => el.removeEventListener("wheel", handleWheelZoom);
-  }, []);
+  }, [shortcuts]);
 
   const handleJump = (e) => {
     e.preventDefault();
@@ -2834,6 +3269,10 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       return !m;
     });
   };
+
+  // Fecha o painel flutuante de estilo sempre que trocar de ferramenta — ele
+  // só reabre com um duplo toque na ferramenta ativa (igual no quadro infinito).
+  useEffect(() => { setStyleFlyoutOpen(false); }, [tool]);
 
   const handlePenStyleChange = (val) => {
     setPenStyle(val);
@@ -3096,7 +3535,15 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     if (!isDrawingRef.current) return;
     const { x, y } = toPageCoords(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
-      setLiveAnn(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
+      setLiveAnn(prev => {
+        if (!prev) return prev;
+        const p = { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) };
+        if (straightLineHeldRef.current) {
+          const start = prev.points[0];
+          return { ...prev, points: [start, snapPointToAngle(start, p)] };
+        }
+        return { ...prev, points: [...prev.points, p] };
+      });
     } else if (tool === "shape") {
       setLiveAnn(prev => prev ? { ...prev, x2: x, y2: y } : prev);
     } else if (tool === "eraser") {
@@ -3333,7 +3780,8 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const handler = (e) => {
       if (panel==="notas") return; // não interfere na digitação das notas
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
-      if (e.code === "Space") {
+      const panBinding = getBinding(shortcuts, "pan");
+      if (matchesShortcut(e, panBinding)) {
         // preventDefault aqui é essencial: sem ele, se o foco estiver num botão
         // (ex.: o botão "Escrever" logo após ser clicado), o navegador trata o
         // espaço como um clique nesse botão e ele fica abrindo/fechando sozinho.
@@ -3341,20 +3789,32 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         if (!spaceDownRef.current) { spaceDownRef.current = true; setSpaceHeld(true); }
         return;
       }
+      if (matchesShortcut(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = true;
       if (!penMode && e.key === "ArrowRight") goTo(pageNum + 1);
       if (!penMode && e.key === "ArrowLeft") goTo(pageNum - 1);
       if (e.key === "Escape") { if (penMode && tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else if (penMode) togglePenMode(); else handleClose(); }
-      if (penMode && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-      if (penMode && (e.key === "Delete" || e.key === "Backspace") && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
+      if (penMode && matchesShortcut(e, getBinding(shortcuts, "redo"))) { e.preventDefault(); redo(); }
+      else if (penMode && matchesShortcut(e, getBinding(shortcuts, "undo"))) { e.preventDefault(); undo(); }
+      if (penMode && matchesShortcut(e, getBinding(shortcuts, "deleteSelection")) && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
+      if (penMode) {
+        if (matchesShortcut(e, getBinding(shortcuts, "toolPen"))) setTool("pen");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolHighlighter"))) setTool("highlighter");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolEraser"))) setTool("eraser");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolShape"))) setTool("shape");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolText"))) setTool("text");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolSelect"))) setTool("select");
+        else if (matchesShortcut(e, getBinding(shortcuts, "toolLasso"))) setTool("lasso");
+      }
     };
     const onKeyUp = (e) => {
-      if (e.code === "Space") { spaceDownRef.current = false; setSpaceHeld(false); spacePanRef.current = null; setSpacePanning(false); }
+      if (isShortcutReleaseKey(e, getBinding(shortcuts, "pan"))) { spaceDownRef.current = false; setSpaceHeld(false); spacePanRef.current = null; setSpacePanning(false); }
+      if (isShortcutReleaseKey(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = false;
     };
     window.addEventListener("keydown", handler);
     window.addEventListener("keyup", onKeyUp);
     return () => { window.removeEventListener("keydown", handler); window.removeEventListener("keyup", onKeyUp); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, numPages, panel, penMode, drawings, tool, lassoSelectedIds]);
+  }, [pageNum, numPages, panel, penMode, drawings, tool, lassoSelectedIds, shortcuts]);
 
   // Se a aba perder o foco enquanto o espaço está pressionado, o "keyup" pode
   // nunca chegar — isso soltaria o espaço "travado", igual já é tratado no quadro.
@@ -3434,6 +3894,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <button title={penMode?"Sair do modo caneta":"Modo caneta — escrever no PDF"} className={penMode?"active":""} onClick={togglePenMode}>
               <PenTool size={16}/> <span>Escrever</span>
             </button>
+            <button title="Configurações do leitor" onClick={()=>setSettingsOpen(true)}><Settings size={16}/></button>
           </div>
           <div className="pdfToolbarGroup">
             <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
@@ -3462,74 +3923,77 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
           )}
         </div>
 
-        <div className="readerMain">
+        <div className={`readerMain pdfDockPos-${dockPosition}`}>
         {penMode && (
-          <div className="penOptionsBar">
-            <div className="penToolGroup penToolGroupMain">
-              <button title="Caneta" className={tool==="pen"?"active":""} onClick={()=>{setTool("pen"); setSelectedAnnId(null);}}><PenTool size={16}/></button>
-              <button title="Marca-texto" className={tool==="highlighter"?"active":""} onClick={()=>{setTool("highlighter"); setSelectedAnnId(null);}}><Highlighter size={16}/></button>
-              <button title="Borracha" className={tool==="eraser"?"active":""} onClick={()=>{setTool("eraser"); setSelectedAnnId(null);}}><Eraser size={16}/></button>
-              <button title="Formas" className={tool==="shape"?"active":""} onClick={()=>{setTool("shape"); setSelectedAnnId(null);}}><Square size={16}/></button>
-              <button title="Texto" className={tool==="text"?"active":""} onClick={()=>{setTool("text"); setSelectedAnnId(null);}}><Type size={16}/></button>
-              <button title="Selecionar" className={tool==="select"?"active":""} onClick={()=>setTool("select")}><MousePointer2 size={16}/></button>
-              <button title="Laço" className={tool==="lasso"?"active":""} onClick={()=>setTool("lasso")}><Lasso size={16}/></button>
-              <span className="penToolDivider"/>
-              <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
-              <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
-              <span className="penToolDivider"/>
-              <button title={annotationsVisible?"Ocultar anotações":"Mostrar anotações"} className={annotationsVisible?"":"active"} onClick={()=>setAnnotationsVisible(v=>!v)}>{annotationsVisible?<Eye size={16}/>:<EyeOff size={16}/>}</button>
-              <button title="Limpar página" onClick={clearPage}><Trash2 size={16}/></button>
-              <button title="Exportar PDF com as anotações" disabled={exporting} onClick={handleExportAnnotated}><Download size={16}/> <span>{exporting?"Exportando...":"Exportar"}</span></button>
-            </div>
+          <>
+            {styleFlyoutOpen && (tool === "pen" || tool === "highlighter" || tool === "eraser" || tool === "shape" || tool === "text") && (
+              <div className="pdfStylePanel" onPointerDown={e => e.stopPropagation()}>
+                {tool === "pen" && (<>
+                  <select value={penStyle} onChange={e=>handlePenStyleChange(e.target.value)}>
+                    <option value="normal">Caneta normal</option>
+                    <option value="pencil">Lápis</option>
+                    <option value="marker">Marcador/brush</option>
+                  </select>
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e=>setOpacity(+e.target.value)}/></label>
+                  <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e=>setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+                </>)}
+                {tool === "highlighter" && (<>
+                  <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e=>setHlThickness(+e.target.value)}/></label>
+                  <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e=>setHlOpacity(+e.target.value)}/></label>
+                </>)}
+                {tool === "eraser" && (<>
+                  <select value={eraserMode} onChange={e=>setEraserMode(e.target.value)}>
+                    <option value="partial">Apagar parte do traço</option>
+                    <option value="object">Apagar objeto inteiro</option>
+                  </select>
+                  {eraserMode === "partial" && <label className="penSliderLabel">Tamanho<input type="range" min="4" max="30" step="1" value={eraserRadius} onChange={e=>setEraserRadius(+e.target.value)}/></label>}
+                </>)}
+                {tool === "shape" && (<>
+                  <div className="penToolGroup">
+                    <button title="Linha reta" className={shapeType==="line"?"active":""} onClick={()=>setShapeType("line")}><Minus size={16}/></button>
+                    <button title="Seta" className={shapeType==="arrow"?"active":""} onClick={()=>setShapeType("arrow")}><ArrowUpRight size={16}/></button>
+                    <button title="Retângulo" className={shapeType==="rect"?"active":""} onClick={()=>setShapeType("rect")}><Square size={16}/></button>
+                    <button title="Círculo" className={shapeType==="circle"?"active":""} onClick={()=>setShapeType("circle")}><Circle size={16}/></button>
+                  </div>
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                  <label className="penSliderLabel">Espessura<input type="range" min="1" max="10" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
+                </>)}
+                {tool === "text" && (
+                  <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
+                )}
+              </div>
+            )}
 
-            <div className="penOptionsRow">
-              {tool==="pen" && (<>
-                <select value={penStyle} onChange={e=>handlePenStyleChange(e.target.value)}>
-                  <option value="normal">Caneta normal</option>
-                  <option value="pencil">Lápis</option>
-                  <option value="marker">Marcador/brush</option>
-                </select>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
-                <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e=>setOpacity(+e.target.value)}/></label>
-                <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e=>setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
-              </>)}
-              {tool==="highlighter" && (<>
-                <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="6" max="34" step="1" value={hlThickness} onChange={e=>setHlThickness(+e.target.value)}/></label>
-                <label className="penSliderLabel">Opacidade<input type="range" min="0.15" max="0.7" step="0.05" value={hlOpacity} onChange={e=>setHlOpacity(+e.target.value)}/></label>
-              </>)}
-              {tool==="eraser" && (<>
-                <div className="penToolGroup">
-                  <button className={eraserMode==="partial"?"active":""} onClick={()=>setEraserMode("partial")}>Parcial</button>
-                  <button className={eraserMode==="object"?"active":""} onClick={()=>setEraserMode("object")}>Apagar objeto</button>
-                </div>
-                {eraserMode==="partial" && <label className="penSliderLabel">Tamanho<input type="range" min="4" max="30" step="1" value={eraserRadius} onChange={e=>setEraserRadius(+e.target.value)}/></label>}
-              </>)}
-              {tool==="shape" && (<>
-                <div className="penToolGroup">
-                  <button title="Linha reta" className={shapeType==="line"?"active":""} onClick={()=>setShapeType("line")}><Minus size={16}/></button>
-                  <button title="Seta" className={shapeType==="arrow"?"active":""} onClick={()=>setShapeType("arrow")}><ArrowUpRight size={16}/></button>
-                  <button title="Retângulo" className={shapeType==="rect"?"active":""} onClick={()=>setShapeType("rect")}><Square size={16}/></button>
-                  <button title="Círculo" className={shapeType==="circle"?"active":""} onClick={()=>setShapeType("circle")}><Circle size={16}/></button>
-                </div>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <label className="penSliderLabel">Espessura<input type="range" min="1" max="10" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
-              </>)}
-              {tool==="text" && (<>
-                <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
-                <p className="penHint">Toque na página para adicionar um texto.</p>
-              </>)}
-              {tool==="select" && (<>
-                <p className="penHint">{selectedAnnId ? "Arraste para mover. Puxe o cantinho pra redimensionar." : "Toque em uma anotação para selecioná-la."}</p>
-                {selectedAnnId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
-              </>)}
-              {tool==="lasso" && (<>
-                <p className="penHint">{lassoSelectedIds.length ? `${lassoSelectedIds.length} ${lassoSelectedIds.length===1?"anotação selecionada":"anotações selecionadas"}. Arraste dentro da seleção pra mover.` : "Arraste ao redor das anotações pra selecioná-las."}</p>
-                {lassoSelectedIds.length > 0 && <button className="penDeleteBtn" onClick={deleteLassoSelection}><Trash2 size={14}/> Excluir selecionados</button>}
-              </>)}
+            <div className="pdfPenDock">
+              <div className="pdfPenDockRow">
+                <button title="Caneta (2 toques: opções)" className={tool==="pen"?"active":""} onClick={()=>{setTool("pen"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><PenTool size={16}/></button>
+                <button title="Marca-texto (2 toques: opções)" className={tool==="highlighter"?"active":""} onClick={()=>{setTool("highlighter"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><Highlighter size={16}/></button>
+                <button title="Borracha (2 toques: opções)" className={tool==="eraser"?"active":""} onClick={()=>{setTool("eraser"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><Eraser size={16}/></button>
+                <button title="Formas (2 toques: opções)" className={tool==="shape"?"active":""} onClick={()=>{setTool("shape"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><Square size={16}/></button>
+                <button title="Texto (2 toques: opções)" className={tool==="text"?"active":""} onClick={()=>{setTool("text"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><Type size={16}/></button>
+                <button title="Selecionar" className={tool==="select"?"active":""} onClick={()=>setTool("select")}><MousePointer2 size={16}/></button>
+                <button title="Laço" className={tool==="lasso"?"active":""} onClick={()=>setTool("lasso")}><Lasso size={16}/></button>
+                <span className="pdfPenDockDivider"/>
+                <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
+                <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
+                <span className="pdfPenDockDivider"/>
+                <button title={annotationsVisible?"Ocultar anotações":"Mostrar anotações"} className={annotationsVisible?"":"active"} onClick={()=>setAnnotationsVisible(v=>!v)}>{annotationsVisible?<Eye size={16}/>:<EyeOff size={16}/>}</button>
+                <button title="Limpar página" onClick={clearPage}><Trash2 size={16}/></button>
+                <button title={exporting?"Exportando...":"Exportar PDF com as anotações"} disabled={exporting} onClick={handleExportAnnotated}><Download size={16}/></button>
+              </div>
+              {tool==="select" && (
+                <p className="pdfPenDockHint">{selectedAnnId ? "Arraste pra mover. Puxe o cantinho pra redimensionar." : "Toque numa anotação pra selecioná-la."}</p>
+              )}
+              {tool==="lasso" && (
+                <p className="pdfPenDockHint">{lassoSelectedIds.length ? `${lassoSelectedIds.length} ${lassoSelectedIds.length===1?"selecionada":"selecionadas"}` : "Arraste ao redor das anotações."}</p>
+              )}
+              {tool==="select" && selectedAnnId && <button className="penDeleteBtn" onClick={deleteSelected}><Trash2 size={14}/> Excluir</button>}
+              {tool==="lasso" && lassoSelectedIds.length > 0 && <button className="penDeleteBtn" onClick={deleteLassoSelection}><Trash2 size={14}/> Excluir</button>}
             </div>
-          </div>
+          </>
         )}
           <div
             className={`readerBody${nightMode?" readerBodyNight":""}${spaceHeld?(spacePanning?" readerBodyGrabbing":" readerBodyGrab"):""}`}
@@ -3803,6 +4267,22 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
           <button className="ghost" onClick={()=>goTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
         </div>
       </div>
+      {settingsOpen && (
+        <BoardSettingsModal
+          onClose={() => setSettingsOpen(false)}
+          tabs={["comportamento", "ferramentas", "atalhos"]}
+          autoShape={autoShape} setAutoShape={setAutoShape}
+          eraserMode={eraserMode} setEraserMode={setEraserMode}
+          dockPosition={dockPosition} setDockPosition={setDockPosition}
+          penStyle={penStyle} onPenStyleChange={handlePenStyleChange}
+          thickness={thickness} setThickness={setThickness}
+          opacity={opacity} setOpacity={setOpacity}
+          hlThickness={hlThickness} setHlThickness={setHlThickness}
+          hlOpacity={hlOpacity} setHlOpacity={setHlOpacity}
+          eraserRadius={eraserRadius} setEraserRadius={setEraserRadius}
+          shortcuts={shortcuts} setShortcuts={setShortcuts}
+        />
+      )}
     </div>
   );
 }
@@ -4184,7 +4664,7 @@ const WhiteboardElementShape = React.memo(function WhiteboardElementShape({ el, 
 
 function WhiteboardThumbnail({ board }) {
   const elements = board?.elements || [];
-  const bg = board?.bg === "white" ? "#f4f4f5" : "#0b0b0c";
+  const bg = normalizeBoardBg(board?.bg).color;
   if (!elements.length) {
     return <div className="whiteboardThumbEmpty" style={{ background: bg }}><LayoutGrid size={30}/></div>;
   }
@@ -4228,7 +4708,7 @@ function WhiteboardLibrary({ onClose }) {
     const number = boards.length + 1;
     const name = window.prompt("Nome do quadro:", `Quadro ${number}`);
     if (!name?.trim()) return;
-    const board = { id: crypto.randomUUID(), name: name.trim(), elements: [], bg: "black", updatedAt: Date.now() };
+    const board = { id: crypto.randomUUID(), name: name.trim(), elements: [], bg: { type: "color", color: "#0b0b0c" }, updatedAt: Date.now() };
     setBoards(prev => [...prev, board]);
     setEditingId(board.id);
   };
@@ -4326,7 +4806,7 @@ class WhiteboardErrorBoundary extends React.Component {
 
 function Whiteboard({ board, onClose, onSave }) {
   const [elements, setElements] = useState(board?.elements || []);
-  const [bg, setBg] = useState(board?.bg || "black"); // "white" | "black"
+  const [bg, setBg] = useState(() => normalizeBoardBg(board?.bg));
   const saveTimer = useRef(null);
   useEffect(() => {
     clearTimeout(saveTimer.current);
@@ -4347,6 +4827,9 @@ function Whiteboard({ board, onClose, onSave }) {
   const [favHlColors, setFavHlColors] = usePersistentState("quadroFavHlColors", ["#ffd54a", "#ff6b6b", "#4ade80", "#5b9dff"]);
   const [hlThickness, setHlThickness] = useState(16);
   const [hlOpacity, setHlOpacity] = useState(0.4);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcuts, setShortcuts] = usePersistentState("quadroShortcuts", BOARD_SHORTCUT_DEFAULTS);
+  const straightLineHeldRef = useRef(false);
 
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [selectedId, setSelectedId] = useState(null);
@@ -4620,18 +5103,32 @@ function Whiteboard({ board, onClose, onSave }) {
   useEffect(() => {
     const onKeyDown = (e) => {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
-      if (e.code === "Space") { spaceDownRef.current = true; e.preventDefault(); }
+      if (matchesShortcut(e, getBinding(shortcuts, "pan"))) { spaceDownRef.current = true; e.preventDefault(); }
+      if (matchesShortcut(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = true;
       if (e.key === "Escape") { if (editingTextId) setEditingTextId(null); else if (tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else onClose(); }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedId && tool === "select") deleteSelected();
-      if ((e.key === "Delete" || e.key === "Backspace") && tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
+      if (matchesShortcut(e, getBinding(shortcuts, "redo"))) { e.preventDefault(); redo(); }
+      else if (matchesShortcut(e, getBinding(shortcuts, "undo"))) { e.preventDefault(); undo(); }
+      if (matchesShortcut(e, getBinding(shortcuts, "deleteSelection"))) {
+        if (selectedId && tool === "select") deleteSelected();
+        if (tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
+      }
+      if (matchesShortcut(e, getBinding(shortcuts, "toolPen"))) setTool("pen");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolHighlighter"))) setTool("highlighter");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolEraser"))) setTool("eraser");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolShape"))) setTool("shape");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolText"))) setTool("text");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolSelect"))) setTool("select");
+      else if (matchesShortcut(e, getBinding(shortcuts, "toolLasso"))) setTool("lasso");
     };
-    const onKeyUp = (e) => { if (e.code === "Space") spaceDownRef.current = false; };
+    const onKeyUp = (e) => {
+      if (isShortcutReleaseKey(e, getBinding(shortcuts, "pan"))) spaceDownRef.current = false;
+      if (isShortcutReleaseKey(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = false;
+    };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, tool, editingTextId, elements, lassoSelectedIds]);
+  }, [selectedId, tool, editingTextId, elements, lassoSelectedIds, shortcuts]);
 
   const zoomAt = (factor, clientX, clientY) => {
     const rect = svgRef.current.getBoundingClientRect();
@@ -4645,7 +5142,7 @@ function Whiteboard({ board, onClose, onSave }) {
 
   const handleWheel = (e) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
+    if (wheelMatchesModifier(e, getBinding(shortcuts, "zoomModifier"))) {
       // Pinça no touchpad (e Ctrl/Cmd+roda) chegam como eventos "wheel" com
       // deltaY de intensidade bem variável — um gesto rápido pode disparar
       // várias dezenas de eventos em poucos milissegundos. Antes o fator de
@@ -4671,7 +5168,7 @@ function Whiteboard({ board, onClose, onSave }) {
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shortcuts]);
 
   const isPanning = () => tool === "pan" || spaceDownRef.current;
 
@@ -4813,7 +5310,17 @@ function Whiteboard({ board, onClose, onSave }) {
     if (!isDrawingRef.current) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
-      setLiveEl(prev => prev ? { ...prev, points: [...prev.points, { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) }] } : prev);
+      setLiveEl(prev => {
+        if (!prev) return prev;
+        const p = { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) };
+        // Atalho de linha reta: em vez de acumular pontos, mantém só o
+        // primeiro e o atual (com ângulo arredondado pro múltiplo de 45°).
+        if (straightLineHeldRef.current) {
+          const start = prev.points[0];
+          return { ...prev, points: [start, snapPointToAngle(start, p)] };
+        }
+        return { ...prev, points: [...prev.points, p] };
+      });
     } else if (tool === "shape") {
       setLiveEl(prev => prev ? { ...prev, x2: x, y2: y } : prev);
     } else if (tool === "eraser") {
@@ -4899,7 +5406,7 @@ function Whiteboard({ board, onClose, onSave }) {
       canvas.width = Math.ceil(w * scale);
       canvas.height = Math.ceil(h * scale);
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = bg === "black" ? "#0b0b0c" : "#ffffff";
+      ctx.fillStyle = bg.color || "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.scale(scale, scale);
       ctx.translate(-minX + margin, -minY + margin);
@@ -4929,8 +5436,9 @@ function Whiteboard({ board, onClose, onSave }) {
   return (
     <div className="readerBack whiteboardBackFull" onClick={onClose}>
       <div ref={modalRef} className="readerModal whiteboardModalFull" onClick={(e) => e.stopPropagation()}>
-        <div className={"readerBody whiteboardBody" + (bg === "black" ? " whiteboardBlack" : " whiteboardWhite")} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
+        <div className="readerBody whiteboardBody" style={boardBgStyle(bg, view)} ref={containerRef} onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
           <button className="whiteboardBackBtn" onClick={onClose}><ArrowLeft size={16}/><span>{board?.name || "Quadro infinito"}</span></button>
+          <button className="whiteboardSettingsBtn" title="Configurações do quadro" onClick={() => setSettingsOpen(true)}><Settings size={16}/></button>
             <svg
               ref={svgRef}
               className={"whiteboardSvg" + (flash ? " flash" : "")}
@@ -5136,13 +5644,27 @@ function Whiteboard({ board, onClose, onSave }) {
                 <button className="whiteboardDockZoomLabel" title={`${elements.length} ${elements.length === 1 ? "item" : "itens"} no quadro — redefinir zoom`} onClick={() => setView(v => ({ ...v, zoom: 1 }))}>{zoomPct}%</button>
                 <button title="Aumentar zoom" onClick={() => zoomAt(1.18, containerRef.current.getBoundingClientRect().width / 2 + containerRef.current.getBoundingClientRect().left, containerRef.current.getBoundingClientRect().height / 2 + containerRef.current.getBoundingClientRect().top)}><ZoomIn size={16}/></button>
                 <span className="whiteboardDockDivider"/>
-                <button title="Fundo branco" className={bg === "white" ? "active" : ""} onClick={() => setBg("white")}><Sun size={16}/></button>
-                <button title="Fundo preto" className={bg === "black" ? "active" : ""} onClick={() => setBg("black")}><Moon size={16}/></button>
                 <button title={downloading ? "Gerando..." : "Baixar PDF"} disabled={downloading || !elements.length} onClick={handleDownload}><Download size={16}/></button>
               </div>
             </div>
           </div>
       </div>
+      {settingsOpen && (
+        <BoardSettingsModal
+          onClose={() => setSettingsOpen(false)}
+          tabs={["fundo", "comportamento", "ferramentas", "atalhos"]}
+          bg={bg} setBg={setBg}
+          autoShape={autoShape} setAutoShape={setAutoShape}
+          eraserMode={eraserMode} setEraserMode={setEraserMode}
+          penStyle={penStyle} onPenStyleChange={handlePenStyleChange}
+          thickness={thickness} setThickness={setThickness}
+          opacity={opacity} setOpacity={setOpacity}
+          hlThickness={hlThickness} setHlThickness={setHlThickness}
+          hlOpacity={hlOpacity} setHlOpacity={setHlOpacity}
+          eraserRadius={eraserRadius} setEraserRadius={setEraserRadius}
+          shortcuts={shortcuts} setShortcuts={setShortcuts}
+        />
+      )}
     </div>
   );
 }
@@ -8230,34 +8752,59 @@ function NoteEditor({ note, onClose, onSave }) {
     handleBodyInput();
   };
 
-  const insertChecklist = () => {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.focus();
-    const sel = window.getSelection();
-    const newItem = document.createElement("div");
-    newItem.className = "checklist-item";
+  // Cria a estrutura de um item de marcação (caixinha + texto)
+  const makeChecklistItem = () => {
+    const item = document.createElement("div");
+    item.className = "checklist-item";
     const box = document.createElement("span");
     box.className = "check-box";
     box.setAttribute("contenteditable", "false");
     const text = document.createElement("span");
     text.className = "check-text";
-    newItem.appendChild(box);
-    newItem.appendChild(text);
+    item.appendChild(box);
+    item.appendChild(text);
+    return { item, text };
+  };
 
-    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
-      const range = sel.getRangeAt(0);
-      range.collapse(false);
-      range.insertNode(newItem);
-    } else {
-      el.appendChild(newItem);
-    }
-
+  // Posiciona o cursor no início do texto do item informado
+  const placeCursorIn = (textEl) => {
+    const sel = window.getSelection();
     const r = document.createRange();
-    r.setStart(text, 0);
+    r.selectNodeContents(textEl);
     r.collapse(true);
     sel.removeAllRanges();
     sel.addRange(r);
+  };
+
+  // Acha o filho direto do editor (bodyRef) que contém o nó informado.
+  // É por causa disso que o item "bugava e criava do lado": ao inserir
+  // o novo item exatamente na posição do cursor, se o cursor estivesse
+  // dentro do texto de outro item (uma linha em "flex"), o novo item
+  // nascia DENTRO daquela linha em vez de virar uma linha nova.
+  const findTopLevelChild = (el, node) => {
+    let cur = node;
+    while (cur && cur.parentNode && cur.parentNode !== el) cur = cur.parentNode;
+    return cur && cur.parentNode === el ? cur : null;
+  };
+
+  const insertChecklist = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    const { item, text } = makeChecklistItem();
+
+    let anchor = null;
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      anchor = findTopLevelChild(el, sel.getRangeAt(0).endContainer);
+    }
+
+    // Sempre inseridos como linha independente: depois da linha atual
+    // (se houver uma), ou no final do editor.
+    if (anchor) anchor.after(item);
+    else el.appendChild(item);
+
+    placeCursorIn(text);
     handleBodyInput();
   };
 
@@ -8283,11 +8830,15 @@ function NoteEditor({ note, onClose, onSave }) {
     e.preventDefault();
     const itemEl = textEl.closest(".checklist-item");
 
+    // Se havia texto selecionado, remove antes de calcular o que sobrou
+    // (antes esse texto ficava "perdido" e a estrutura quebrava).
+    if (!range0.collapsed) range0.deleteContents();
+
     // Pega o que ficou depois do cursor para levar para o novo item
     let afterFrag = document.createDocumentFragment();
     if (textEl.lastChild) {
       const afterRange = document.createRange();
-      afterRange.setStart(range0.endContainer, range0.endOffset);
+      afterRange.setStart(range0.startContainer, range0.startOffset);
       afterRange.setEndAfter(textEl.lastChild);
       afterFrag = afterRange.extractContents();
     }
@@ -8305,22 +8856,10 @@ function NoteEditor({ note, onClose, onSave }) {
       sel.removeAllRanges();
       sel.addRange(r);
     } else {
-      const newItem = document.createElement("div");
-      newItem.className = "checklist-item";
-      const box = document.createElement("span");
-      box.className = "check-box";
-      box.setAttribute("contenteditable", "false");
-      const text = document.createElement("span");
-      text.className = "check-text";
+      const { item: newItem, text } = makeChecklistItem();
       text.appendChild(afterFrag);
-      newItem.appendChild(box);
-      newItem.appendChild(text);
       itemEl.after(newItem);
-      const r = document.createRange();
-      r.setStart(text, 0);
-      r.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r);
+      placeCursorIn(text);
     }
     handleBodyInput();
   };
