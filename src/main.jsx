@@ -31,6 +31,7 @@ import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
 import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
+import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
   translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
@@ -643,8 +644,11 @@ function App({session,theme,setTheme}){
   const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true});
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
-  const books = useEntity("books", initialBooks, session, "asc", {orderable:true});
-  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true});
+  // Listagem enxuta (sem notes/drawings/highlights/favorite_excerpts — texto
+  // e JSON que só importam quando o item é aberto no leitor). Ver
+  // useEntity/fetchFull, que completa a linha inteira nesse momento.
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,sort_order,created_at"});
+  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at"});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
   const studyFlashcards = useEntity("study_flashcards", [], session);
   const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {orderable:true});
@@ -1705,48 +1709,49 @@ function fileToRawDataUrl(file) {
   });
 }
 
+// Cache em memória só pra evitar re-render redundante do mesmo <img> dentro
+// da mesma sessão de aba. A fonte de verdade da capa é a coluna cover_thumb
+// (banco) — isso é o que evita baixar o PDF inteiro de novo em qualquer
+// aparelho/sessão nova (ver comentário em src/lib/pdfThumb.js).
 const coverCache = new Map();
 
-function BookCoverThumb({ book }) {
-  const [src, setSrc] = useState(coverCache.get(book.file_path) || null);
+// Fallback só pra livros enviados antes dessa coluna existir (ou se por
+// algum motivo a geração no upload falhou): baixa o PDF uma única vez, gera
+// a capa e pede pra "onCoverGenerated" persistir no banco — depois disso,
+// nunca mais baixa o arquivo de novo, nem nesse nem em outro aparelho.
+function BookCoverThumb({ book, onCoverGenerated }) {
+  const [src, setSrc] = useState(book.cover_thumb || coverCache.get(book.file_path) || null);
   useEffect(() => {
     let active = true;
+    if (book.cover_thumb) { setSrc(book.cover_thumb); return; }
     if (!book.file_path || coverCache.has(book.file_path)) return;
     (async () => {
       try {
         const blob = await downloadBookFile(book.file_path);
         const buf = await blob.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
-        const page = await pdf.getPage(1);
-        const baseViewport = page.getViewport({ scale: 1 });
-        const dpr = Math.min(3, window.devicePixelRatio || 1);
-        const scale = (260 * dpr) / baseViewport.width;
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext("2d");
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const dataUrl = await renderCoverThumbFromDoc(pdf);
         coverCache.set(book.file_path, dataUrl);
         if (active) setSrc(dataUrl);
+        onCoverGenerated?.(book.id, dataUrl);
       } catch (e) {
         console.error("Não foi possível gerar a capa:", e);
       }
     })();
     return () => { active = false; };
-  }, [book.file_path]);
+  }, [book.file_path, book.cover_thumb]);
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
-function BookTile({ book, status, menuOpen, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete, dragProps }) {
+function BookTile({ book, status, menuOpen, opening, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete, onCoverGenerated, dragProps }) {
   const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
   const favCount = book.favorite_pages?.length || 0;
   const impCount = book.important_pages?.length || 0;
   return (
     <div className={"bookTile"+(dragProps?.dragging?" dragging":"")} {...dragProps}>
-      <div className="bookCoverWrap" onClick={onOpen}>
-        <BookCoverThumb book={book}/>
+      <div className="bookCoverWrap" onClick={opening?undefined:onOpen}>
+        <BookCoverThumb book={book} onCoverGenerated={onCoverGenerated}/>
+        {opening && <div className="bookCoverLoading"><span>Abrindo...</span></div>}
       </div>
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
@@ -2286,7 +2291,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 }
 
 function BookShelf({ entity, status, session, studyGoals }) {
-  const { data, add, remove, update, cloud, reorder } = entity;
+  const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const filtered = data.filter(x => x.status === status);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingBook, setReadingBook] = useState(null);
@@ -2308,8 +2313,12 @@ function BookShelf({ entity, status, session, studyGoals }) {
       const id = crypto.randomUUID();
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
       const title = window.prompt("Título do livro:", defaultTitle) || defaultTitle;
+      // Gera a capa a partir do PDF que já está em memória (sem custo extra de
+      // rede) e guarda junto no banco — a estante nunca mais precisa baixar
+      // esse arquivo de novo só pra mostrar a miniatura.
+      const cover_thumb = await renderCoverThumbFromDoc(doc).catch(() => null);
       const filePath = await uploadBookFile(session.user.id, id, file);
-      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [] });
+      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], cover_thumb });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -2334,6 +2343,19 @@ function BookShelf({ entity, status, session, studyGoals }) {
   const onFavoritesChange = (bookId, favorite_pages) => update(bookId, { favorite_pages });
   const onImportantChange = (bookId, important_pages) => update(bookId, { important_pages });
   const onDrawingsChange = (bookId, drawings) => update(bookId, { drawings });
+
+  // A listagem vem enxuta (sem notes/drawings — ver listSelect em useEntity).
+  // Busca a linha inteira ANTES de montar o leitor (e não depois) porque
+  // "notes"/"drawings" alimentam useState só na primeira renderização — se o
+  // leitor já tivesse aberto com os campos ainda vazios, a chegada tardia
+  // dos dados completos não atualizaria mais esses estados.
+  const [openingBookId, setOpeningBookId] = useState(null);
+  const handleOpen = async (book) => {
+    setOpeningBookId(book.id);
+    const full = await fetchFull(book.id);
+    setOpeningBookId(null);
+    setReadingBook(full || book);
+  };
 
   const handleDelete = async (book) => {
     if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
@@ -2369,11 +2391,13 @@ function BookShelf({ entity, status, session, studyGoals }) {
             book={book}
             status={status}
             menuOpen={openMenuId===book.id}
+            opening={openingBookId===book.id}
             onToggleMenu={()=>setOpenMenuId(id=>id===book.id?null:book.id)}
-            onOpen={()=>setReadingBook(book)}
+            onOpen={()=>handleOpen(book)}
             onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"});}}
             onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, {status:"quero_ler"});}}
             onDelete={()=>handleDelete(book)}
+            onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
             dragProps={{
               draggable:true,
               dragging: dragId===book.id,
@@ -2392,48 +2416,44 @@ function BookShelf({ entity, status, session, studyGoals }) {
   );
 }
 
+// Ver comentário equivalente em BookCoverThumb: cover_thumb (banco) é a
+// fonte de verdade; o download completo só acontece como fallback pontual
+// pra itens antigos, e o resultado é persistido pra nunca mais repetir.
 const studyPdfCoverCache = new Map();
 
-function StudyPdfCoverThumb({ pdfDoc }) {
-  const [src, setSrc] = useState(studyPdfCoverCache.get(pdfDoc.file_path) || null);
+function StudyPdfCoverThumb({ pdfDoc, onCoverGenerated }) {
+  const [src, setSrc] = useState(pdfDoc.cover_thumb || studyPdfCoverCache.get(pdfDoc.file_path) || null);
   useEffect(() => {
     let active = true;
+    if (pdfDoc.cover_thumb) { setSrc(pdfDoc.cover_thumb); return; }
     if (!pdfDoc.file_path || studyPdfCoverCache.has(pdfDoc.file_path)) return;
     (async () => {
       try {
         const blob = await downloadStudyPdfFile(pdfDoc.file_path);
         const buf = await blob.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
-        const page = await pdf.getPage(1);
-        const baseViewport = page.getViewport({ scale: 1 });
-        const dpr = Math.min(3, window.devicePixelRatio || 1);
-        const scale = (260 * dpr) / baseViewport.width;
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext("2d");
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const dataUrl = await renderCoverThumbFromDoc(pdf);
         studyPdfCoverCache.set(pdfDoc.file_path, dataUrl);
         if (active) setSrc(dataUrl);
+        onCoverGenerated?.(pdfDoc.id, dataUrl);
       } catch (e) {
         console.error("Não foi possível gerar a capa:", e);
       }
     })();
     return () => { active = false; };
-  }, [pdfDoc.file_path]);
+  }, [pdfDoc.file_path, pdfDoc.cover_thumb]);
   return <div className="bookCoverImg">{src ? <img src={src} alt={pdfDoc.title}/> : <div className="bookCoverPlaceholder"><FileText size={28}/></div>}</div>;
 }
 
-function StudyPdfTile({ pdfDoc, groups, menuOpen, onToggleMenu, onOpen, onDelete, onMoveToGroup, dragProps }) {
+function StudyPdfTile({ pdfDoc, groups, menuOpen, opening, onToggleMenu, onOpen, onDelete, onMoveToGroup, onCoverGenerated, dragProps }) {
   const progress = pdfDoc.total_pages ? Math.min(100, Math.round((pdfDoc.current_page / pdfDoc.total_pages) * 100)) : 0;
   const favCount = pdfDoc.favorite_pages?.length || 0;
   const impCount = pdfDoc.important_pages?.length || 0;
   return (
     <div className={"bookTile"+(dragProps?.dragging?" dragging":"")} {...dragProps}>
-      <div className="bookCoverWrap" onClick={onOpen}>
-        <StudyPdfCoverThumb pdfDoc={pdfDoc}/>
+      <div className="bookCoverWrap" onClick={opening?undefined:onOpen}>
+        <StudyPdfCoverThumb pdfDoc={pdfDoc} onCoverGenerated={onCoverGenerated}/>
+        {opening && <div className="bookCoverLoading"><span>Abrindo...</span></div>}
       </div>
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
@@ -2882,7 +2902,7 @@ function BoardSettingsModal({
   );
 }
 
-function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange, onTotalPagesChange }) {
+function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onCreateFlashcard, onDrawingsChange, onTotalPagesChange, onCoverGenerated }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(pdfDoc.current_page || 1);
   const [numPages, setNumPages] = useState(pdfDoc.total_pages || 0);
@@ -3045,6 +3065,12 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       setNumPages(newDoc.numPages);
       setPageNum(newDoc.numPages);
       onTotalPagesChange?.(pdfDoc.id, newDoc.numPages);
+      // PDF "criado" começa em branco (sem capa útil); a primeira página de
+      // verdade que entra vira a capa, gerada do documento que já está em
+      // memória (sem baixar nada de novo).
+      if (!pdfDoc.cover_thumb) {
+        renderCoverThumbFromDoc(newDoc).then(dataUrl => onCoverGenerated?.(pdfDoc.id, dataUrl)).catch(() => {});
+      }
 
       const { data: userData } = await supabase.auth.getUser();
       if (userData?.user) {
@@ -4368,11 +4394,12 @@ function NewPdfDialog({ onClose, onCreate, creating }) {
 
 function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }) {
 
-  const { data, add, remove, update, cloud, reorder } = entity;
+  const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const groups = groupsEntity.data;
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingPdf, setReadingPdf] = useState(null);
+  const [openingPdfId, setOpeningPdfId] = useState(null);
   const [whiteboardLibraryOpen, setWhiteboardLibraryOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
@@ -4396,8 +4423,12 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       const id = crypto.randomUUID();
       const defaultTitle = file.name.replace(/\.pdf$/i, "");
       const title = window.prompt("Título do PDF:", defaultTitle) || defaultTitle;
+      // Gera a capa a partir do PDF que já está em memória (sem custo extra
+      // de rede) e guarda junto no banco — ver comentário equivalente em
+      // BookShelf.handleFile.
+      const cover_thumb = await renderCoverThumbFromDoc(doc).catch(() => null);
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
-      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId });
+      await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId, cover_thumb });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -4438,6 +4469,16 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   };
 
   const onTotalPagesChange = (id, total_pages) => update(id, { total_pages });
+
+  // Ver comentário equivalente em BookShelf.handleOpen: a listagem vem enxuta
+  // (sem notes/drawings/highlights/favorite_excerpts), então busca a linha
+  // inteira antes de montar o leitor.
+  const handleOpen = async (pdfDoc) => {
+    setOpeningPdfId(pdfDoc.id);
+    const full = await fetchFull(pdfDoc.id);
+    setOpeningPdfId(null);
+    setReadingPdf(full || pdfDoc);
+  };
 
   const onProgress = (id, page) => {
     clearTimeout(progressTimer.current);
@@ -4585,10 +4626,12 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
             pdfDoc={pdfDoc}
             groups={groups}
             menuOpen={openMenuId===pdfDoc.id}
+            opening={openingPdfId===pdfDoc.id}
             onToggleMenu={()=>setOpenMenuId(id=>id===pdfDoc.id?null:pdfDoc.id)}
-            onOpen={()=>setReadingPdf(pdfDoc)}
+            onOpen={()=>handleOpen(pdfDoc)}
             onDelete={()=>handleDelete(pdfDoc)}
             onMoveToGroup={(groupId)=>handleMoveToGroup(pdfDoc, groupId)}
+            onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
             dragProps={{
               draggable:true,
               dragging: dragId===pdfDoc.id,
@@ -4614,6 +4657,7 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
         onCreateFlashcard={onCreateFlashcard}
         onDrawingsChange={onDrawingsChange}
         onTotalPagesChange={onTotalPagesChange}
+        onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
       />}
       {whiteboardLibraryOpen && <WhiteboardLibrary onClose={()=>setWhiteboardLibraryOpen(false)}/>}
       {newPdfDialogOpen && <NewPdfDialog onClose={()=>setNewPdfDialogOpen(false)} onCreate={handleCreatePdf} creating={uploading}/>}

@@ -109,6 +109,11 @@ alter table books add column if not exists important_pages int[] not null defaul
 -- Atualização: caneta de marca-texto no leitor de livros (aba Livros)
 alter table books add column if not exists drawings jsonb not null default '{}'::jsonb;
 
+-- Atualização: capa (miniatura da página 1) guardada como JPEG em base64.
+-- Evita que a estante precise baixar o PDF inteiro do Storage só para mostrar
+-- a capa — isso era o maior consumidor de egress do plano gratuito.
+alter table books add column if not exists cover_thumb text;
+
 insert into storage.buckets (id, name, public)
 values ('books', 'books', false)
 on conflict (id) do nothing;
@@ -224,6 +229,10 @@ alter table study_pdfs add column if not exists drawings jsonb not null default 
 -- Atualização: Fundo usado nas páginas de PDFs criados pelo usuário.
 -- PDFs enviados/importados usam branco por padrão no leitor.
 alter table study_pdfs add column if not exists bg_color text not null default 'white' check (bg_color in ('white','black'));
+
+-- Atualização: capa (miniatura da página 1) guardada como JPEG em base64,
+-- mesmo motivo/economia de egress da coluna equivalente em "books".
+alter table study_pdfs add column if not exists cover_thumb text;
 
 -- Atualização: Metas vinculadas a um PDF (Área de Estudos ou Livros)
 -- Quando vinculada, o progresso da meta é atualizado automaticamente conforme a leitura avança.

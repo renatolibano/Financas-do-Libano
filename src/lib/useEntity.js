@@ -8,8 +8,13 @@ const uid = () => Date.now() + Math.random();
 // initialData: dados de exemplo usados apenas no modo local, na primeira vez
 // session: sessão atual do Supabase (null se deslogado)
 // order: "asc" | "desc" — em que ordem os itens novos entram na lista
+// opts.listSelect: colunas buscadas na listagem inicial (fetchCloud). Por
+// padrão "*" (todas). Passe uma lista enxuta (ex.: sem campos de texto/JSON
+// grandes como anotações e desenhos) pra tabelas com colunas pesadas que só
+// são necessárias quando o item é aberto — combine com fetchFull(id) pra
+// buscar a linha inteira nesse momento, sem pesar a listagem.
 export function useEntity(table, initialData, session, order = "asc", opts = {}) {
-  const { orderable = false } = opts;
+  const { orderable = false, listSelect = "*" } = opts;
   const cloud = cloudConfigured && !!session;
   const [localData, setLocalData] = usePersistentState(table, initialData);
   const [cloudData, setCloudData] = useState([]);
@@ -22,7 +27,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       return;
     }
     setLoading(true);
-    let query = supabase.from(table).select("*");
+    let query = supabase.from(table).select(listSelect);
     query = orderable
       ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
       : query.order("created_at", { ascending: order === "asc" });
@@ -35,7 +40,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
     }
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloud, table, order, orderable]);
+  }, [cloud, table, order, orderable, listSelect]);
 
   useEffect(() => {
     let active = true;
@@ -137,5 +142,24 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
     [cloud, table, setLocalData]
   );
 
-  return { data, add, remove, update, reorder, loading, error, cloud, refresh: fetchCloud };
+  // Busca a linha inteira (todas as colunas) de um único item — usado pra
+  // completar, no momento de abrir, as colunas pesadas que a listagem (com
+  // listSelect enxuto) deixou de fora. Devolve o item já mesclado com o que
+  // já estava em memória, e atualiza o cloudData pra não buscar de novo.
+  const fetchFull = useCallback(
+    async (id) => {
+      if (!cloud) return localData.find((x) => x.id === id) || null;
+      const { data: row, error } = await supabase.from(table).select("*").eq("id", id).maybeSingle();
+      if (error) {
+        console.error("Supabase fetchFull error:", error);
+        return cloudData.find((x) => x.id === id) || null;
+      }
+      if (!row) return cloudData.find((x) => x.id === id) || null;
+      setCloudData((d) => d.map((x) => (x.id === id ? { ...x, ...row } : x)));
+      return row;
+    },
+    [cloud, table, cloudData, localData]
+  );
+
+  return { data, add, remove, update, reorder, loading, error, cloud, refresh: fetchCloud, fetchFull };
 }

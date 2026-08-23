@@ -395,6 +395,7 @@ h1{font-size:23px}
 .bookCoverImg{width:100%;height:100%}
 .bookCoverImg img{width:100%;height:100%;object-fit:cover;display:block}
 .bookCoverPlaceholder{width:100%;height:100%;display:grid;place-items:center;color:var(--text-3)}
+.bookCoverLoading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000a;color:#fff;font-size:12px;backdrop-filter:blur(1px)}
 .addCover{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--text-2);border:1px dashed var(--border);background:transparent;box-shadow:none;font-size:12px;text-align:center;padding:10px}
 .addCover:hover{color:var(--accent);border-color:var(--accent)}
 .bookMenuBtn{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:8px;background:#000a;color:#f5f7fb;display:grid;place-items:center;backdrop-filter:blur(2px)}
