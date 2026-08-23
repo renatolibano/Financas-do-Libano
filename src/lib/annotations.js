@@ -144,6 +144,114 @@ export function detectShapeFromPoints(points) {
 }
 
 // ---------------------------------------------------------------------------
+// Formas 3D (cubo, pirâmide, cilindro, cone, esfera): a pessoa desenha
+// arrastando uma caixa delimitadora (igual ao retângulo/círculo — x1,y1 é o
+// ponto onde tocou, x2,y2 é onde soltou) e essa função devolve a geometria
+// (segmentos de reta e elipses/arcos) do "wireframe" que representa o sólido
+// dentro dessa caixa. Arestas que ficariam escondidas atrás do sólido vêm
+// marcadas com dashed:true, para desenhar tracejado — igual ao desenho de
+// referência (cubo/cilindro/pirâmide/esfera em linha). Compartilhada entre a
+// prévia em SVG (tela, em AnnotationShape no main.jsx) e o desenho em canvas
+// (exportação/download, em drawAnnotationOnCanvas logo abaixo).
+// ---------------------------------------------------------------------------
+export function shape3DGeometry(shape, x1, y1, x2, y2) {
+  const x = Math.min(x1, x2), y = Math.min(y1, y2);
+  const w = Math.abs(x2 - x1) || 1, h = Math.abs(y2 - y1) || 1;
+
+  if (shape === "cube") {
+    // Caixa vista de frente, com um deslocamento diagonal (d) simulando a
+    // profundidade. Face da frente inteira visível (sólida); face de cima e
+    // face da direita parcialmente visíveis (sólidas); as 3 arestas que
+    // encontram o "canto de trás, embaixo, à esquerda" ficam escondidas.
+    const d = Math.min(w, h) * 0.35;
+    const fw = w - d, fh = h - d;
+    const A = { x, y: y + h };
+    const B = { x: x + fw, y: y + h };
+    const C = { x: x + fw, y: y + h - fh };
+    const D = { x, y: y + h - fh };
+    const A2 = { x: x + d, y: y + h - d };
+    const B2 = { x: x + fw + d, y: y + h - d };
+    const C2 = { x: x + fw + d, y: y + h - fh - d };
+    const D2 = { x: x + d, y: y + h - fh - d };
+    return {
+      lines: [
+        { p1: A, p2: B }, { p1: B, p2: C }, { p1: C, p2: D }, { p1: D, p2: A },
+        { p1: D, p2: D2 }, { p1: D2, p2: C2 }, { p1: C2, p2: C },
+        { p1: B, p2: B2 }, { p1: B2, p2: C2 },
+        { p1: A, p2: A2, dashed: true }, { p1: A2, p2: B2, dashed: true }, { p1: A2, p2: D2, dashed: true },
+      ],
+    };
+  }
+  if (shape === "pyramid") {
+    // Base em losango (quadrado visto em perspectiva) + ápice no topo.
+    // As duas arestas da base mais próximas da pessoa e as 3 arestas do
+    // ápice até elas ficam sólidas; o canto de trás da base e a aresta do
+    // ápice até ele ficam tracejados.
+    const apex = { x: x + w / 2, y };
+    const L = { x, y: y + h * 0.65 };
+    const R = { x: x + w, y: y + h * 0.65 };
+    const F = { x: x + w / 2, y: y + h };
+    const K = { x: x + w / 2, y: y + h * 0.42 };
+    return {
+      lines: [
+        { p1: L, p2: F }, { p1: F, p2: R },
+        { p1: R, p2: K, dashed: true }, { p1: K, p2: L, dashed: true },
+        { p1: apex, p2: L }, { p1: apex, p2: R }, { p1: apex, p2: F },
+        { p1: apex, p2: K, dashed: true },
+      ],
+    };
+  }
+  if (shape === "cylinder") {
+    const rx = w / 2, ry = Math.max(3, h * 0.14);
+    const cx = x + w / 2;
+    const cyTop = y + ry, cyBottom = y + h - ry;
+    return {
+      lines: [
+        { p1: { x, y: cyTop }, p2: { x, y: cyBottom } },
+        { p1: { x: x + w, y: cyTop }, p2: { x: x + w, y: cyBottom } },
+      ],
+      ellipses: [{ cx, cy: cyTop, rx, ry }], // tampa de cima: elipse inteira, visível
+      arcs: [
+        { cx, cy: cyBottom, rx, ry, from: 0, to: Math.PI }, // frente da base: sólido
+        { cx, cy: cyBottom, rx, ry, from: Math.PI, to: Math.PI * 2, dashed: true }, // fundo da base: escondido
+      ],
+    };
+  }
+  if (shape === "cone") {
+    const rx = w / 2, ry = Math.max(3, h * 0.14);
+    const cx = x + w / 2, cy = y + h - ry;
+    const apex = { x: cx, y };
+    return {
+      lines: [
+        { p1: apex, p2: { x: cx - rx, y: cy } },
+        { p1: apex, p2: { x: cx + rx, y: cy } },
+      ],
+      arcs: [
+        { cx, cy, rx, ry, from: 0, to: Math.PI },
+        { cx, cy, rx, ry, from: Math.PI, to: Math.PI * 2, dashed: true },
+      ],
+    };
+  }
+  if (shape === "sphere") {
+    // Contorno + "linhas de latitude/longitude" pra dar a leitura de esfera
+    // (igual ao desenho de referência), tudo sólido — não há aresta escondida
+    // numa esfera desenhada assim.
+    const r = Math.min(w, h) / 2;
+    const cx = x + w / 2, cy = y + h / 2;
+    return {
+      circles: [{ cx, cy, r }],
+      ellipses: [
+        { cx, cy, rx: r, ry: r * 0.32 },
+        { cx, cy, rx: r * 0.32, ry: r },
+      ],
+    };
+  }
+  return { lines: [] };
+}
+
+const SHAPE_3D_TYPES = new Set(["cube", "pyramid", "cylinder", "cone", "sphere"]);
+
+// ---------------------------------------------------------------------------
 // Hit-testing / seleção / borracha de objeto
 // ---------------------------------------------------------------------------
 
@@ -154,7 +262,10 @@ export function hitTestAnnotation(ann, x, y, tol = 6) {
     return x >= ann.x - tol && x <= ann.x + w + tol && y >= ann.y - tol && y <= ann.y + h + tol;
   }
   if (ann.type === "shape") {
-    if (ann.shape === "rect") {
+    if (ann.shape === "rect" || SHAPE_3D_TYPES.has(ann.shape)) {
+      // Formas 3D usam a mesma caixa delimitadora do retângulo pra seleção,
+      // arrastar e redimensionar — mais fácil de tocar do que testar cada
+      // aresta/elipse do desenho individualmente.
       const bx = Math.min(ann.x1, ann.x2) - tol;
       const by = Math.min(ann.y1, ann.y2) - tol;
       const bw = Math.abs(ann.x2 - ann.x1) + tol * 2;
@@ -333,6 +444,35 @@ export function drawAnnotationOnCanvas(ctx, ann) {
       ctx.beginPath();
       ctx.ellipse(cx, cy, Math.abs(rx), Math.abs(ry), 0, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (SHAPE_3D_TYPES.has(ann.shape)) {
+      const geo = shape3DGeometry(ann.shape, ann.x1, ann.y1, ann.x2, ann.y2);
+      const dash = [Math.max(2, (ann.width || 2) * 1.5), Math.max(2, (ann.width || 2) * 1.5)];
+      (geo.lines || []).forEach((seg) => {
+        ctx.beginPath();
+        ctx.setLineDash(seg.dashed ? dash : []);
+        ctx.moveTo(seg.p1.x, seg.p1.y);
+        ctx.lineTo(seg.p2.x, seg.p2.y);
+        ctx.stroke();
+      });
+      (geo.circles || []).forEach((c) => {
+        ctx.beginPath();
+        ctx.setLineDash([]);
+        ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      (geo.ellipses || []).forEach((e) => {
+        ctx.beginPath();
+        ctx.setLineDash([]);
+        ctx.ellipse(e.cx, e.cy, e.rx, e.ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      (geo.arcs || []).forEach((a) => {
+        ctx.beginPath();
+        ctx.setLineDash(a.dashed ? dash : []);
+        ctx.ellipse(a.cx, a.cy, a.rx, a.ry, 0, a.from, a.to);
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
     }
   } else if (ann.type === "text") {
     ctx.globalAlpha = 1;

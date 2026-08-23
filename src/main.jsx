@@ -12,6 +12,7 @@ import {
   CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
+  Box, Cylinder, Pyramid, Cone, Globe,
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
@@ -33,6 +34,7 @@ import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
   translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
+  shape3DGeometry,
 } from "./lib/annotations";
 import Auth from "./Auth";
 
@@ -2554,6 +2556,25 @@ const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPo
       const rx = Math.abs(ann.r ?? (ann.x2 - ann.x1) / 2) || 1, ry = Math.abs(ann.r ?? (ann.y2 - ann.y1) / 2) || 1;
       return <ellipse cx={cx} cy={cy} rx={rx} ry={ry} stroke={stroke} strokeWidth={sw} fill="none" opacity={op} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} />;
     }
+    if (["cube", "pyramid", "cylinder", "cone", "sphere"].includes(ann.shape)) {
+      const geo = shape3DGeometry(ann.shape, ann.x1, ann.y1, ann.x2, ann.y2);
+      const dash = `${sw * 2} ${sw * 2}`;
+      return (
+        <g onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} opacity={op}>
+          {/* alvo invisível cobrindo a caixa inteira, pra facilitar tocar/arrastar a forma */}
+          <rect x={Math.min(ann.x1, ann.x2)} y={Math.min(ann.y1, ann.y2)} width={Math.abs(ann.x2 - ann.x1) || 1} height={Math.abs(ann.y2 - ann.y1) || 1} fill="transparent" stroke="none" />
+          {(geo.circles || []).map((c, i) => <circle key={"c" + i} cx={c.cx} cy={c.cy} r={c.r} stroke={stroke} strokeWidth={sw} fill="none" />)}
+          {(geo.ellipses || []).map((e, i) => <ellipse key={"e" + i} cx={e.cx} cy={e.cy} rx={e.rx} ry={e.ry} stroke={stroke} strokeWidth={sw} fill="none" />)}
+          {(geo.arcs || []).map((a, i) => {
+            const ax1 = a.cx + a.rx * Math.cos(a.from), ay1 = a.cy + a.ry * Math.sin(a.from);
+            const ax2 = a.cx + a.rx * Math.cos(a.to), ay2 = a.cy + a.ry * Math.sin(a.to);
+            const d = `M ${ax1} ${ay1} A ${a.rx} ${a.ry} 0 0 1 ${ax2} ${ay2}`;
+            return <path key={"a" + i} d={d} stroke={stroke} strokeWidth={sw} fill="none" strokeDasharray={a.dashed ? dash : undefined} />;
+          })}
+          {(geo.lines || []).map((l, i) => <line key={"l" + i} x1={l.p1.x} y1={l.p1.y} x2={l.p2.x} y2={l.p2.y} stroke={stroke} strokeWidth={sw} strokeLinecap="round" strokeDasharray={l.dashed ? dash : undefined} />)}
+        </g>
+      );
+    }
   }
   return null;
 });
@@ -3962,6 +3983,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                     <button title="Seta" className={shapeType==="arrow"?"active":""} onClick={()=>setShapeType("arrow")}><ArrowUpRight size={16}/></button>
                     <button title="Retângulo" className={shapeType==="rect"?"active":""} onClick={()=>setShapeType("rect")}><Square size={16}/></button>
                     <button title="Círculo" className={shapeType==="circle"?"active":""} onClick={()=>setShapeType("circle")}><Circle size={16}/></button>
+                    <button title="Cubo" className={shapeType==="cube"?"active":""} onClick={()=>setShapeType("cube")}><Box size={16}/></button>
+                    <button title="Pirâmide" className={shapeType==="pyramid"?"active":""} onClick={()=>setShapeType("pyramid")}><Pyramid size={16}/></button>
+                    <button title="Cilindro" className={shapeType==="cylinder"?"active":""} onClick={()=>setShapeType("cylinder")}><Cylinder size={16}/></button>
+                    <button title="Cone" className={shapeType==="cone"?"active":""} onClick={()=>setShapeType("cone")}><Cone size={16}/></button>
+                    <button title="Esfera" className={shapeType==="sphere"?"active":""} onClick={()=>setShapeType("sphere")}><Globe size={16}/></button>
                   </div>
                   <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                   <label className="penSliderLabel">Espessura<input type="range" min="1" max="10" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
@@ -5617,6 +5643,11 @@ function Whiteboard({ board, onClose, onSave }) {
                     <button title="Seta" className={shapeType === "arrow" ? "active" : ""} onClick={() => setShapeType("arrow")}><ArrowUpRight size={16}/></button>
                     <button title="Retângulo" className={shapeType === "rect" ? "active" : ""} onClick={() => setShapeType("rect")}><Square size={16}/></button>
                     <button title="Círculo" className={shapeType === "circle" ? "active" : ""} onClick={() => setShapeType("circle")}><Circle size={16}/></button>
+                    <button title="Cubo" className={shapeType === "cube" ? "active" : ""} onClick={() => setShapeType("cube")}><Box size={16}/></button>
+                    <button title="Pirâmide" className={shapeType === "pyramid" ? "active" : ""} onClick={() => setShapeType("pyramid")}><Pyramid size={16}/></button>
+                    <button title="Cilindro" className={shapeType === "cylinder" ? "active" : ""} onClick={() => setShapeType("cylinder")}><Cylinder size={16}/></button>
+                    <button title="Cone" className={shapeType === "cone" ? "active" : ""} onClick={() => setShapeType("cone")}><Cone size={16}/></button>
+                    <button title="Esfera" className={shapeType === "sphere" ? "active" : ""} onClick={() => setShapeType("sphere")}><Globe size={16}/></button>
                   </div>
                   <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                   <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
