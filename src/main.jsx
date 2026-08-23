@@ -23,6 +23,7 @@ import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState, loadLocal, saveLocal } from "./lib/storage";
+import { clearAllPdfCache } from "./lib/pdfCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
@@ -1027,6 +1028,10 @@ function App({session,theme,setTheme}){
           </div>
         </div>
         {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
+        <button className="resetData" onClick={async ()=>{
+          await clearAllPdfCache();
+          alert("Cache de PDFs limpo. Eles serão baixados de novo na próxima leitura.");
+        }}><FileText size={14}/> Limpar cache de PDFs</button>
         <button className="resetData" onClick={()=>{
           if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo. Continuar?")){
             clearLocal();
