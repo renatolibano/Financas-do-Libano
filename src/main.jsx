@@ -9,7 +9,7 @@ import {
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, BarChart3, FileText, Settings, Sun, Moon,
   ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
-  CheckCheck, Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
+  Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
   Box, Cylinder, Pyramid, Cone, Globe,
@@ -37,7 +37,20 @@ import {
   translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
   shape3DGeometry,
 } from "./lib/annotations";
-import Auth from "./Auth";
+import Auth, { ResetPassword } from "./Auth";
+import { money, maskMoney } from "./lib/format";
+import {
+  WEEKDAY_LABELS, MONTH_LABELS, pad2, parseReminderDate, daysUntil, daysUntilMonthlyDay,
+  daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
+  calendarEventMatchesDate, formatWeekdaysLabel, CAL_TYPE_META, getDayEvents, buildMonthGrid,
+  sortByProximity,
+} from "./lib/calendar";
+import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
+import {
+  playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
+  syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
+} from "./lib/notifications";
+import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell } from "./components/shared";
 
 const initialTransactions = [
   {id:1, desc:"Salário", cat:"Renda", value:3000, type:"in", date:"11/08"},
@@ -103,527 +116,17 @@ const initialCardPurchases = [
   {id:5, cat:"Outros", value:100},
 ];
 
-const money = n => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
-const maskMoney = (n, hidden) => hidden ? "R$ ••••" : money(n);
-
-// Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
-// o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
-// (ex.: Safari iOS mais antigo), cai para uma classe CSS que expande o elemento ocupando a tela toda.
-// Passe { native: false } pra pular a Fullscreen API de propósito e usar só a classe CSS — o próprio
-// navegador mostra um botão de "sair da tela cheia" por cima do conteúdo ao mexer o mouse quando a API
-// real está ativa, e em algumas telas (como o quadro infinito) isso atrapalha mais do que ajuda.
-// Passe { startOpen: true } pra já nascer com a classe CSS de tela cheia aplicada (sem chamar a
-// Fullscreen API sozinha, que exige gesto do usuário) — é o mesmo efeito visual do quadro infinito.
-function useFullscreen(ref, { native = true, startOpen = false } = {}) {
-  const [fullscreen, setFullscreen] = useState(startOpen);
-
-  useEffect(() => {
-    if (!native) return;
-    const handler = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, [native]);
-
-  const toggleFullscreen = async () => {
-    if (!native) { setFullscreen(f => !f); return; }
-    try {
-      if (!document.fullscreenElement) {
-        await ref.current?.requestFullscreen?.();
-      } else {
-        await document.exitFullscreen?.();
-      }
-    } catch (e) {
-      setFullscreen(f => !f); // navegador sem suporte: usa a classe CSS de tela cheia mesmo assim
-    }
-  };
-
-  useEffect(() => () => { if (native && document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, [native]);
-
-  return [fullscreen, toggleFullscreen];
-}
-
-
-// dd/mm ou dd/mm/aaaa -> Date. Sem ano informado, usa o ano atual (ou o próximo, se a data já passou este ano).
-function parseReminderDate(dateStr){
-  if(!dateStr) return null;
-  const parts = String(dateStr).split("/").map(p=>parseInt(p,10));
-  if(parts.length<2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) return null;
-  const [day, month, yearPart] = parts;
-  const today = new Date(); today.setHours(0,0,0,0);
-  let year = yearPart || today.getFullYear();
-  let d = new Date(year, month-1, day);
-  if(!yearPart && d < today) d = new Date(year+1, month-1, day);
-  return d;
-}
-
-function daysUntil(dateStr){
-  const d = parseReminderDate(dateStr);
-  if(!d) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  return Math.round((d-today)/86400000);
-}
-
-// Para pagamentos fixos/recorrentes que só têm o "dia do mês" (sem data completa):
-// calcula quantos dias faltam até a próxima ocorrência (este mês ou o próximo, se já passou).
-function daysUntilMonthlyDay(day){
-  const d = Number(day);
-  if(!d || Number.isNaN(d)) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  let target = new Date(today.getFullYear(), today.getMonth(), d);
-  if(target < today) target = new Date(today.getFullYear(), today.getMonth()+1, d);
-  return Math.round((target-today)/86400000);
-}
-
-// Metas de estudo guardam a data de conclusão em formato ISO (yyyy-mm-dd), diferente do DD/MM usado no resto do app.
-function daysUntilISO(dateStr){
-  if(!dateStr) return null;
-  const d = new Date(dateStr+"T00:00:00");
-  if(Number.isNaN(d.getTime())) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  return Math.round((d-today)/86400000);
-}
-
-function urgencyClass(days){
-  if(days===null || days===undefined) return "gray";
-  if(days<=7) return "red";
-  if(days<=20) return "yellow";
-  return "green";
-}
-
-// ===== Aba Calendário =====
-const WEEKDAY_LABELS = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
-const MONTH_LABELS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const pad2 = n => String(n).padStart(2,"0");
-
-// Algoritmo de Gauss/Meeus para calcular a data da Páscoa em qualquer ano —
-// a partir dela derivamos Carnaval, Sexta-feira Santa e Corpus Christi.
-function computeEaster(year){
-  const a=year%19, b=Math.floor(year/100), c=year%100;
-  const d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3);
-  const h=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4;
-  const l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
-  const month=Math.floor((h+l-7*m+114)/31), day=((h+l-7*m+114)%31)+1;
-  return new Date(year, month-1, day);
-}
-function addDaysToDate(date,n){ const d=new Date(date); d.setDate(d.getDate()+n); return d; }
-function nthWeekdayOfMonth(year, monthIdx, weekday, n){
-  let d=new Date(year, monthIdx, 1), count=0;
-  while(true){ if(d.getDay()===weekday){ count++; if(count===n) return d; } d.setDate(d.getDate()+1); }
-}
-function lastWeekdayOfMonth(year, monthIdx, weekday){
-  let d=new Date(year, monthIdx+1, 0);
-  while(d.getDay()!==weekday) d.setDate(d.getDate()-1);
-  return d;
-}
-
-// Feriados nacionais e datas comemorativas do Brasil, recalculados a cada ano exibido
-// (os móveis dependem da Páscoa; "Dia das Mães"/"Dia dos Pais" dependem do dia da semana).
-function computeSpecialDays(year){
-  const md = d => ({month:d.getMonth()+1, day:d.getDate()});
-  const easter = computeEaster(year);
-  return [
-    {...md(new Date(year,0,1)), title:"Ano Novo", type:"holiday"},
-    {...md(addDaysToDate(easter,-48)), title:"Carnaval (segunda-feira)", type:"event"},
-    {...md(addDaysToDate(easter,-47)), title:"Carnaval", type:"holiday"},
-    {...md(addDaysToDate(easter,-2)), title:"Sexta-feira Santa", type:"holiday"},
-    {...md(easter), title:"Páscoa", type:"event"},
-    {...md(new Date(year,3,21)), title:"Tiradentes", type:"holiday"},
-    {...md(new Date(year,4,1)), title:"Dia do Trabalho", type:"holiday"},
-    {...md(nthWeekdayOfMonth(year,4,0,2)), title:"Dia das Mães", type:"event"},
-    {...md(addDaysToDate(easter,60)), title:"Corpus Christi", type:"holiday"},
-    {month:6, day:12, title:"Dia dos Namorados", type:"event"},
-    {...md(nthWeekdayOfMonth(year,7,0,2)), title:"Dia dos Pais", type:"event"},
-    {month:7, day:26, title:"Dia dos Avós", type:"event"},
-    {...md(new Date(year,8,7)), title:"Independência do Brasil", type:"holiday"},
-    {...md(new Date(year,9,12)), title:"Nossa Sr.ª Aparecida / Dia das Crianças", type:"holiday"},
-    {month:10, day:15, title:"Dia do Professor", type:"event"},
-    {month:10, day:31, title:"Halloween", type:"event"},
-    {...md(new Date(year,10,2)), title:"Finados", type:"holiday"},
-    {...md(new Date(year,10,15)), title:"Proclamação da República", type:"holiday"},
-    {...md(new Date(year,10,20)), title:"Consciência Negra", type:"holiday"},
-    {...md(lastWeekdayOfMonth(year,10,5)), title:"Black Friday", type:"event"},
-    {month:12, day:25, title:"Natal", type:"holiday"},
-    {month:12, day:31, title:"Réveillon", type:"event"},
-  ];
-}
-
-// Lembretes/aniversários guardam dd/mm (repete todo ano) ou dd/mm/aaaa (data única).
-function reminderMatchesDay(dateStr, year, month, day){
-  if(!dateStr) return false;
-  const parts = String(dateStr).split("/").map(p=>parseInt(p,10));
-  if(parts.length<2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) return false;
-  const [d,m,y] = parts;
-  if(y) return d===day && m===month && y===year;
-  return d===day && m===month;
-}
-function studyGoalMatchesDay(dueDate, year, month, day){
-  return !!dueDate && dueDate===`${year}-${pad2(month)}-${pad2(day)}`;
-}
-function calendarEventMatchesDate(weekdaysStr, dateObj){
-  return String(weekdaysStr||"").split(",").filter(Boolean).map(n=>parseInt(n,10)).includes(dateObj.getDay());
-}
-function formatWeekdaysLabel(weekdaysStr){
-  return String(weekdaysStr||"").split(",").filter(Boolean).map(n=>WEEKDAY_LABELS[parseInt(n,10)]).join(", ");
-}
-
-const CAL_TYPE_META = {
-  holiday: {color:"#ff5c5c", label:"Feriado nacional", icon:Flag},
-  event: {color:"#a06bff", label:"Data comemorativa", icon:PartyPopper},
-  reminder: {color:"#3ecf6a", label:"Lembrete", icon:Bell},
-  birthday: {color:"#f0b429", label:"Aniversário", icon:Cake},
-  recurring: {color:"#4da3ff", label:"Recorrente", icon:Repeat2},
-  goal: {color:"#ff7ad9", label:"Meta de estudo", icon:Target},
-};
-
-// Junta feriados/comemorações, lembretes, aniversários, eventos recorrentes e metas de
-// estudo que caem num dia específico — usado tanto nos "pontinhos" do grid quanto no
-// painel de detalhes do dia selecionado.
-function getDayEvents(year, month, day, {specialDays, reminders, calendarEvents, studyGoals}){
-  const dateObj = new Date(year, month-1, day);
-  const items = [];
-  specialDays.filter(s=>s.month===month && s.day===day).forEach(s=>{
-    items.push({id:"special-"+s.title, title:s.title, subtitle:s.type==="holiday"?"Feriado nacional":"Data comemorativa", type:s.type});
-  });
-  reminders.forEach(r=>{
-    if(reminderMatchesDay(r.date, year, month, day)){
-      const isBday = r.kind==="Aniversário";
-      items.push({id:"rem-"+r.id, title:r.title, subtitle:isBday?"Aniversário":((r.kind||"Lembrete")+(r.time?" · "+r.time:"")), type:isBday?"birthday":"reminder"});
-    }
-  });
-  calendarEvents.forEach(e=>{
-    if(calendarEventMatchesDate(e.weekdays, dateObj)){
-      items.push({id:"cal-"+e.id, title:e.title, subtitle:"Recorrente"+(e.time?" · "+e.time:""), type:"recurring", recurringId:e.id});
-    }
-  });
-  studyGoals.forEach(g=>{
-    if(studyGoalMatchesDay(g.due_date, year, month, day)){
-      items.push({id:"goal-"+g.id, title:g.title, subtitle:"Meta de estudo · conclui hoje", type:"goal"});
-    }
-  });
-  return items;
-}
-
-function buildMonthGrid(year, monthIdx){
-  const startWeekday = new Date(year, monthIdx, 1).getDay();
-  const daysInMonth = new Date(year, monthIdx+1, 0).getDate();
-  const daysInPrevMonth = new Date(year, monthIdx, 0).getDate();
-  const cells = [];
-  for(let i=0;i<startWeekday;i++){
-    cells.push({day:daysInPrevMonth-startWeekday+1+i, current:false, month:monthIdx===0?12:monthIdx, year:monthIdx===0?year-1:year});
-  }
-  for(let d=1; d<=daysInMonth; d++) cells.push({day:d, current:true, month:monthIdx+1, year});
-  const totalCells = Math.ceil((startWeekday+daysInMonth)/7)*7;
-  const trailing = totalCells-(startWeekday+daysInMonth);
-  for(let d=1; d<=trailing; d++){
-    cells.push({day:d, current:false, month:monthIdx===11?1:monthIdx+2, year:monthIdx===11?year+1:year});
-  }
-  return cells;
-}
-
-function sortByProximity(list){
-  return [...list].sort((a,b)=>{
-    const da = daysUntil(a.date);
-    const db = daysUntil(b.date);
-    if(da===null && db===null) return 0;
-    if(da===null) return 1;
-    if(db===null) return -1;
-    return da-db;
-  });
-}
-
-function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children}){
-  const cls = urgencyClass(days);
-  return <div className={"reminderCard "+cls}>
-    <div className="reminderCardTop">
-      <div className="reminderCardLeft">
-        <div className="reminderCardIcon">{icon}</div>
-        <div><b>{title}</b>{subtitle && <small>{subtitle}</small>}</div>
-      </div>
-      <div className="reminderCardRight">
-        {onToggleMenu && <button className="reminderCardMenu" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={18}/></button>}
-        <div className="reminderCardCount">
-          <strong>{days!==null && days!==undefined ? Math.max(days,0) : "—"}</strong>
-          <small>{days===1?"DIA RESTANTE":"DIAS RESTANTES"}</small>
-        </div>
-      </div>
-    </div>
-    {menuOpen && <div className="reminderCardMenuPop" onClick={e=>e.stopPropagation()}>{menuContent}</div>}
-    {children}
-  </div>
-}
-
-function useSession(){
-  const [session,setSession] = useState(null);
-  const [checking,setChecking] = useState(cloudConfigured);
-  useEffect(()=>{
-    if(!cloudConfigured){ setChecking(false); return; }
-    supabase.auth.getSession().then(({data})=>{
-      setSession(data.session);
-      setChecking(false);
-    });
-    const {data:sub} = supabase.auth.onAuthStateChange((_event, s)=>setSession(s));
-    return ()=>sub.subscription.unsubscribe();
-  },[]);
-  return {session, checking};
-}
-
-function useTheme(){
-  const [theme,setTheme] = useState(()=>{
-    try{ return localStorage.getItem("libano-theme") || "dark"; }catch(e){ return "dark"; }
-  });
-  useEffect(()=>{
-    document.documentElement.setAttribute("data-theme", theme);
-    try{ localStorage.setItem("libano-theme", theme); }catch(e){}
-  },[theme]);
-  return [theme,setTheme];
-}
-
-// Guarda quais notificações já foram marcadas como lidas HOJE (reseta sozinho no dia seguinte).
-function useDismissedToday(){
-  const storageKey = "libano-notifs-dismissed-"+new Date().toISOString().slice(0,10);
-  const [dismissed,setDismissed] = useState(()=>{
-    try{ return JSON.parse(localStorage.getItem(storageKey)||"[]"); }catch(e){ return []; }
-  });
-  const dismissAll = (ids)=>{
-    setDismissed(prev=>{
-      const merged = Array.from(new Set([...prev,...ids]));
-      try{ localStorage.setItem(storageKey, JSON.stringify(merged)); }catch(e){}
-      return merged;
-    });
-  };
-  return [dismissed, dismissAll];
-}
-
-// Toca um som de notificação (dois "bips" curtos) via Web Audio API — não depende de
-// nenhum arquivo de áudio externo, então funciona offline como o resto do app.
-// Reaproveitado por toda notificação do app (toasts, sininho de lembretes e os
-// lembretes com hora marcada), pra dar sempre o mesmo "clique sonoro" ao chegar.
-let notifAudioCtx = null;
-function playNotifSound() {
-  try {
-    if (!notifAudioCtx) notifAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const ctx = notifAudioCtx;
-    if (ctx.state === "suspended") ctx.resume();
-    const playTone = (freq, startOffset, duration) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.value = freq;
-      const start = ctx.currentTime + startOffset;
-      g.gain.setValueAtTime(0.0001, start);
-      g.gain.exponentialRampToValueAtTime(0.28, start + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-      o.connect(g); g.connect(ctx.destination);
-      o.start(start);
-      o.stop(start + duration + 0.02);
-    };
-    playTone(880, 0, 0.14);
-    playTone(1180, 0.12, 0.18);
-  } catch (err) { console.log("[notificação] não foi possível tocar o som", err); }
-}
-
-// Pede permissão de notificações do navegador (uma vez só — se já foi concedida ou
-// negada antes, não pergunta de novo). Usado antes de agendar lembretes com hora.
-function requestNotificationPermission() {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "default") {
-    Notification.requestPermission().catch(() => {});
-  }
-}
-
-// Dispara uma notificação nativa do navegador/SO (fora da aba, se possível) e toca
-// o som de notificação do app. Silenciosamente ignora se o navegador não suportar
-// ou se a permissão não tiver sido concedida.
-function fireBrowserNotification(title, body) {
-  playNotifSound();
-  try {
-    if ("Notification" in window && Notification.permission === "granted") {
-      new Notification(title, { body, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png" });
-    }
-  } catch (err) { console.log("[notificação] não foi possível exibir a notificação", err); }
-}
-
-// Notificações rápidas (toast) — usadas, por ex., quando uma Meta vinculada a um PDF é concluída automaticamente.
-function toast(message, type = "success") {
-  playNotifSound();
-  window.dispatchEvent(new CustomEvent("app:toast", { detail: { message, type } }));
-}
-
-function ToastHost() {
-  const [items, setItems] = useState([]);
-  useEffect(() => {
-    const handler = (e) => {
-      const id = crypto.randomUUID();
-      const { message, type } = e.detail || {};
-      setItems(prev => [...prev, { id, message, type }]);
-      setTimeout(() => setItems(prev => prev.filter(t => t.id !== id)), 6000);
-    };
-    window.addEventListener("app:toast", handler);
-    return () => window.removeEventListener("app:toast", handler);
-  }, []);
-  if (items.length === 0) return null;
-  return (
-    <div className="toastHost">
-      {items.map(t => (
-        <div key={t.id} className="toastItem">
-          <div className="toastItemIcon"><CheckCircle2 size={16}/></div>
-          <span>{t.message}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Faz o progresso de uma Meta (modo "Quantidade") vinculada a um PDF conversar automaticamente
-// com o Leitor de PDF: conforme a página atual avança, a meta é atualizada e, ao concluir o
-// intervalo de páginas definido, marca a meta como concluída e dispara uma notificação.
-function syncLinkedGoalsProgress(studyGoalsEntity, source, pdfId, pdfTitle, currentPage) {
-  if (!studyGoalsEntity) return;
-  const { data, update } = studyGoalsEntity;
-  data.forEach(g => {
-    if (g.mode !== "count" || g.link_source !== source || g.link_pdf_id !== pdfId) return;
-    if (g.status !== "andamento") return;
-    const start = Number(g.link_page_start) || 1;
-    const target = Number(g.target_value) || 0;
-    if (!target) return;
-    const done = Math.max(0, Math.min(target, currentPage - start + 1));
-    if (done === Number(g.current_value || 0)) return;
-    const patch = { current_value: done };
-    const justCompleted = done >= target;
-    if (justCompleted) patch.status = "concluida";
-    update(g.id, patch);
-    if (justCompleted) {
-      const label = source === "livro" ? "Leitura concluída" : "Estudo concluído";
-      const verb = source === "livro" ? "lidas" : "estudadas";
-      toast(`${label} — ${pdfTitle} · ${target} página${target === 1 ? "" : "s"} ${verb}`);
-    }
-  });
-}
-
-// Mesmo princípio da função acima, mas para Metas (modo "Quantidade") vinculadas a Flashcards.
-// Como uma meta de flashcards pode reunir várias listas ("Card 1", "Card 2"...), o progresso é
-// recalculado toda vez contando quantas das listas vinculadas já foram estudadas até o fim
-// (campo "completed" de cada lista), e a meta conclui sozinha quando todas estiverem marcadas.
-function syncLinkedFlashcardGoalsProgress(studyGoalsEntity, listsData, listId, listTitle) {
-  if (!studyGoalsEntity) return;
-  const { data, update } = studyGoalsEntity;
-  data.forEach(g => {
-    if (g.mode !== "count" || g.link_source !== "flashcards") return;
-    if (g.status !== "andamento") return;
-    const linkedIds = Array.isArray(g.link_list_ids) ? g.link_list_ids : [];
-    if (!linkedIds.includes(listId)) return;
-    const target = Number(g.target_value) || linkedIds.length;
-    if (!target) return;
-    const done = linkedIds.filter(id => listsData.find(l => l.id === id)?.completed).length;
-    if (done === Number(g.current_value || 0)) return;
-    const patch = { current_value: done };
-    const justCompleted = done >= target;
-    if (justCompleted) patch.status = "concluida";
-    update(g.id, patch);
-    if (justCompleted) toast(`Meta concluída — todos os flashcards estudados 🎉`);
-    else toast(`Flashcards estudados — ${listTitle} · ${done}/${target} listas concluídas`);
-  });
-}
-
-// Marca uma lista de flashcards como estudada (assim que o usuário termina uma rodada completa
-// em qualquer um dos modos: Cartões, Aprender ou Combinar) e sincroniza as Metas vinculadas a ela.
-function markFlashcardListStudied(listsEntity, studyGoalsEntity, listId, listTitle) {
-  if (!listsEntity) return;
-  const list = listsEntity.data.find(l => l.id === listId);
-  if (list?.completed) return; // já estava contabilizada, evita atualizações repetidas
-  listsEntity.update(listId, { completed: true });
-  const updatedLists = listsEntity.data.map(l => l.id === listId ? { ...l, completed: true } : l);
-  syncLinkedFlashcardGoalsProgress(studyGoalsEntity, updatedLists, listId, listTitle);
-}
-
-function notifIcon(kind, size=16){
-  if(kind==="Aniversário") return <Cake size={size}/>;
-  if(kind==="Dívida") return <CircleDollarSign size={size}/>;
-  if(kind==="Fixo") return <CalendarClock size={size}/>;
-  if(kind==="Recorrente") return <Repeat2 size={size}/>;
-  if(kind==="Meta") return <Target size={size}/>;
-  if(kind==="Feriado") return <Flag size={size}/>;
-  if(kind==="Comemorativa") return <PartyPopper size={size}/>;
-  return <Bell size={size}/>;
-}
-
-// Categorias de notificação que aparecem no sininho — usado tanto pra montar a
-// lista quanto pra renderizar os toggles individuais na tela de Configurações.
-const NOTIF_KIND_DEFS = [
-  { key:"Lembrete", label:"Lembretes comuns" },
-  { key:"Aniversário", label:"Aniversários" },
-  { key:"Dívida", label:"Dívidas" },
-  { key:"Fixo", label:"Pagamentos fixos" },
-  { key:"Recorrente", label:"Recorrentes" },
-  { key:"Meta", label:"Metas de estudo" },
-  { key:"Feriado", label:"Feriados" },
-  { key:"Comemorativa", label:"Datas comemorativas" },
-];
-
-function NotificationsBell({items, goTo}){
-  const [open,setOpen] = useState(false);
-  const [dismissed,dismissAll] = useDismissedToday();
-  const ref = useRef(null);
-  const seenIdsRef = useRef(null);
-
-  useEffect(()=>{
-    const onDoc = (e)=>{ if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDoc);
-    return ()=>document.removeEventListener("mousedown", onDoc);
-  },[]);
-
-  // Toca o som de notificação sempre que um item NOVO aparece no sininho
-  // (ex.: um lembrete que passou a vencer amanhã). Na primeira renderização
-  // só registra o que já existe, sem tocar som — o som é só para chegadas novas.
-  useEffect(()=>{
-    const currentIds = new Set(items.map(it=>it.id));
-    if(seenIdsRef.current===null){
-      seenIdsRef.current = currentIds;
-      return;
-    }
-    const hasNew = items.some(it=>!seenIdsRef.current.has(it.id));
-    if(hasNew) playNotifSound();
-    seenIdsRef.current = currentIds;
-  },[items]);
-
-  const visible = items.filter(it=>!dismissed.includes(it.id));
-  const count = visible.length;
-
-  return <div className="notifWrap" ref={ref}>
-    <button className="notifBellBtn" onClick={()=>setOpen(o=>!o)} title="Notificações">
-      <Bell size={19}/>
-      {count>0 && <span className="notifBadge">{count>9?"9+":count}</span>}
-    </button>
-    {open && <div className="notifPop">
-      <div className="notifPopHead">
-        <div className="notifPopIcon"><Bell size={18}/></div>
-        <div><b>Notificações</b><small>Vence amanhã, é bom não esquecer</small></div>
-      </div>
-      <div className="notifList">
-        {visible.length===0 && <div className="notifEmpty">
-          <div className="notifEmptyIcon"><CheckCheck size={22}/></div>
-          <b>Tudo em dia!</b>
-          <small>Nada vencendo amanhã.</small>
-        </div>}
-        {visible.map(it=><button key={it.id} className="notifItem" onClick={()=>{goTo(it.page); setOpen(false);}}>
-          <div className="notifItemIcon">{notifIcon(it.kind)}</div>
-          <div className="notifItemBody"><b>{it.title}</b><small>{it.subtitle}</small></div>
-          <span className="notifItemTag">amanhã</span>
-        </button>)}
-      </div>
-      {visible.length>0 && <div className="notifFoot">
-        <button className="notifFootGhost" onClick={()=>dismissAll(visible.map(v=>v.id))}><CheckCheck size={14}/> Marcar como lidas</button>
-      </div>}
-    </div>}
-  </div>
-}
-
 function Root(){
-  const {session, checking} = useSession();
+  const {session, checking, recovery} = useSession();
   const [theme,setTheme] = useTheme();
 
   if(cloudConfigured && checking){
     return <div className="bootScreen">Carregando…</div>;
+  }
+  // Prioridade sobre o app normal: mesmo já autenticado pelo link de
+  // recuperação, o usuário precisa definir a nova senha antes de continuar.
+  if(cloudConfigured && recovery){
+    return <ResetPassword/>;
   }
   if(cloudConfigured && !session){
     return <Auth/>;
@@ -2012,7 +1515,10 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     setLiveHl(prev => {
-      if (prev && prev.points.length > 1) {
+      // >= 1, não > 1: um toque rápido (sem arrastar) gera um traço de um
+      // único ponto — ele é um marcador/ponto legítimo (a renderização já
+      // sabe desenhar isso como uma bolinha), então não pode ser descartado.
+      if (prev && prev.points.length >= 1) {
         setDrawings(d => {
           const next = { ...d, [pageNum]: [...(d[pageNum] || []), prev] };
           scheduleDrawingsSave(next);
@@ -3625,7 +3131,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (!liveAnn) return;
-    if ((tool === "pen" || tool === "highlighter") && liveAnn.points.length > 1) {
+    // >= 1, não > 1: um traço rápido/leve pode gerar só um ponto (sem
+    // pointermove entre o down e o up) — isso é um ponto/pingo legítimo
+    // (a renderização já sabe desenhar isso como uma bolinha), então não
+    // pode ser descartado silenciosamente.
+    if ((tool === "pen" || tool === "highlighter") && liveAnn.points.length >= 1) {
       let finalAnn = liveAnn;
       if (tool === "pen" && autoShape && finalAnn.points.length > 6) {
         const detected = detectShapeFromPoints(finalAnn.points);
@@ -5429,7 +4939,11 @@ function Whiteboard({ board, onClose, onSave }) {
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (!liveEl) return;
-    if ((tool === "pen" || tool === "highlighter") && liveEl.points.length > 1) {
+    // >= 1, não > 1: escrevendo rápido, um ponto (pingo de "i", vírgula,
+    // ponto final) pode virar um traço de um único ponto (sem pointermove
+    // entre o down e o up) — isso é legítimo, a renderização já sabe
+    // desenhar isso como uma bolinha, então não pode ser descartado.
+    if ((tool === "pen" || tool === "highlighter") && liveEl.points.length >= 1) {
       let finalEl = liveEl;
       if (tool === "pen" && autoShape && finalEl.points.length > 6) {
         const detected = detectShapeFromPoints(finalEl.points);
