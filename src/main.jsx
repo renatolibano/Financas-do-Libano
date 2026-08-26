@@ -3557,6 +3557,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         dragRef.current = { mode: "resize", id: sel.id };
         return;
       }
+      if (sel && sel.type === "stroke") {
+        const b = annotationBBox(sel);
+        if (Math.hypot(x - (b.x + b.w), y - (b.y + b.h)) < 14) {
+          pushHistory();
+          dragRef.current = { mode: "resize", id: sel.id };
+          return;
+        }
+      }
     }
     const hit = findAnnotationAt(list, x, y, 8);
     if (hit) {
@@ -4270,7 +4278,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   return (
                     <React.Fragment>
                       <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
-                        {(ann.type==="shape" || ann.type==="image") && (
+                        {(ann.type==="shape" || ann.type==="image" || ann.type==="stroke") && (
                           <div
                             className="pdfSelectionHandle"
                             onPointerDown={(e)=>{ e.stopPropagation(); pushHistory(); dragRef.current={mode:"resize", id:ann.id}; }}
@@ -5268,7 +5276,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const handleSelectPointerDown = (x, y, pointerId) => {
     if (selectedId) {
       const sel = elements.find(a => a.id === selectedId);
-      if (sel && (sel.type === "shape" || sel.type === "image" || sel.type === "text")) {
+      if (sel && (sel.type === "shape" || sel.type === "image" || sel.type === "text" || sel.type === "stroke")) {
         const b = elementBBox(sel);
         const cx = sel.type === "shape" ? sel.x2 : b.x + b.w;
         const cy = sel.type === "shape" ? sel.y2 : b.y + b.h;
@@ -5741,7 +5749,7 @@ function Whiteboard({ board, onClose, onSave }) {
                   return (
                     <g>
                       <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>
-                      {(el.type === "shape" || el.type === "image" || el.type === "text") && (() => {
+                      {(el.type === "shape" || el.type === "image" || el.type === "text" || el.type === "stroke") && (() => {
                         const hx = el.type === "shape" ? el.x2 : b.x + b.w;
                         const hy = el.type === "shape" ? el.y2 : b.y + b.h;
                         const onResizeStart = e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } pushHistory(); dragRef.current = { mode: "resize", id: el.id, pointerId: e.pointerId }; };

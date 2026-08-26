@@ -351,6 +351,24 @@ export function resizeShapeAnnotation(ann, x, y) {
     const minW = 60, minH = Math.max(24, ann.fontSize * 1.3);
     return { ...ann, width: Math.max(minW, x - ann.x), height: Math.max(minH, y - ann.y) };
   }
+  if (ann.type === "stroke") {
+    // Escala todos os pontos do traço a partir do canto oposto (fixo),
+    // igual ao comportamento de imagem: o canto superior-esquerdo da caixa
+    // delimitadora fica parado e o traço todo (inclusive a espessura da
+    // caneta/marca-texto) acompanha proporcionalmente o cantinho arrastado.
+    const box = annotationBBox(ann);
+    const newW = Math.max(6, x - box.x);
+    const newH = Math.max(6, y - box.y);
+    const scaleX = newW / (box.w || newW || 1);
+    const scaleY = newH / (box.h || newH || 1);
+    const scaleAvg = (scaleX + scaleY) / 2;
+    const points = (ann.points || []).map((p) => ({
+      ...p,
+      x: box.x + (p.x - box.x) * scaleX,
+      y: box.y + (p.y - box.y) * scaleY,
+    }));
+    return { ...ann, points, width: Math.max(0.5, (ann.width || 1) * scaleAvg) };
+  }
   if (ann.type !== "shape") return ann;
   const next = { ...ann, x2: x, y2: y };
   if (ann.cx != null) {
