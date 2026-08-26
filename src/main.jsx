@@ -16,7 +16,9 @@ import {
   Upload, Popcorn, Clapperboard, Play, Pause, Gamepad2,
   Film, Link2, SkipBack, SkipForward, ArrowUp, ArrowDown, ChevronUp,
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
-  CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users
+  CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
+  Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -30,6 +32,7 @@ import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
+import { useReadingStats, currentMonthKey } from "./lib/readingStats";
 import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
 import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
 import {
@@ -38,7 +41,7 @@ import {
   shape3DGeometry,
 } from "./lib/annotations";
 import Auth, { ResetPassword } from "./Auth";
-import { money, maskMoney } from "./lib/format";
+import { money, maskMoney, timeAgo } from "./lib/format";
 import {
   WEEKDAY_LABELS, MONTH_LABELS, pad2, parseReminderDate, daysUntil, daysUntilMonthlyDay,
   daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
@@ -150,7 +153,9 @@ function App({session,theme,setTheme}){
   // Listagem enxuta (sem notes/drawings/highlights/favorite_excerpts — texto
   // e JSON que só importam quando o item é aberto no leitor). Ver
   // useEntity/fetchFull, que completa a linha inteira nesse momento.
-  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,sort_order,created_at"});
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,group_id,sort_order,created_at"});
+  const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true});
+  const readingStats = useReadingStats(session);
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at"});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
   const studyFlashcards = useEntity("study_flashcards", [], session);
@@ -366,6 +371,8 @@ function App({session,theme,setTheme}){
     { type:"single", key:"Calendário", icon:CalendarDays },
     { type:"single", key:"Notas", icon:StickyNote },
     { type:"group", key:"livros", label:"Livros", icon:BookOpen, children:[
+      { key:"Biblioteca", label:"Dashboard da biblioteca", icon:LayoutDashboard },
+      { key:"Livros Lendo", label:"Lendo agora", icon:Bookmark },
       { key:"Livros Lidos", label:"Livros que já li", icon:BookCheck },
       { key:"Livros Para Ler", label:"Livros que quero ler", icon:BookMarked },
     ]},
@@ -477,8 +484,10 @@ function App({session,theme,setTheme}){
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
-      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals}/>}
-      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals}/>}
+      {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats}/>}
+      {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
+      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
+      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals}/>}
       {page==="Nivelamento" && <Nivelamento/>}
@@ -1212,6 +1221,33 @@ function fileToRawDataUrl(file) {
   });
 }
 
+// Igual a resizeImageToDataUrl, mas devolve também a largura/altura finais —
+// usado onde o chamador precisa desses números (anotações, páginas de PDF
+// coladas), já que o dataURL sozinho não diz o tamanho da imagem.
+function compressImageForPage(file, maxWidth, maxHeight, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Arquivo não é uma imagem válida"));
+      img.onload = () => {
+        let { width, height } = img;
+        const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", quality), width, height });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // Cache em memória só pra evitar re-render redundante do mesmo <img> dentro
 // da mesma sessão de aba. A fonte de verdade da capa é a coluna cover_thumb
 // (banco) — isso é o que evita baixar o PDF inteiro de novo em qualquer
@@ -1246,7 +1282,7 @@ function BookCoverThumb({ book, onCoverGenerated }) {
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
-function BookTile({ book, status, menuOpen, opening, onToggleMenu, onOpen, onMarkRead, onMoveToWantToRead, onDelete, onCoverGenerated, dragProps }) {
+function BookTile({ book, status, groups=[], menuOpen, opening, onToggleMenu, onOpen, onMarkReading, onMarkRead, onMoveToWantToRead, onMoveToGroup, onDelete, onCoverGenerated, dragProps }) {
   const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
   const favCount = book.favorite_pages?.length || 0;
   const impCount = book.important_pages?.length || 0;
@@ -1258,9 +1294,18 @@ function BookTile({ book, status, menuOpen, opening, onToggleMenu, onOpen, onMar
       </div>
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
-        {status==="lido"
-          ? <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>
-          : <button onClick={onMarkRead}>Marcar como lido</button>}
+        {status!=="lendo" && <button onClick={onMarkReading}>{status==="lido" ? "Ler de novo (marcar lendo)" : "Começar a ler"}</button>}
+        {status!=="lido" && <button onClick={onMarkRead}>Marcar como lido</button>}
+        {status!=="quero_ler" && <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>}
+        {groups.length>0 && onMoveToGroup && <>
+          <small className="bookMenuLabel">Mover para pasta</small>
+          {groups.map(g => (
+            <button key={g.id} className={book.group_id===g.id?"active":""} onClick={()=>onMoveToGroup(g.id)}>
+              <Folder size={13}/> {g.name}
+            </button>
+          ))}
+          {book.group_id && <button onClick={()=>onMoveToGroup(null)}><X size={13}/> Remover da pasta</button>}
+        </>}
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
       <b className="bookTitle">{book.title}</b>
@@ -1316,14 +1361,35 @@ function PenSwatches({ colors, onColorsChange, value, onPick, max = 8 }) {
   );
 }
 
-// Marca-texto do leitor de livros: cor/espessura/opacidade fixas — é só um
-// botão único de ligar/desligar, sem paleta de opções (diferente do modo
-// caneta completo do leitor de PDF de estudo).
-const BOOK_HL_COLOR = "#ffd54a";
+// Sumário do PDF (quando o arquivo já traz essa estrutura embutida — a
+// maioria dos PDFs exportados de um livro/e-book tem). "dest" pode vir como
+// string (destino nomeado) ou array; os dois precisam de uma resolução
+// assíncrona pra virar um número de página de verdade.
+async function resolvePdfOutline(doc, items, depth = 0) {
+  const out = [];
+  for (const item of items) {
+    let page = null;
+    try {
+      let dest = item.dest;
+      if (typeof dest === "string") dest = await doc.getDestination(dest);
+      if (Array.isArray(dest) && dest[0] != null) {
+        page = (await doc.getPageIndex(dest[0])) + 1;
+      }
+    } catch (e) { /* item sem destino resolvível (ex.: link externo) — ignora */ }
+    const children = item.items?.length ? await resolvePdfOutline(doc, item.items, depth + 1) : [];
+    out.push({ title: item.title, page, depth, children });
+  }
+  return out;
+}
+
+// Marca-texto do leitor de livros: espessura/opacidade fixas (só a cor é
+// escolhível agora) — ainda mais simples que o modo caneta completo do
+// leitor de PDF de estudo, que também tem forma/texto/seleção.
 const BOOK_HL_THICKNESS = 16;
 const BOOK_HL_OPACITY = 0.4;
+const BOOK_HL_COLORS = ["#ffd54a", "#ff8a80", "#69db7c", "#5b9dff", "#c084fc"];
 
-function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onDrawingsChange }) {
+function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
   const [numPages, setNumPages] = useState(book.total_pages || 0);
@@ -1337,8 +1403,12 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
   const [favoritePages, setFavoritePages] = useState(book.favorite_pages || []);
   const [importantPages, setImportantPages] = useState(book.important_pages || []);
+  const [favoriteExcerpts, setFavoriteExcerpts] = useState(book.favorite_excerpts || []);
+  const [selection, setSelection] = useState(null); // {text, top, left}
+  const [outline, setOutline] = useState(null); // sumário/índice do PDF (null = ainda não carregado, [] = sem sumário)
+  const textLayerRef = useRef(null);
 
-  const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores"
+  const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores" | "sumario"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -1348,8 +1418,12 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   // --- Marca-texto: desenho à mão livre por cima da página, guardado numa
   // camada separada por página (nunca altera o PDF original).
   const [highlightMode, setHighlightMode] = useState(false);
+  const [hlColor, setHlColor] = useState(BOOK_HL_COLORS[0]);
+  const [hlColorOpen, setHlColorOpen] = useState(false);
   const [drawings, setDrawings] = useState(book.drawings || {});
   const [liveHl, setLiveHl] = useState(null);
+  const [selectedImgId, setSelectedImgId] = useState(null);
+  const imageInputRef = useRef(null);
   const drawSvgRef = useRef(null);
   const pageWrapRef = useRef(null);
   const isDrawingRef = useRef(false);
@@ -1378,6 +1452,13 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
         setPdf(doc);
         setNumPages(doc.numPages);
         setLoading(false);
+        // Sumário do PDF (quando existir) — carregado à parte, pra não atrasar
+        // a primeira página aparecendo na tela.
+        doc.getOutline().then(async (items) => {
+          if (!active || !items) { if (active) setOutline([]); return; }
+          const resolved = await resolvePdfOutline(doc, items);
+          if (active) setOutline(resolved);
+        }).catch(() => { if (active) setOutline([]); });
       } catch (e) {
         console.error(e);
         if (active) { setErr("Não foi possível abrir esse PDF."); setLoading(false); }
@@ -1426,6 +1507,22 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
         throw e;
       }
       if (renderTaskRef.current === task) renderTaskRef.current = null;
+      if (!active) return;
+
+      // Camada de texto invisível, alinhada sobre o canvas — permite selecionar
+      // um trecho e guardá-lo como citação (aba Marcadores).
+      const textLayerDiv = textLayerRef.current;
+      if (textLayerDiv) {
+        textLayerDiv.innerHTML = "";
+        textLayerDiv.style.setProperty("--total-scale-factor", String(scale));
+        textLayerDiv.style.setProperty("--scale-round-x", "1px");
+        textLayerDiv.style.setProperty("--scale-round-y", "1px");
+        try {
+          const textContent = await page.getTextContent();
+          if (!active) return;
+          await new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport }).render();
+        } catch (e) { /* página sem texto extraível (ex.: PDF escaneado) */ }
+      }
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1466,6 +1563,13 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     setJumpValue("");
   };
 
+  // Troca de página: fecha qualquer seleção de texto pendente da anterior
+  useEffect(() => {
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    setSelectedImgId(null);
+  }, [pageNum]);
+
   // ---------------------------------------------------------------------
   // Marca-texto (botão único: liga/desliga o desenho do marcador)
   // ---------------------------------------------------------------------
@@ -1500,7 +1604,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     isDrawingRef.current = true;
     setLiveHl({
       id: crypto.randomUUID(), type: "stroke", tool: "highlighter",
-      color: BOOK_HL_COLOR, width: BOOK_HL_THICKNESS, opacity: BOOK_HL_OPACITY, style: "marker",
+      color: hlColor, width: BOOK_HL_THICKNESS, opacity: BOOK_HL_OPACITY, style: "marker",
       points: [{ x, y, p: 0.5 }],
     });
   };
@@ -1537,6 +1641,104 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
       scheduleDrawingsSave(next);
       return next;
     });
+  };
+
+  // ---- Citações: seleciona um trecho de texto real da página (não o
+  // marca-texto à mão) e guarda como uma citação pesquisável na lista.
+  const handleTextMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) { setSelection(null); return; }
+    if (!textLayerRef.current || !textLayerRef.current.contains(sel.anchorNode)) { setSelection(null); return; }
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setSelection(null); return; }
+    setSelection({ text: sel.toString().trim(), top: rect.top, left: rect.left + rect.width / 2 });
+  };
+  const clearSelection = () => { window.getSelection()?.removeAllRanges(); setSelection(null); };
+  const addFavoriteExcerpt = () => {
+    const text = selection?.text || window.getSelection()?.toString().trim();
+    if (!text) return;
+    const entry = { id: crypto.randomUUID(), page: pageNum, text, createdAt: Date.now() };
+    const next = [...favoriteExcerpts, entry];
+    setFavoriteExcerpts(next);
+    onFavoriteExcerptsChange(book.id, next);
+    clearSelection();
+  };
+  const removeFavoriteExcerpt = (id) => {
+    const next = favoriteExcerpts.filter(h => h.id !== id);
+    setFavoriteExcerpts(next);
+    onFavoriteExcerptsChange(book.id, next);
+  };
+
+  // ---- Inserir imagem/print como anotação — versão enxuta: dá pra
+  // arrastar e redimensionar, mas (diferente do leitor de Estudos) não tem
+  // laço/múltipla seleção/copiar-colar entre páginas, já que o leitor de
+  // Livros não tem esse "modo caneta" completo.
+  const insertImageAnnotation = async (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    try {
+      const { dataUrl, width: iw, height: ih } = await compressImageForPage(file, 1200, 1600, 0.82);
+      const maxW = basePageSize.width * 0.55;
+      const scale = iw > maxW ? maxW / iw : 1;
+      const w = iw * scale, h = ih * scale;
+      const cx = basePageSize.width / 2, cy = basePageSize.height / 2;
+      const ann = { id: crypto.randomUUID(), type: "shape", shape: "image", src: dataUrl, x1: cx - w/2, y1: cy - h/2, x2: cx + w/2, y2: cy + h/2 };
+      setDrawings(prev => {
+        const next = { ...prev, [pageNum]: [...(prev[pageNum] || []), ann] };
+        scheduleDrawingsSave(next);
+        return next;
+      });
+      setHighlightMode(false);
+      setSelectedImgId(ann.id);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível inserir essa imagem.");
+    }
+  };
+  const imgDragRef = useRef(null);
+  const handleImgPointerDown = (e, ann) => {
+    e.stopPropagation();
+    setSelectedImgId(ann.id);
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    imgDragRef.current = { id: ann.id, lastX: x, lastY: y, mode: "move" };
+  };
+  const handleImgResizeDown = (e, ann) => {
+    e.stopPropagation();
+    imgDragRef.current = { id: ann.id, mode: "resize" };
+  };
+  const handleImgPointerMove = (e) => {
+    if (!imgDragRef.current || !basePageSize.width) return;
+    const { x, y } = toPageCoords(e.clientX, e.clientY);
+    const drag = imgDragRef.current;
+    setDrawings(prev => {
+      const list = prev[pageNum] || [];
+      const idx = list.findIndex(a => a.id === drag.id);
+      if (idx === -1) return prev;
+      let updated;
+      if (drag.mode === "resize") {
+        updated = resizeShapeAnnotation(list[idx], x, y);
+      } else {
+        const dx = x - drag.lastX, dy = y - drag.lastY;
+        drag.lastX = x; drag.lastY = y;
+        updated = translateAnnotation(list[idx], dx, dy);
+      }
+      const nextList = [...list]; nextList[idx] = updated;
+      return { ...prev, [pageNum]: nextList };
+    });
+  };
+  const handleImgPointerUp = () => {
+    if (!imgDragRef.current) return;
+    imgDragRef.current = null;
+    scheduleDrawingsSave(drawings);
+  };
+  const deleteSelectedImage = () => {
+    if (!selectedImgId) return;
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: (prev[pageNum]||[]).filter(a => a.id !== selectedImgId) };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+    setSelectedImgId(null);
   };
 
   const toggleFavorite = () => {
@@ -1654,6 +1856,11 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button className={`ghost${panel==="marcadores" ? " active" : ""}`} onClick={()=>togglePanel("marcadores")}>
               <Bookmark size={15}/> <span>Marcadores</span>
             </button>
+            {outline && outline.length>0 && (
+              <button className={`ghost${panel==="sumario" ? " active" : ""}`} onClick={()=>togglePanel("sumario")}>
+                <ListTree size={15}/> <span>Sumário</span>
+              </button>
+            )}
             <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
               <StickyNote size={15}/> <span>Notas</span>
             </button>
@@ -1663,11 +1870,28 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
         <div className="pdfToolbar">
           <div className="pdfToolbarGroup">
-            <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} onClick={toggleHighlightMode}>
+            <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} onClick={()=>{ toggleHighlightMode(); setHlColorOpen(false); }}>
               <Highlighter size={16}/> <span>Marca-texto</span>
             </button>
+            <div className="emojiWrap">
+              <button title="Cor do marca-texto" onClick={()=>setHlColorOpen(o=>!o)} style={{color:hlColor}}><PaintBucket size={16}/></button>
+              {hlColorOpen && (
+                <div className="colorPopover">
+                  {BOOK_HL_COLORS.map(c => (
+                    <button key={c} className="colorSwatch" style={{background:c}} onClick={()=>{setHlColor(c); setHlColorOpen(false);}}/>
+                  ))}
+                </div>
+              )}
+            </div>
             {highlightMode && (drawings[pageNum]||[]).length>0 && (
               <button title="Apagar marca-texto desta página" onClick={clearPageHighlights}><Trash2 size={16}/></button>
+            )}
+            <span className="pdfToolbarDivider"/>
+            <button title="Inserir imagem/print nesta página" onClick={()=>imageInputRef.current?.click()}><ImageIcon size={16}/></button>
+            <input ref={imageInputRef} type="file" accept="image/*" hidden
+              onChange={(e)=>{ const f=e.target.files?.[0]; if(f) insertImageAnnotation(f); e.target.value=""; }}/>
+            {selectedImgId && (
+              <button title="Excluir imagem selecionada" onClick={deleteSelectedImage}><Trash2 size={16}/></button>
             )}
           </div>
           <div className="pdfToolbarGroup">
@@ -1692,8 +1916,9 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && (
-              <div ref={pageWrapRef} className="pdfPageWrap">
+              <div ref={pageWrapRef} className="pdfPageWrap" onPointerMove={handleImgPointerMove} onPointerUp={handleImgPointerUp} onPointerLeave={handleImgPointerUp}>
                 <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode) goTo(pageNum+1); }}/>
+                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
                 {basePageSize.width>0 && (
                   <svg
                     ref={drawSvgRef}
@@ -1711,10 +1936,29 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                     onPointerLeave={handleHlPointerUp}
                     onContextMenu={(e)=>{ if (highlightMode) e.preventDefault(); }}
                   >
-                    {(drawings[pageNum]||[]).map(ann => <AnnotationShape key={ann.id} ann={ann}/>)}
+                    {(drawings[pageNum]||[]).map(ann => (
+                      <AnnotationShape key={ann.id} ann={ann}
+                        onPointerDown={ann.shape==="image" && !highlightMode ? (e)=>handleImgPointerDown(e, ann) : undefined}/>
+                    ))}
                     {liveHl && <AnnotationShape ann={liveHl} preview/>}
                   </svg>
                 )}
+                {!highlightMode && selectedImgId && basePageSize.width>0 && (() => {
+                  const ann = (drawings[pageNum]||[]).find(a=>a.id===selectedImgId && a.shape==="image");
+                  if (!ann) return null;
+                  const left = ann.x1/basePageSize.width*100, top = ann.y1/basePageSize.height*100;
+                  const w = (ann.x2-ann.x1)/basePageSize.width*100, h = (ann.y2-ann.y1)/basePageSize.height*100;
+                  return (
+                    <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
+                      <div className="pdfSelectionHandle" onPointerDown={(e)=>handleImgResizeDown(e, ann)}/>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+            {selection && (
+              <div className="pdfSelectionToolbar" style={{top:selection.top, left:selection.left}} onMouseDown={e=>e.preventDefault()}>
+                <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar citação</button>
               </div>
             )}
           </div>
@@ -1757,6 +2001,31 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                     {importantPages.map(p => <button key={p} className={p===pageNum?"active":""} onClick={()=>goTo(p)}>{p}</button>)}
                   </div>
                 </div>
+                <div className="pdfBookmarksSection">
+                  <small><Star size={12}/> Citações</small>
+                  {favoriteExcerpts.length===0 && <p className="emptyHint">Selecione um trecho de texto na página pra guardar aqui.</p>}
+                  <div className="pdfExcerptList">
+                    {favoriteExcerpts.map(h => (
+                      <div key={h.id} className="pdfExcerptItem">
+                        <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
+                          <b>Página {h.page}</b>
+                          <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
+                        </button>
+                        <button className="pdfExcerptDelete" title="Remover citação" onClick={()=>removeFavoriteExcerpt(h.id)}><Trash2 size={13}/></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {panel==="sumario" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Sumário</b><span>em "{book.title}"</span></div>
+              <div className="notesPaneBody">
+                {(!outline || outline.length===0) && <p className="emptyHint">Esse PDF não tem um sumário embutido.</p>}
+                <PdfOutlineList items={outline||[]} onGoTo={(p)=>{goTo(p); setPanel(null);}}/>
               </div>
             </div>
           )}
@@ -1796,15 +2065,22 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   );
 }
 
-function BookShelf({ entity, status, session, studyGoals }) {
+function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEntity }) {
   const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
+  const groups = groupsEntity.data;
   const filtered = data.filter(x => x.status === status);
+  const [currentGroupId, setCurrentGroupId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [readingBook, setReadingBook] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [dragId, setDragId] = useState(null);
+  const [dragOverGroupId, setDragOverGroupId] = useState(null);
   const fileInputRef = useRef(null);
   const progressTimer = useRef(null);
+  const openedAtRef = useRef(null);
+
+  const currentGroup = currentGroupId ? groups.find(g => g.id === currentGroupId) : null;
+  const visibleBooks = currentGroupId ? filtered.filter(b => b.group_id === currentGroupId) : filtered.filter(b => !b.group_id);
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
@@ -1824,7 +2100,7 @@ function BookShelf({ entity, status, session, studyGoals }) {
       // esse arquivo de novo só pra mostrar a miniatura.
       const cover_thumb = await renderCoverThumbFromDoc(doc).catch(() => null);
       const filePath = await uploadBookFile(session.user.id, id, file);
-      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], cover_thumb });
+      await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], group_id: currentGroupId, cover_thumb });
     } catch (err) {
       console.error(err);
       alert("Não foi possível enviar o PDF: " + (err.message || err));
@@ -1836,9 +2112,18 @@ function BookShelf({ entity, status, session, studyGoals }) {
   const onProgress = (bookId, page) => {
     clearTimeout(progressTimer.current);
     progressTimer.current = setTimeout(() => {
-      update(bookId, { current_page: page });
       const b = data.find(x => x.id === bookId);
+      // Um livro que ainda estava em "quero ler" e já passou da primeira
+      // página vira "lendo" sozinho — assim o Dashboard reflete a leitura
+      // real sem precisar de um clique extra no menu.
+      const patch = { current_page: page };
+      if (b?.status === "quero_ler" && page > 1) patch.status = "lendo";
+      update(bookId, patch);
       syncLinkedGoalsProgress(studyGoals, "livro", bookId, b?.title || "", page);
+      // Só soma no resumo do mês o avanço pra frente — voltar página não
+      // "desconta", mas também não conta de novo.
+      const delta = page - (b?.current_page || page);
+      if (delta > 0) readingStats?.bump({ pages: delta });
     }, 400);
   };
 
@@ -1848,6 +2133,7 @@ function BookShelf({ entity, status, session, studyGoals }) {
 
   const onFavoritesChange = (bookId, favorite_pages) => update(bookId, { favorite_pages });
   const onImportantChange = (bookId, important_pages) => update(bookId, { important_pages });
+  const onFavoriteExcerptsChange = (bookId, favorite_excerpts) => update(bookId, { favorite_excerpts });
   const onDrawingsChange = (bookId, drawings) => update(bookId, { drawings });
 
   // A listagem vem enxuta (sem notes/drawings — ver listSelect em useEntity).
@@ -1860,7 +2146,18 @@ function BookShelf({ entity, status, session, studyGoals }) {
     setOpeningBookId(book.id);
     const full = await fetchFull(book.id);
     setOpeningBookId(null);
+    openedAtRef.current = Date.now();
     setReadingBook(full || book);
+  };
+
+  const READ_SESSION_CAP_SECONDS = 3 * 60 * 60; // sessão de leitura "aberta e esquecida" não infla o tempo pra sempre
+  const handleCloseReader = () => {
+    if (openedAtRef.current) {
+      const elapsed = Math.round((Date.now() - openedAtRef.current) / 1000);
+      openedAtRef.current = null;
+      if (elapsed > 2) readingStats?.bump({ seconds: Math.min(elapsed, READ_SESSION_CAP_SECONDS) });
+    }
+    setReadingBook(null);
   };
 
   const handleDelete = async (book) => {
@@ -1870,38 +2167,132 @@ function BookShelf({ entity, status, session, studyGoals }) {
     if (book.file_path) deleteBookFile(book.file_path);
   };
 
+  const handleMoveToGroup = (book, groupId) => {
+    setOpenMenuId(null);
+    update(book.id, { group_id: groupId });
+  };
+
+  const handleDropOnGroup = (groupId) => {
+    setDragOverGroupId(null);
+    if (dragId === null) return;
+    const draggedId = dragId;
+    setDragId(null);
+    update(draggedId, { group_id: groupId });
+  };
+
+  const handleNewGroup = () => {
+    const name = window.prompt("Nome da pasta (ex.: Ficção, Técnico):");
+    if (!name || !name.trim()) return;
+    groupsEntity.add({ id: crypto.randomUUID(), name: name.trim() });
+  };
+
+  const handleRenameGroup = (group) => {
+    setOpenMenuId(null);
+    const name = window.prompt("Novo nome da pasta:", group.name);
+    if (!name || !name.trim() || name.trim()===group.name) return;
+    groupsEntity.update(group.id, { name: name.trim() });
+  };
+
+  const handleDeleteGroup = async (group) => {
+    setOpenMenuId(null);
+    const count = data.filter(b => b.group_id === group.id).length;
+    const msg = count>0
+      ? `Excluir a pasta "${group.name}"? Os ${count} livro(s) dela voltam para fora da pasta (não são apagados).`
+      : `Excluir a pasta "${group.name}"?`;
+    if (!confirm(msg)) return;
+    await Promise.all(data.filter(b => b.group_id === group.id).map(b => update(b.id, { group_id: null })));
+    await groupsEntity.remove(group.id);
+    if (currentGroupId === group.id) setCurrentGroupId(null);
+  };
+
+  const handleSetGroupCover = async (group, file) => {
+    setOpenMenuId(null);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
+      await groupsEntity.update(group.id, { cover_image: dataUrl });
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. Tente outra foto.");
+    }
+  };
+
+  const handleRemoveGroupCover = async (group) => {
+    setOpenMenuId(null);
+    await groupsEntity.update(group.id, { cover_image: null });
+  };
+
   const handleDrop = (targetId) => {
     if (dragId === null || dragId === targetId) { setDragId(null); return; }
-    const newFiltered = [...filtered];
-    const fromIdx = newFiltered.findIndex(b => b.id === dragId);
-    const toIdx = newFiltered.findIndex(b => b.id === targetId);
+    const newVisible = [...visibleBooks];
+    const fromIdx = newVisible.findIndex(b => b.id === dragId);
+    const toIdx = newVisible.findIndex(b => b.id === targetId);
     setDragId(null);
     if (fromIdx === -1 || toIdx === -1) return;
-    const [moved] = newFiltered.splice(fromIdx, 1);
-    newFiltered.splice(toIdx, 0, moved);
+    const [moved] = newVisible.splice(fromIdx, 1);
+    newVisible.splice(toIdx, 0, moved);
     let i = 0;
-    const newFull = data.map(item => item.status === status ? newFiltered[i++] : item);
+    const visibleIds = new Set(visibleBooks.map(b => b.id));
+    const newFull = data.map(item => visibleIds.has(item.id) ? newVisible[i++] : item);
     reorder(newFull);
   };
 
   return (
     <div className="content">
+      {currentGroup && (
+        <div
+          className={"groupBreadcrumb"+(dragOverGroupId==="__root__"?" dropTarget":"")}
+          onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
+          onDragEnter={(e)=>{ e.preventDefault(); setDragOverGroupId("__root__"); }}
+          onDragLeave={()=>setDragOverGroupId(id=>id==="__root__"?null:id)}
+          onDrop={(e)=>{ e.preventDefault(); handleDropOnGroup(null); }}
+        >
+          <button className="ghost" onClick={()=>setCurrentGroupId(null)}>‹ Pastas</button>
+          <Folder size={14}/> <b>{currentGroup.name}</b>
+        </div>
+      )}
       <div className="shelf" onClick={()=>setOpenMenuId(null)}>
         <div className="bookTile addTile" onClick={()=>fileInputRef.current?.click()}>
           <div className="bookCoverWrap addCover">{uploading ? <span>Enviando...</span> : <><Plus size={26}/><span>Adicionar PDF</span></>}</div>
           <input ref={fileInputRef} type="file" accept="application/pdf" hidden onChange={handleFile}/>
         </div>
-        {filtered.map(book => (
+        {!currentGroup && (
+          <div className="bookTile addTile" onClick={handleNewGroup}>
+            <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Nova pasta</span></div>
+          </div>
+        )}
+        {!currentGroup && groups.map(group => (
+          <StudyPdfGroupTile
+            key={group.id}
+            group={group}
+            count={filtered.filter(b => b.group_id === group.id).length}
+            unitLabel="livro"
+            menuOpen={openMenuId==="g:"+group.id}
+            onToggleMenu={(e)=>{e?.stopPropagation?.(); setOpenMenuId(id=>id==="g:"+group.id?null:"g:"+group.id);}}
+            onOpen={()=>setCurrentGroupId(group.id)}
+            onRename={()=>handleRenameGroup(group)}
+            onDelete={()=>handleDeleteGroup(group)}
+            onSetCover={(file)=>handleSetGroupCover(group, file)}
+            onRemoveCover={()=>handleRemoveGroupCover(group)}
+            dropActive={dragOverGroupId===group.id}
+            onDragEnterZone={()=>setDragOverGroupId(group.id)}
+            onDragLeaveZone={()=>setDragOverGroupId(id=>id===group.id?null:id)}
+            onDropZone={()=>handleDropOnGroup(group.id)}
+          />
+        ))}
+        {visibleBooks.map(book => (
           <BookTile
             key={book.id}
             book={book}
             status={status}
+            groups={groups}
             menuOpen={openMenuId===book.id}
             opening={openingBookId===book.id}
             onToggleMenu={()=>setOpenMenuId(id=>id===book.id?null:book.id)}
             onOpen={()=>handleOpen(book)}
-            onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"});}}
+            onMarkReading={()=>{setOpenMenuId(null); update(book.id, {status:"lendo"});}}
+            onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"}); if(status!=="lido") readingStats?.bump({books_completed:1});}}
             onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, {status:"quero_ler"});}}
+            onMoveToGroup={(groupId)=>handleMoveToGroup(book, groupId)}
             onDelete={()=>handleDelete(book)}
             onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
             dragProps={{
@@ -1916,8 +2307,87 @@ function BookShelf({ entity, status, session, studyGoals }) {
         ))}
       </div>
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
-      {filtered.length===0 && cloud && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
-      {readingBook && <PdfReader book={readingBook} onClose={()=>setReadingBook(null)} onProgress={onProgress} onNotesChange={onNotesChange} onFavoritesChange={onFavoritesChange} onImportantChange={onImportantChange} onDrawingsChange={onDrawingsChange}/>}
+      {visibleBooks.length===0 && groups.length===0 && cloud && !currentGroup && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
+      {currentGroup && visibleBooks.length===0 && <p className="emptyHint">Nenhum livro nessa pasta ainda.</p>}
+      {readingBook && <PdfReader book={readingBook} onClose={handleCloseReader} onProgress={onProgress} onNotesChange={onNotesChange} onFavoritesChange={onFavoritesChange} onImportantChange={onImportantChange} onFavoriteExcerptsChange={onFavoriteExcerptsChange} onDrawingsChange={onDrawingsChange}/>}
+    </div>
+  );
+}
+
+function LibraryDashboard({ entity, setPage, readingStats }) {
+  const { data } = entity;
+  const total = data.length;
+  const lendo = data.filter(b => b.status === "lendo");
+  const lidos = data.filter(b => b.status === "lido").length;
+  const paraLer = data.filter(b => b.status === "quero_ler").length;
+  const stats = readingStats?.current || { pages: 0, seconds: 0, books_completed: 0 };
+  const hours = Math.floor(stats.seconds / 3600);
+  const mins = Math.round((stats.seconds % 3600) / 60);
+  const timeLabel = hours > 0 ? `${hours}h ${mins}min` : (mins > 0 ? `${mins}min` : "—");
+  const monthLabel = new Date(currentMonthKey() + "-02").toLocaleDateString("pt-BR", { month: "long" });
+
+  return (
+    <div className="content">
+      <div className="studyGoalsHead">
+        <div><h2>Minha leitura</h2><p>Um resumo rápido da sua biblioteca.</p></div>
+      </div>
+
+      <div className="studyStats">
+        <div className="studyStat libraryStatClick" onClick={()=>setPage("Livros Lendo")}>
+          <div className="studyStatIcon" style={{background:"#4c8dff22",color:"#4c8dff"}}><Library size={17}/></div>
+          <strong>{total}</strong><small>Livros no total</small>
+        </div>
+        <div className="studyStat libraryStatClick" onClick={()=>setPage("Livros Lendo")}>
+          <div className="studyStatIcon" style={{background:"#f0b42922",color:"#f0b429"}}><BookOpen size={17}/></div>
+          <strong>{lendo.length}</strong><small>Em andamento</small>
+        </div>
+        <div className="studyStat libraryStatClick" onClick={()=>setPage("Livros Lidos")}>
+          <div className="studyStatIcon" style={{background:"#3ecf6a22",color:"#3ecf6a"}}><BookCheck size={17}/></div>
+          <strong>{lidos}</strong><small>Concluídos</small>
+        </div>
+        <div className="studyStat libraryStatClick" onClick={()=>setPage("Livros Para Ler")}>
+          <div className="studyStatIcon" style={{background:"#a06bff22",color:"#a06bff"}}><BookMarked size={17}/></div>
+          <strong>{paraLer}</strong><small>Para ler</small>
+        </div>
+      </div>
+
+      <div className="studyGoalsListHead"><h3>Este mês ({monthLabel})</h3></div>
+      <div className="studyStats">
+        <div className="studyStat">
+          <div className="studyStatIcon" style={{background:"#4c8dff22",color:"#4c8dff"}}><FileText size={17}/></div>
+          <strong>{stats.pages}</strong><small>Páginas lidas</small>
+        </div>
+        <div className="studyStat">
+          <div className="studyStatIcon" style={{background:"#ff9f4322",color:"#ff9f43"}}><Hourglass size={17}/></div>
+          <strong>{timeLabel}</strong><small>Tempo de leitura</small>
+        </div>
+        <div className="studyStat">
+          <div className="studyStatIcon" style={{background:"#3ecf6a22",color:"#3ecf6a"}}><BookCheck size={17}/></div>
+          <strong>{stats.books_completed}</strong><small>Livros concluídos</small>
+        </div>
+      </div>
+
+      <div className="studyGoalsListHead"><h3>Lendo agora</h3></div>
+      {lendo.length === 0 && <p className="emptyHint">Nenhum livro em andamento — abra um livro de "Quero ler" e continue de onde parou que ele aparece aqui sozinho.</p>}
+      {lendo.length > 0 && (
+        <div className="libraryReadingList">
+          {lendo.map(b => {
+            const pct = b.total_pages ? Math.min(100, Math.round((b.current_page / b.total_pages) * 100)) : 0;
+            return (
+              <div className="libraryReadingRow" key={b.id} onClick={()=>setPage("Livros Lendo")}>
+                <div className="bookCoverImg libraryReadingCover">
+                  {b.cover_thumb ? <img src={b.cover_thumb} alt={b.title}/> : <div className="bookCoverPlaceholder"><FileText size={20}/></div>}
+                </div>
+                <div className="libraryReadingInfo">
+                  <b>{b.title}</b>
+                  <div className="progress"><i style={{width:pct+"%"}}/></div>
+                  <small>{pct}% · página {b.current_page} de {b.total_pages}</small>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1987,7 +2457,7 @@ function StudyPdfTile({ pdfDoc, groups, menuOpen, opening, onToggleMenu, onOpen,
   );
 }
 
-function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover, dropActive, onDragEnterZone, onDragLeaveZone, onDropZone }) {
+function StudyPdfGroupTile({ group, count, unitLabel="PDF", menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover, dropActive, onDragEnterZone, onDragLeaveZone, onDropZone }) {
   const coverInputRef = useRef(null);
   return (
     <div
@@ -2023,7 +2493,29 @@ function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRen
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir pasta</button>
       </div>}
       <b className="bookTitle">{group.name}</b>
-      <small className="bookProgressLabel">{count} PDF{count===1?"":"s"}</small>
+      <small className="bookProgressLabel">{count} {unitLabel}{count===1?"":"s"}</small>
+    </div>
+  );
+}
+
+function PdfOutlineList({ items, onGoTo }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="pdfOutlineList">
+      {items.map((it, i) => (
+        <div key={i}>
+          <button
+            className="pdfOutlineItem"
+            style={{ paddingLeft: (12 + it.depth * 16) + "px" }}
+            disabled={it.page == null}
+            onClick={() => it.page != null && onGoTo(it.page)}
+          >
+            <span>{it.title}</span>
+            {it.page != null && <small>{it.page}</small>}
+          </button>
+          {it.children?.length > 0 && <PdfOutlineList items={it.children} onGoTo={onGoTo}/>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -2037,6 +2529,16 @@ function StudyPdfGroupTile({ group, count, menuOpen, onToggleMenu, onOpen, onRen
 // de PDF, isso ia deixando o traço cada vez mais travado conforme o quadro
 // enchia. Com o memo, um elemento só recalcula quando ele mesmo muda.
 const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPointerDown }) {
+  if (ann.type === "image") {
+    return (
+      <image
+        href={ann.dataUrl || ann.src} x={ann.x} y={ann.y} width={ann.width} height={ann.height}
+        opacity={preview ? 0.85 : (ann.opacity ?? 1)}
+        onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }}
+        preserveAspectRatio="none"
+      />
+    );
+  }
   if (ann.type === "stroke") {
     const isHl = ann.tool === "highlighter";
     const uniform = ann.style === "marker" || isHl;
@@ -2539,31 +3041,17 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   // ---- Colar print (Ctrl+V) ou escolher arquivo direto no leitor: vira uma
   // página nova no final do próprio PDF, e não um arquivo separado montado
   // antes de existir.
-  const fileToImage = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
   const appendPastedImage = async (file) => {
     if (!file || !file.type?.startsWith("image/") || !pdfBytesRef.current) return;
     try {
       setAddingPage(true);
-      const img = await fileToImage(file);
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      canvas.getContext("2d").drawImage(img, 0, 0);
-      const dataUrl = canvas.toDataURL("image/png");
+      // Comprime pro tamanho final que a página vai ter (documento/print não
+      // precisa da resolução da foto original) — isso é o que baixa de novo
+      // toda vez que esse PDF é aberto/sincronizado, então vale a pena.
+      const { dataUrl, width, height } = await compressImageForPage(file, 1600, 2200, 0.82);
 
       const bg = pdfDoc.bg_color || "white";
-      const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, img.width, img.height, bg);
+      const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, width, height, bg);
       const newBuf = await blob.arrayBuffer();
       pdfBytesRef.current = newBuf.slice(0);
       const newDoc = await pdfjsLib.getDocument({ data: newBuf, wasmUrl: pdfWasmUrl }).promise;
@@ -2821,6 +3309,101 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     });
   };
 
+  // ---- Inserir imagem/print como anotação (uma "figurinha" arrastável e
+  // redimensionável sobre a página, igual a um retângulo — reaproveita toda
+  // a mesma seleção/arraste/redimensionamento das formas).
+  const imageInputRef = useRef(null);
+  const insertImageAnnotation = async (file) => {
+    if (!file || !file.type?.startsWith("image/")) return;
+    try {
+      // Comprime antes de guardar: essa imagem entra no JSON de anotações do
+      // PDF, então cada byte aqui é baixado de novo toda vez que a página é
+      // aberta ou sincronizada.
+      const { dataUrl, width: iw, height: ih } = await compressImageForPage(file, 1200, 1600, 0.82);
+      const maxW = basePageSize.width * 0.55;
+      const scale = iw > maxW ? maxW / iw : 1;
+      const w = iw * scale, h = ih * scale;
+      const cx = basePageSize.width / 2, cy = basePageSize.height / 2;
+      const ann = {
+        id: crypto.randomUUID(), type: "shape", shape: "image", src: dataUrl,
+        x1: cx - w / 2, y1: cy - h / 2, x2: cx + w / 2, y2: cy + h / 2,
+      };
+      commitAnnotation(ann);
+      setTool("select");
+      setSelectedAnnId(ann.id);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível inserir essa imagem.");
+    }
+  };
+
+  // ---- Copiar/colar anotações entre páginas: guarda uma cópia "congelada"
+  // do que estava selecionado (laço ou seleção única) e cola no ponto onde
+  // a página está sendo vista agora, em qualquer página do mesmo PDF.
+  const annotationClipboardRef = useRef([]);
+  const [clipboardCount, setClipboardCount] = useState(0);
+  const copySelection = () => {
+    const ids = lassoSelectedIds.length ? lassoSelectedIds : (selectedAnnId ? [selectedAnnId] : []);
+    if (!ids.length) return;
+    const list = drawings[pageNum] || [];
+    const copied = list.filter(a => ids.includes(a.id));
+    if (!copied.length) return;
+    annotationClipboardRef.current = JSON.parse(JSON.stringify(copied));
+    setClipboardCount(copied.length);
+    toast?.("Copiado! Troque de página e cole com o botão ou Ctrl+V.");
+  };
+  const pasteClipboard = () => {
+    const items = annotationClipboardRef.current;
+    if (!items.length) return;
+    pushHistory();
+    const newIds = [];
+    const pasted = items.map(a => {
+      const id = crypto.randomUUID();
+      newIds.push(id);
+      const offset = 18; // desloca um pouco pra não colar exatamente em cima
+      const clone = { ...a, id };
+      if (clone.type === "text") { clone.x += offset; clone.y += offset; }
+      else if (clone.type === "shape") {
+        clone.x1 += offset; clone.y1 += offset; clone.x2 += offset; clone.y2 += offset;
+        if (clone.cx != null) { clone.cx += offset; clone.cy += offset; }
+      } else if (clone.type === "stroke") {
+        clone.points = (clone.points || []).map(p => ({ ...p, x: p.x + offset, y: p.y + offset }));
+      }
+      return clone;
+    });
+    setDrawings(prev => {
+      const next = { ...prev, [pageNum]: [...(prev[pageNum] || []), ...pasted] };
+      scheduleDrawingsSave(next);
+      return next;
+    });
+    setTool("select");
+    setLassoSelectedIds(newIds);
+    setSelectedAnnId(null);
+  };
+  useEffect(() => {
+    const handler = (e) => {
+      if (!penMode) return;
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") { copySelection(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && annotationClipboardRef.current.length) { e.preventDefault(); pasteClipboard(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [penMode, lassoSelectedIds, selectedAnnId, drawings, pageNum]);
+
+  // ---- Apontador laser: só um indicador visual temporário que segue o
+  // ponteiro e desaparece sozinho — nunca vira anotação salva.
+  const [laserPoints, setLaserPoints] = useState([]);
+  const laserFadeRef = useRef(null);
+  const addLaserPoint = (x, y) => {
+    const id = Date.now() + Math.random();
+    setLaserPoints(pts => [...pts.slice(-40), { id, x, y }]);
+    clearTimeout(laserFadeRef.current);
+    laserFadeRef.current = setTimeout(() => setLaserPoints([]), 900);
+  };
+
   const togglePenMode = () => {
     setPenMode(m => {
       if (m) { flushDrawings(); setSelectedAnnId(null); setEditingTextId(null); }
@@ -2860,6 +3443,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   // ferramenta que não desenha traço (borracha, seleção, texto, forma).
   useEffect(() => {
     if (!penMode || (tool !== "pen" && tool !== "highlighter" && tool !== "eraser")) setShowPenCursor(false);
+    if (tool !== "laser") setLaserPoints([]);
   }, [penMode, tool]);
 
   // Some com a seleção do laço sempre que trocar de ferramenta.
@@ -2968,6 +3552,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         dragRef.current = { mode: "resize", id: sel.id };
         return;
       }
+      if (sel && sel.type === "image" && Math.hypot(x - (sel.x + sel.width), y - (sel.y + sel.height)) < 14) {
+        pushHistory();
+        dragRef.current = { mode: "resize", id: sel.id };
+        return;
+      }
     }
     const hit = findAnnotationAt(list, x, y, 8);
     if (hit) {
@@ -3022,6 +3611,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       isDrawingRef.current = true;
       if (eraserMode === "object") eraseObjectAt(x, y);
       else eraseRadiusAt(x, y);
+    } else if (tool === "laser") {
+      isDrawingRef.current = true;
+      addLaserPoint(x, y);
     } else if (tool === "text") {
       addTextAnnotation(x, y);
     } else if (tool === "select") {
@@ -3092,6 +3684,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     }
     if (!isDrawingRef.current) return;
     const { x, y } = toPageCoords(e.clientX, e.clientY);
+    if (tool === "laser") { addLaserPoint(x, y); return; }
     if (tool === "pen" || tool === "highlighter") {
       setLiveAnn(prev => {
         if (!prev) return prev;
@@ -3128,6 +3721,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       return;
     }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
+    if (tool === "laser") { isDrawingRef.current = false; return; }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (!liveAnn) return;
@@ -3543,6 +4137,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                 <button title="Texto (2 toques: opções)" className={tool==="text"?"active":""} onClick={()=>{setTool("text"); setSelectedAnnId(null);}} onDoubleClick={()=>setStyleFlyoutOpen(v=>!v)}><Type size={16}/></button>
                 <button title="Selecionar" className={tool==="select"?"active":""} onClick={()=>setTool("select")}><MousePointer2 size={16}/></button>
                 <button title="Laço" className={tool==="lasso"?"active":""} onClick={()=>setTool("lasso")}><Lasso size={16}/></button>
+                <button title="Apontador laser (não fica salvo)" className={tool==="laser"?"active":""} onClick={()=>setTool("laser")}><Sparkle size={16}/></button>
+                <span className="pdfPenDockDivider"/>
+                <button title="Inserir imagem/print" onClick={()=>imageInputRef.current?.click()}><ImageIcon size={16}/></button>
+                <input ref={imageInputRef} type="file" accept="image/*" hidden
+                  onChange={(e)=>{ const f=e.target.files?.[0]; if(f) insertImageAnnotation(f); e.target.value=""; }}/>
+                {clipboardCount > 0 && (
+                  <button title="Colar (Ctrl+V) nesta página" onClick={pasteClipboard}><ClipboardPaste size={16}/></button>
+                )}
                 <span className="pdfPenDockDivider"/>
                 <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
                 <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
@@ -3606,6 +4208,9 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                     {lassoPath && lassoPath.length > 1 && (
                       <path d={lassoPathD(lassoPath)} fill="rgba(91,157,255,0.15)" stroke="var(--accent)" strokeDasharray="6" strokeWidth="1.5"/>
                     )}
+                    {tool==="laser" && laserPoints.map((p, i) => (
+                      <circle key={p.id} cx={p.x} cy={p.y} r={Math.max(2, 6 - (laserPoints.length - i) * 0.15)} fill="#ff3b3b" opacity={Math.max(0, 1 - (laserPoints.length - i) * 0.03)}/>
+                    ))}
                   </svg>
                 )}
                 {penMode && (tool==="pen"||tool==="highlighter") && (
@@ -3660,16 +4265,24 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   const top = (bbox.y-pad)/basePageSize.height*100;
                   const w = (bbox.w+pad*2)/basePageSize.width*100;
                   const h = (bbox.h+pad*2)/basePageSize.height*100;
+                  const toolbarLeft = (bbox.x+bbox.w/2)/basePageSize.width*100;
+                  const toolbarTop = (bbox.y-pad)/basePageSize.height*100;
                   return (
-                    <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
-                      {ann.type==="shape" && (
-                        <div
-                          className="pdfSelectionHandle"
-                          onPointerDown={(e)=>{ e.stopPropagation(); pushHistory(); dragRef.current={mode:"resize", id:ann.id}; }}
-                          onPointerUp={()=>{ dragRef.current=null; }}
-                        />
-                      )}
-                    </div>
+                    <React.Fragment>
+                      <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
+                        {(ann.type==="shape" || ann.type==="image") && (
+                          <div
+                            className="pdfSelectionHandle"
+                            onPointerDown={(e)=>{ e.stopPropagation(); pushHistory(); dragRef.current={mode:"resize", id:ann.id}; }}
+                            onPointerUp={()=>{ dragRef.current=null; }}
+                          />
+                        )}
+                      </div>
+                      <div className="lassoToolbar" style={{left:toolbarLeft+"%", top:toolbarTop+"%"}} onPointerDown={e=>e.stopPropagation()}>
+                        <button className="lassoToolbarBtn" title="Copiar (cole em qualquer página com Ctrl+V)" onClick={copySelection}><Copy size={15}/></button>
+                        <button className="lassoToolbarBtn" title="Excluir" onClick={()=>{ pushHistory(); setDrawings(prev=>{ const next={...prev,[pageNum]:(prev[pageNum]||[]).filter(a=>a.id!==ann.id)}; scheduleDrawingsSave(next); return next; }); setSelectedAnnId(null); }}><Trash2 size={15}/></button>
+                      </div>
+                    </React.Fragment>
                   );
                 })()}
                 {penMode && tool==="lasso" && lassoSelectedIds.length > 0 && basePageSize.width>0 && (() => {
@@ -3695,6 +4308,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                           ))}
                         </div>
                         <span className="lassoToolbarDivider"/>
+                        <button className="lassoToolbarBtn" title="Copiar (cole em qualquer página com Ctrl+V)" onClick={copySelection}><Copy size={15}/></button>
                         <button className="lassoToolbarBtn" title="Excluir selecionados" onClick={deleteLassoSelection}><Trash2 size={15}/></button>
                       </div>
                     </React.Fragment>
@@ -4491,6 +5105,58 @@ function Whiteboard({ board, onClose, onSave }) {
     setElements(prev => prev.map(el => (lassoSelectedIds.includes(el.id) && el.type !== "image") ? { ...el, color: hex } : el));
   };
 
+  // ---- Duplicar seleção: como o quadro é uma superfície única (sem
+  // páginas), "colar" aqui cria uma cópia deslocada ao lado da original —
+  // não existe "trocar de página" pra colar em outro lugar.
+  const elementsClipboardRef = useRef([]);
+  const [boardClipboardCount, setBoardClipboardCount] = useState(0);
+  const copySelection = () => {
+    const ids = lassoSelectedIds.length ? lassoSelectedIds : (selectedId ? [selectedId] : []);
+    if (!ids.length) return;
+    const copied = elements.filter(el => ids.includes(el.id));
+    if (!copied.length) return;
+    elementsClipboardRef.current = JSON.parse(JSON.stringify(copied));
+    setBoardClipboardCount(copied.length);
+    toast?.("Copiado! Cole com o botão ou Ctrl+V.");
+  };
+  const pasteClipboard = () => {
+    const items = elementsClipboardRef.current;
+    if (!items.length) return;
+    pushHistory();
+    const offset = 24 / view.zoom;
+    const newIds = [];
+    const pasted = items.map(el => {
+      const id = crypto.randomUUID();
+      newIds.push(id);
+      const clone = { ...el, id };
+      if (clone.type === "text" || clone.type === "image") { clone.x += offset; clone.y += offset; }
+      else if (clone.type === "shape") {
+        clone.x1 += offset; clone.y1 += offset; clone.x2 += offset; clone.y2 += offset;
+        if (clone.cx != null) { clone.cx += offset; clone.cy += offset; }
+      } else if (clone.type === "stroke") {
+        clone.points = (clone.points || []).map(p => ({ ...p, x: p.x + offset, y: p.y + offset }));
+      }
+      return clone;
+    });
+    setElements(prev => [...prev, ...pasted]);
+    setTool("lasso");
+    setLassoSelectedIds(newIds);
+    setSelectedId(null);
+  };
+
+  // ---- Apontador laser: rastro visual temporário, nunca vira elemento salvo.
+  const [laserPoints, setLaserPoints] = useState([]);
+  const laserFadeRef = useRef(null);
+  const addLaserPoint = (x, y) => {
+    const id = Date.now() + Math.random();
+    setLaserPoints(pts => [...pts.slice(-40), { id, x, y }]);
+    clearTimeout(laserFadeRef.current);
+    laserFadeRef.current = setTimeout(() => setLaserPoints([]), 900);
+  };
+  useEffect(() => { if (tool !== "laser") setLaserPoints([]); }, [tool]);
+
+  const imageInputRef = useRef(null);
+
   // Calcula a visão ideal pra caber tudo que já existe no quadro (ou centraliza a origem, se estiver vazio).
   const fitToContent = () => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -4652,21 +5318,13 @@ function Whiteboard({ board, onClose, onSave }) {
 
   const addImageFromFile = (file) => {
     if (!file || !file.type?.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width; canvas.height = img.height;
-        canvas.getContext("2d").drawImage(img, 0, 0);
-        const dataUrl = canvas.toDataURL("image/png");
-        const rect = containerRef.current?.getBoundingClientRect();
-        const centerWorld = rect ? { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom } : { x: 0, y: 0 };
-        addImageAt(dataUrl, img.width, img.height, centerWorld.x, centerWorld.y);
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
+    // Comprime antes de guardar: essa imagem entra no JSON do quadro, então
+    // pesa em toda sincronização/abertura do quadro daqui pra frente.
+    compressImageForPage(file, 1400, 1400, 0.82).then(({ dataUrl, width, height }) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const centerWorld = rect ? { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom } : { x: 0, y: 0 };
+      addImageAt(dataUrl, width, height, centerWorld.x, centerWorld.y);
+    }).catch(e => console.error(e));
   };
 
   useEffect(() => {
@@ -4704,6 +5362,10 @@ function Whiteboard({ board, onClose, onSave }) {
       else if (matchesShortcut(e, getBinding(shortcuts, "toolText"))) setTool("text");
       else if (matchesShortcut(e, getBinding(shortcuts, "toolSelect"))) setTool("select");
       else if (matchesShortcut(e, getBinding(shortcuts, "toolLasso"))) setTool("lasso");
+      const tag = e.target?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable;
+      if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") copySelection();
+      if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v" && elementsClipboardRef.current.length) { e.preventDefault(); pasteClipboard(); }
     };
     const onKeyUp = (e) => {
       if (isShortcutReleaseKey(e, getBinding(shortcuts, "pan"))) spaceDownRef.current = false;
@@ -4772,7 +5434,7 @@ function Whiteboard({ board, onClose, onSave }) {
     // verdade) e toque numa tela sensível ao toque nunca desenham, apagam ou
     // criam formas/texto — só selecionam e movem objetos (ou navegam pelo
     // quadro, se tocar/clicar em área vazia).
-    if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso") {
+    if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso" && tool !== "laser") {
       // Antes de checar o hit-test normal, vê se o toque começou perto da
       // bolinha de redimensionar do item selecionado — sem isso, com o dedo
       // (impreciso) o clique quase sempre "erra" a bolinha por pouco e cai
@@ -4836,6 +5498,9 @@ function Whiteboard({ board, onClose, onSave }) {
       setLassoSelectedIds([]);
       lassoDrawRef.current = { points: [{ x, y }] };
       setLassoPath([{ x, y }]);
+    } else if (tool === "laser") {
+      isDrawingRef.current = e.pointerId;
+      addLaserPoint(x, y);
     }
   };
 
@@ -4894,6 +5559,7 @@ function Whiteboard({ board, onClose, onSave }) {
     }
     if (!isDrawingRef.current) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
+    if (tool === "laser") { addLaserPoint(x, y); return; }
     if (tool === "pen" || tool === "highlighter") {
       setLiveEl(prev => {
         if (!prev) return prev;
@@ -4936,6 +5602,7 @@ function Whiteboard({ board, onClose, onSave }) {
       return;
     }
     if (tool === "eraser") { eraseGestureRef.current = false; isDrawingRef.current = false; return; }
+    if (tool === "laser") { isDrawingRef.current = false; return; }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     if (!liveEl) return;
@@ -4969,13 +5636,9 @@ function Whiteboard({ board, onClose, onSave }) {
     if (!files.length) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     files.forEach(f => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => addImageAt(reader.result, img.width, img.height, x, y);
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(f);
+      compressImageForPage(f, 1400, 1400, 0.82)
+        .then(({ dataUrl, width, height }) => addImageAt(dataUrl, width, height, x, y))
+        .catch(err => console.error(err));
     });
   };
 
@@ -5103,6 +5766,9 @@ function Whiteboard({ board, onClose, onSave }) {
                   const pad = 8 / view.zoom;
                   return <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>;
                 })()}
+                {tool === "laser" && laserPoints.map((p, i) => (
+                  <circle key={p.id} cx={p.x} cy={p.y} r={Math.max(2, 6 - (laserPoints.length - i) * 0.15) / view.zoom} fill="#ff3b3b" opacity={Math.max(0, 1 - (laserPoints.length - i) * 0.03)}/>
+                ))}
               </g>
             </svg>
             {tool === "lasso" && lassoSelectedIds.length > 0 && (() => {
@@ -5120,6 +5786,7 @@ function Whiteboard({ board, onClose, onSave }) {
                     ))}
                   </div>
                   <span className="lassoToolbarDivider"/>
+                  <button className="lassoToolbarBtn" title="Copiar (cole com Ctrl+V)" onClick={copySelection}><Copy size={15}/></button>
                   <button className="lassoToolbarBtn" title="Excluir selecionados" onClick={deleteLassoSelection}><Trash2 size={15}/></button>
                 </div>
               );
@@ -5165,6 +5832,7 @@ function Whiteboard({ board, onClose, onSave }) {
                     </div>
                     <span className="lassoToolbarDivider"/>
                   </>)}
+                  <button className="lassoToolbarBtn" title="Copiar (cole com Ctrl+V)" onClick={copySelection}><Copy size={15}/></button>
                   <button className="lassoToolbarBtn" title="Excluir" onClick={deleteSelected}><Trash2 size={15}/></button>
                 </div>
               );
@@ -5226,8 +5894,15 @@ function Whiteboard({ board, onClose, onSave }) {
                 <span className="whiteboardDockDivider"/>
                 <button title="Selecionar" className={tool === "select" ? "active" : ""} onClick={() => setTool("select")}><MousePointer2 size={16}/></button>
                 <button title="Laço" className={tool === "lasso" ? "active" : ""} onClick={() => { setTool("lasso"); setSelectedId(null); }}><Lasso size={16}/></button>
+                <button title="Apontador laser (não fica salvo)" className={tool === "laser" ? "active" : ""} onClick={() => { setTool("laser"); setSelectedId(null); }}><Sparkle size={16}/></button>
                 <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/></button>
                 <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/></button>
+                <span className="whiteboardDockDivider"/>
+                <button title="Inserir imagem/print" onClick={()=>imageInputRef.current?.click()}><ImageIcon size={16}/></button>
+                <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={(e)=>{ const f=e.target.files?.[0]; if(f) addImageFromFile(f); e.target.value=""; }}/>
+                {boardClipboardCount > 0 && (
+                  <button title="Colar (Ctrl+V)" onClick={pasteClipboard}><ClipboardPaste size={16}/></button>
+                )}
                 <span className="whiteboardDockDivider"/>
                 <button title="Desfazer" onClick={undo}><Undo2 size={16}/></button>
                 <button title="Refazer" onClick={redo}><Redo2 size={16}/></button>
@@ -7680,6 +8355,10 @@ function Nivelamento(){
   };
   const undo = ()=>{ if(history.length===0) return; setHistory(h=>h.slice(0,-1)); };
   const restart = ()=>{ setHistory([]); setSeconds(0); setPaused(false); };
+  const clearHistory = ()=>{
+    if(!confirm("Apagar todo o histórico de nivelamento? Essa ação não pode ser desfeita.")) return;
+    setSessions([]);
+  };
   const exitRunning = ()=>{
     if(confirm("Sair do nivelamento em andamento? O progresso desta sessão não será salvo.")){
       clearInterval(timerRef.current);
@@ -7709,7 +8388,10 @@ function Nivelamento(){
       </div>
 
       {sessions.length>0 && <div className="levelHistorySection">
-        <h3>Histórico</h3>
+        <div className="levelHistoryHead">
+          <h3>Histórico</h3>
+          <button className="ghost levelClearHistoryBtn" onClick={clearHistory}><Trash2 size={14}/> Limpar histórico</button>
+        </div>
         <div className="levelHistoryList">
           {sessions.map((s,i)=>(
             <div className="levelHistoryItem" key={i}>
@@ -8194,12 +8876,33 @@ function Recurring({entity,transactions}){
   return <div className="content"><div className="panel"><div className="panelTitle"><h2>Pagamentos recorrentes</h2><span>Modelo para gerar despesas mensais</span></div><div className="inlineAdd"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Netflix"/><input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/><input value={day} onChange={e=>setDay(e.target.value)} type="number" min="1" max="31" placeholder="Dia"/><button onClick={submit}><Plus/></button></div></div><div className="panel">{data.map(x=><div className="transaction" key={x.id}><div><b>{x.name}</b><small>{x.cat} · todo dia {x.day}</small></div><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}{!data.length&&<p className="emptyHint">Cadastre assinaturas e contas mensais aqui.</p>}</div></div>;
 }
 
+const NOTE_TRASH_DAYS = 30; // itens na lixeira somem sozinhos depois desse prazo
+
 function Notes({entity, openNoteId, onConsumeOpenNote}){
   const { data, add, remove, update, reorder } = entity;
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeNote, setActiveNote] = useState(null);
   const [creating, setCreating] = useState(false);
   const [dragId, setDragId] = useState(null);
+  const [view, setView] = useState("notas"); // "notas" | "lixeira"
+  const [query, setQuery] = useState("");
+  const [tagFilter, setTagFilter] = useState(null);
+  const purgedRef = useRef(false);
+
+  const activeNotes = useMemo(() => data.filter(n => !n.deleted_at), [data]);
+  const trashedNotes = useMemo(() => data.filter(n => n.deleted_at), [data]);
+
+  // Some sozinho da lixeira depois de NOTE_TRASH_DAYS — roda uma vez por
+  // carregamento, não a cada render.
+  useEffect(() => {
+    if (purgedRef.current) return;
+    purgedRef.current = true;
+    const cutoff = Date.now() - NOTE_TRASH_DAYS * 24 * 60 * 60 * 1000;
+    trashedNotes.forEach(n => {
+      if (new Date(n.deleted_at).getTime() < cutoff) remove(n.id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!openNoteId) return;
@@ -8213,22 +8916,32 @@ function Notes({entity, openNoteId, onConsumeOpenNote}){
     if (!title) return;
     setCreating(true);
     try {
-      await add({ title, content: "" });
+      await add({ title, content: "", tags: [] });
     } finally {
       setCreating(false);
     }
   };
 
-  const handleDelete = async (note) => {
-    if (!confirm(`Excluir "${note.title}"?`)) return;
+  const handleTrash = async (note) => {
+    setOpenMenuId(null);
+    await update(note.id, { deleted_at: new Date().toISOString() });
+    if (activeNote?.id === note.id) setActiveNote(null);
+  };
+
+  const handleRestore = async (note) => {
+    setOpenMenuId(null);
+    await update(note.id, { deleted_at: null });
+  };
+
+  const handlePermanentDelete = async (note) => {
+    if (!confirm(`Excluir definitivamente "${note.title}"? Essa ação não pode ser desfeita.`)) return;
     setOpenMenuId(null);
     await remove(note.id);
-    if (activeNote?.id === note.id) setActiveNote(null);
   };
 
   const handleDrop = (targetId) => {
     if (dragId === null || dragId === targetId) { setDragId(null); return; }
-    const newData = [...data];
+    const newData = [...activeNotes];
     const fromIdx = newData.findIndex(n => n.id === dragId);
     const toIdx = newData.findIndex(n => n.id === targetId);
     setDragId(null);
@@ -8243,54 +8956,112 @@ function Notes({entity, openNoteId, onConsumeOpenNote}){
     return !text ? "Nota vazia" : (text.length > 90 ? text.slice(0, 90) + "…" : text);
   };
 
+  const allTags = useMemo(() => {
+    const set = new Set();
+    activeNotes.forEach(n => (n.tags || []).forEach(t => set.add(t)));
+    return [...set].sort();
+  }, [activeNotes]);
+
+  const visibleNotes = useMemo(() => {
+    const pool = view === "lixeira" ? trashedNotes : activeNotes;
+    const q = query.trim().toLowerCase();
+    return pool.filter(n => {
+      if (tagFilter && view !== "lixeira" && !(n.tags || []).includes(tagFilter)) return false;
+      if (!q) return true;
+      const hay = (n.title + " " + stripHtml(n.content) + " " + (n.tags || []).join(" ")).toLowerCase();
+      return hay.includes(q);
+    });
+  }, [view, activeNotes, trashedNotes, query, tagFilter]);
+
   return (
     <div className="content">
-      {data.length > 0 && (
-        <div className="notesActions">
-          <button className="ghost" onClick={() => downloadAllNotesPdf(data)}>
-            <Download size={15}/> Baixar todas em PDF
-          </button>
+      <div className="notesActions">
+        <div className="notesViewSwitch">
+          <button className={view==="notas"?"active":""} onClick={()=>setView("notas")}><StickyNote size={14}/> Minhas notas</button>
+          <button className={view==="lixeira"?"active":""} onClick={()=>setView("lixeira")}><Archive size={14}/> Lixeira{trashedNotes.length>0?` (${trashedNotes.length})`:""}</button>
+        </div>
+        <div className="notesSearchRow">
+          <div className="notesSearchBox">
+            <Search size={14}/>
+            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder={view==="lixeira"?"Buscar na lixeira...":"Buscar em título, texto ou tags..."}/>
+          </div>
+          {view==="notas" && activeNotes.length > 0 && (
+            <button className="ghost" onClick={() => downloadAllNotesPdf(activeNotes)}>
+              <Download size={15}/> Baixar todas em PDF
+            </button>
+          )}
+        </div>
+      </div>
+
+      {view==="notas" && allTags.length > 0 && (
+        <div className="notesTagChips">
+          <button className={tagFilter===null?"active":""} onClick={()=>setTagFilter(null)}>Todas</button>
+          {allTags.map(t => (
+            <button key={t} className={tagFilter===t?"active":""} onClick={()=>setTagFilter(f=>f===t?null:t)}>#{t}</button>
+          ))}
         </div>
       )}
+
+      {view==="lixeira" && trashedNotes.length > 0 && (
+        <p className="emptyHint notesTrashHint">Notas na lixeira somem sozinhas depois de {NOTE_TRASH_DAYS} dias.</p>
+      )}
+
       <div className="notesGrid" onClick={() => setOpenMenuId(null)}>
-        <div className="noteTile addTile" onClick={createNote}>
-          <div className="noteCoverWrap addCover">
-            {creating ? <span>Criando...</span> : <><Plus size={26}/><span>Nova nota</span></>}
+        {view==="notas" && (
+          <div className="noteTile addTile" onClick={createNote}>
+            <div className="noteCoverWrap addCover">
+              {creating ? <span>Criando...</span> : <><Plus size={26}/><span>Nova nota</span></>}
+            </div>
           </div>
-        </div>
-        {data.map(note => (
+        )}
+        {visibleNotes.map(note => (
           <div
             className={"noteTile"+(dragId===note.id?" dragging":"")}
             key={note.id}
-            draggable
+            draggable={view==="notas"}
             onDragStart={(e)=>{ e.stopPropagation(); setDragId(note.id); e.dataTransfer.effectAllowed="move"; }}
             onDragOver={(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; }}
             onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); handleDrop(note.id); }}
             onDragEnd={()=>setDragId(null)}
           >
-            <div className="noteCoverWrap" onClick={() => setActiveNote(note)}>
+            <div className="noteCoverWrap" onClick={() => view==="notas" ? setActiveNote(note) : null}>
               <b className="noteTitle">{note.title}</b>
               <p className="notePreview">{preview(note.content)}</p>
+              <div className="noteTileFoot">
+                {(note.tags||[]).length > 0 && <span className="noteTileTags">{(note.tags||[]).slice(0,3).map(t=>`#${t}`).join(" ")}</span>}
+                <small className="noteTileTime">{view==="lixeira" ? `excluída ${timeAgo(note.deleted_at)}` : (note.updated_at ? `editado ${timeAgo(note.updated_at)}` : "")}</small>
+              </div>
             </div>
             <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === note.id ? null : note.id); }}>
               <MoreVertical size={15}/>
             </button>
-            {openMenuId === note.id && (
+            {openMenuId === note.id && view==="notas" && (
               <div className="bookMenu" onClick={e => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setActiveNote(note); }}><StickyNote size={14}/> Abrir</button>
                 <button onClick={() => { setOpenMenuId(null); downloadNotePdf(note); }}><Download size={14}/> Baixar PDF</button>
-                <button className="danger" onClick={() => handleDelete(note)}><Trash2 size={14}/> Excluir</button>
+                <button className="danger" onClick={() => handleTrash(note)}><Trash2 size={14}/> Mover para lixeira</button>
+              </div>
+            )}
+            {openMenuId === note.id && view==="lixeira" && (
+              <div className="bookMenu" onClick={e => e.stopPropagation()}>
+                <button onClick={() => handleRestore(note)}><ArchiveRestore size={14}/> Restaurar</button>
+                <button className="danger" onClick={() => handlePermanentDelete(note)}><Trash2 size={14}/> Excluir definitivamente</button>
               </div>
             )}
           </div>
         ))}
       </div>
-      {data.length === 0 && <p className="emptyHint">Nenhuma nota por aqui ainda.</p>}
+      {visibleNotes.length === 0 && view==="notas" && (
+        <p className="emptyHint">{activeNotes.length===0 ? "Nenhuma nota por aqui ainda." : "Nenhuma nota encontrada."}</p>
+      )}
+      {visibleNotes.length === 0 && view==="lixeira" && (
+        <p className="emptyHint">A lixeira está vazia.</p>
+      )}
       {activeNote && (
         <NoteEditor
           note={activeNote}
           onClose={() => setActiveNote(null)}
-          onSave={(patch) => update(activeNote.id, patch)}
+          onSave={(patch) => update(activeNote.id, { ...patch, updated_at: new Date().toISOString() })}
         />
       )}
     </div>
@@ -8304,14 +9075,22 @@ const EMOJIS = [
   "📌","📅","⏰","🎯","📝","🚀","🎉","☕","💰","📚"
 ];
 
+const NOTE_TEXT_COLORS = ["#f4f4f5", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
+const NOTE_HILITE_COLORS = ["transparent", "#ffe066", "#ffb3ab", "#a9e6a0", "#a9d4ff", "#e2b6ff"];
+
 function NoteEditor({ note, onClose, onSave }) {
   const [title, setTitle] = useState(note.title);
+  const [tags, setTags] = useState(note.tags || []);
+  const [tagInput, setTagInput] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
+  const [hiliteOpen, setHiliteOpen] = useState(false);
   const saveTimer = useRef(null);
   const bodyRef = useRef(null);
 
   useEffect(() => {
     setTitle(note.title);
+    setTags(note.tags || []);
     if (bodyRef.current) bodyRef.current.innerHTML = note.content || "";
   }, [note.id]);
 
@@ -8325,6 +9104,20 @@ function NoteEditor({ note, onClose, onSave }) {
     setTitle(v);
     scheduleSave({ title: v });
   };
+
+  const commitTags = (next) => {
+    setTags(next);
+    scheduleSave({ tags: next });
+  };
+
+  const addTagFromInput = () => {
+    const t = tagInput.trim().toLowerCase().replace(/^#/, "");
+    setTagInput("");
+    if (!t || tags.includes(t)) return;
+    commitTags([...tags, t]);
+  };
+
+  const removeTag = (t) => commitTags(tags.filter(x => x !== t));
 
   const handleBodyInput = () => {
     scheduleSave({ content: bodyRef.current?.innerHTML || "" });
@@ -8344,6 +9137,21 @@ function NoteEditor({ note, onClose, onSave }) {
     document.execCommand("insertText", false, emoji);
     setEmojiOpen(false);
     handleBodyInput();
+  };
+
+  const applyTextColor = (c) => {
+    exec("foreColor", c);
+    setColorOpen(false);
+  };
+
+  const applyHilite = (c) => {
+    bodyRef.current?.focus();
+    // hiliteColor é o comando padrão; backColor é o fallback usado por
+    // alguns navegadores mais antigos para o mesmo efeito.
+    const ok = document.execCommand("hiliteColor", false, c);
+    if (!ok) document.execCommand("backColor", false, c);
+    handleBodyInput();
+    setHiliteOpen(false);
   };
 
   // Cria a estrutura de um item de marcação (caixinha + texto)
@@ -8476,10 +9284,45 @@ function NoteEditor({ note, onClose, onSave }) {
           <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           <button onClick={handleClose}><X/></button>
         </div>
+        <div className="noteTagsRow">
+          <Tags size={14}/>
+          {tags.map(t => (
+            <span key={t} className="noteTagChip">#{t} <button onClick={()=>removeTag(t)}><X size={11}/></button></span>
+          ))}
+          <input
+            className="noteTagInput"
+            value={tagInput}
+            onChange={e=>setTagInput(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter"||e.key===","){ e.preventDefault(); addTagFromInput(); } }}
+            onBlur={addTagFromInput}
+            placeholder={tags.length?"+ tag":"Adicionar tag..."}
+          />
+        </div>
         <div className="noteToolbar" onMouseDown={keepFocus}>
           <button title="Negrito" onClick={() => exec("bold")}><Bold size={16}/></button>
           <button title="Itálico" onClick={() => exec("italic")}><Italic size={16}/></button>
           <button title="Sublinhado" onClick={() => exec("underline")}><Underline size={16}/></button>
+          <span className="noteToolDivider"/>
+          <div className="emojiWrap">
+            <button title="Cor do texto" onClick={() => { setColorOpen(o => !o); setHiliteOpen(false); }}><Palette size={16}/></button>
+            {colorOpen && (
+              <div className="colorPopover">
+                {NOTE_TEXT_COLORS.map(c => (
+                  <button key={c} className="colorSwatch" style={{background:c}} onClick={() => applyTextColor(c)}/>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="emojiWrap">
+            <button title="Marca-texto" onClick={() => { setHiliteOpen(o => !o); setColorOpen(false); }}><PaintBucket size={16}/></button>
+            {hiliteOpen && (
+              <div className="colorPopover">
+                {NOTE_HILITE_COLORS.map(c => (
+                  <button key={c} className={"colorSwatch"+(c==="transparent"?" colorSwatchNone":"")} style={{background:c==="transparent"?undefined:c}} title={c==="transparent"?"Remover marca-texto":undefined} onClick={() => applyHilite(c)}/>
+                ))}
+              </div>
+            )}
+          </div>
           <span className="noteToolDivider"/>
           <div className="emojiWrap">
             <button title="Emoji" onClick={() => setEmojiOpen(o => !o)}><Smile size={16}/></button>
@@ -8492,7 +9335,10 @@ function NoteEditor({ note, onClose, onSave }) {
             )}
           </div>
           <span className="noteToolDivider"/>
+          <button title="Alinhar à esquerda" onClick={() => exec("justifyLeft")}><AlignLeft size={16}/></button>
           <button title="Centralizar texto" onClick={() => exec("justifyCenter")}><AlignCenter size={16}/></button>
+          <button title="Alinhar à direita" onClick={() => exec("justifyRight")}><AlignRight size={16}/></button>
+          <button title="Justificar" onClick={() => exec("justifyFull")}><AlignJustify size={16}/></button>
           <span className="noteToolDivider"/>
           <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={16}/></button>
           <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
@@ -8500,7 +9346,7 @@ function NoteEditor({ note, onClose, onSave }) {
           <span className="noteToolDivider"/>
           <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
         </div>
-        <div className="noteEditorBody" onClick={() => setEmojiOpen(false)}>
+        <div className="noteEditorBody" onClick={() => { setEmojiOpen(false); setColorOpen(false); setHiliteOpen(false); }}>
           <div
             ref={bodyRef}
             className="noteTextarea noteRichBody"

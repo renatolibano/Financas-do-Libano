@@ -256,6 +256,9 @@ const SHAPE_3D_TYPES = new Set(["cube", "pyramid", "cylinder", "cone", "sphere"]
 // ---------------------------------------------------------------------------
 
 export function hitTestAnnotation(ann, x, y, tol = 6) {
+  if (ann.type === "image") {
+    return x >= ann.x - tol && x <= ann.x + ann.width + tol && y >= ann.y - tol && y <= ann.y + ann.height + tol;
+  }
   if (ann.type === "text") {
     const w = ann.width ?? Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
     const h = ann.height ?? ann.fontSize * 1.3;
@@ -299,6 +302,7 @@ export function findAnnotationAt(list, x, y, tol = 6) {
 }
 
 export function annotationBBox(ann) {
+  if (ann.type === "image") return { x: ann.x, y: ann.y, w: ann.width, h: ann.height };
   if (ann.type === "text") {
     const w = ann.width ?? Math.max(30, (ann.content?.length || 4) * ann.fontSize * 0.55);
     const h = ann.height ?? ann.fontSize * 1.3;
@@ -324,6 +328,7 @@ export function annotationBBox(ann) {
 }
 
 export function translateAnnotation(ann, dx, dy) {
+  if (ann.type === "image") return { ...ann, x: ann.x + dx, y: ann.y + dy };
   if (ann.type === "text") return { ...ann, x: ann.x + dx, y: ann.y + dy };
   if (ann.type === "shape") {
     const next = { ...ann, x1: ann.x1 + dx, y1: ann.y1 + dy, x2: ann.x2 + dx, y2: ann.y2 + dy };
@@ -336,6 +341,12 @@ export function translateAnnotation(ann, dx, dy) {
 
 // Redimensiona uma forma (ou a caixa de um texto) arrastando o "cantinho".
 export function resizeShapeAnnotation(ann, x, y) {
+  if (ann.type === "image") {
+    // Mantém a proporção original da imagem ao redimensionar pelo cantinho.
+    const w = Math.max(24, x - ann.x);
+    const ratio = ann.height / ann.width || 1;
+    return { ...ann, width: w, height: w * ratio };
+  }
   if (ann.type === "text") {
     const minW = 60, minH = Math.max(24, ann.fontSize * 1.3);
     return { ...ann, width: Math.max(minW, x - ann.x), height: Math.max(minH, y - ann.y) };
@@ -355,6 +366,9 @@ export function resizeShapeAnnotation(ann, x, y) {
 // Para formas e textos, a borracha parcial se comporta como objeto (some
 // inteiro) por não fazer sentido "recortar" um retângulo/círculo.
 export function eraseAnnotationAtPoint(ann, x, y, radius) {
+  // Imagens nunca somem com a borracha (só apagando o objeto inteiro, à mão,
+  // pela seleção) — assim rabiscar/apagar por cima de um print não o remove junto.
+  if (ann.type === "image") return [ann];
   if (ann.type === "text" || ann.type === "shape") {
     return hitTestAnnotation(ann, x, y, radius) ? [] : [ann];
   }
@@ -382,8 +396,30 @@ export function eraseAnnotationAtPoint(ann, x, y, radius) {
 // anotações "queimadas" nas páginas, renderizando cada página num canvas.
 // ---------------------------------------------------------------------------
 
-export function drawAnnotationOnCanvas(ctx, ann) {
+// Carrega uma dataURL num <img> e devolve uma Promise — usado só na
+// exportação (o desenho na tela usa <image> do SVG, que não precisa disso).
+function loadImageEl(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+export async function drawAnnotationOnCanvas(ctx, ann) {
   ctx.save();
+  if (ann.type === "image") {
+    try {
+      const img = await loadImageEl(ann.dataUrl || ann.src);
+      ctx.globalAlpha = ann.opacity ?? 1;
+      ctx.drawImage(img, ann.x, ann.y, ann.width, ann.height);
+    } catch (e) {
+      // imagem corrompida/indisponível: não trava a exportação do resto da página
+    }
+    ctx.restore();
+    return;
+  }
   if (ann.type === "stroke") {
     const uniform = ann.style === "marker" || ann.tool === "highlighter";
     const pts = getStrokeOutlinePoints(ann.points, ann.width, { uniform });
@@ -511,7 +547,7 @@ export async function exportAnnotatedPdf(pdfjsDoc, drawings, title) {
     if (pageAnns.length) {
       ctx.save();
       ctx.scale(exportScale, exportScale); // desenha em unidades de página (escala 1), igual à tela
-      for (const ann of pageAnns) drawAnnotationOnCanvas(ctx, ann);
+      for (const ann of pageAnns) await drawAnnotationOnCanvas(ctx, ann);
       ctx.restore();
     }
 

@@ -86,6 +86,63 @@ alter table todos enable row level security;
 alter table books enable row level security;
 alter table notes enable row level security;
 
+-- Atualização: status "lendo" (em andamento) na estante de livros — a
+-- constraint original só aceitava 'lido'/'quero_ler'.
+alter table books drop constraint if exists books_status_check;
+alter table books add constraint books_status_check check (status in ('lido','quero_ler','lendo'));
+
+-- Atualização: citações (trechos de texto selecionados e guardados) e
+-- pastas/coleções na estante de livros — mesmo padrão já usado pra
+-- organizar os PDFs de estudo.
+alter table books add column if not exists favorite_excerpts jsonb not null default '[]';
+create table if not exists book_groups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  sort_order int,
+  cover_image text,
+  created_at timestamptz not null default now()
+);
+alter table book_groups enable row level security;
+do $$ declare t text; begin foreach t in array array['book_groups'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
+alter table books add column if not exists group_id uuid references book_groups(id) on delete set null;
+
+-- Atualização: resumo mensal de leitura (Dashboard da biblioteca) — só um
+-- total por mês (não uma linha por página/sessão), pra o histórico nunca
+-- crescer sem limite nem pesar a busca do Dashboard com o tempo.
+create table if not exists reading_stats (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  month text not null, -- formato "AAAA-MM"
+  pages int not null default 0,
+  seconds int not null default 0,
+  books_completed int not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, month)
+);
+alter table reading_stats enable row level security;
+do $$
+begin
+  execute 'drop policy if exists "select_own_reading_stats" on reading_stats';
+  execute 'drop policy if exists "insert_own_reading_stats" on reading_stats';
+  execute 'drop policy if exists "update_own_reading_stats" on reading_stats';
+  execute 'drop policy if exists "delete_own_reading_stats" on reading_stats';
+  execute 'create policy "select_own_reading_stats" on reading_stats for select using (auth.uid() = user_id)';
+  execute 'create policy "insert_own_reading_stats" on reading_stats for insert with check (auth.uid() = user_id)';
+  execute 'create policy "update_own_reading_stats" on reading_stats for update using (auth.uid() = user_id)';
+  execute 'create policy "delete_own_reading_stats" on reading_stats for delete using (auth.uid() = user_id)';
+end $$;
+
 -- Atualização: estante de PDFs
 -- Adiciona as colunas usadas pelo leitor (arquivo, total de páginas, página atual)
 -- e cria o bucket de armazenamento privado onde os PDFs ficam guardados.
@@ -100,6 +157,9 @@ alter table books add column if not exists notes text;
 -- Atualização: ordem manual (arrastar e soltar) para livros e notas
 alter table books add column if not exists sort_order int;
 alter table notes add column if not exists sort_order int;
+alter table notes add column if not exists updated_at timestamptz not null default now();
+alter table notes add column if not exists deleted_at timestamptz;
+alter table notes add column if not exists tags text[] not null default '{}';
 
 -- Atualização: leitor de livros ganha zoom, busca, tela cheia, modo escuro e
 -- páginas favoritas/importantes (mesmas ferramentas do Leitor de PDF de estudo)
