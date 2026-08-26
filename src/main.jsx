@@ -3547,19 +3547,24 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     const list = drawings[pageNum] || [];
     if (selectedAnnId) {
       const sel = list.find(a => a.id === selectedAnnId);
-      if (sel && sel.type === "shape" && Math.hypot(x - sel.x2, y - sel.y2) < 14) {
+      // A bolinha visível fica no canto da bbox + pad (mesma folga usada no
+      // render da pdfSelectionBox), então o alvo do clique precisa mirar
+      // nesse mesmo ponto — senão a área que responde ao toque fica
+      // deslocada da bolinha desenhada na tela.
+      const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
+      if (sel && sel.type === "shape" && Math.hypot(x - (sel.x2 + pad), y - (sel.y2 + pad)) < 14) {
         pushHistory();
         dragRef.current = { mode: "resize", id: sel.id };
         return;
       }
-      if (sel && sel.type === "image" && Math.hypot(x - (sel.x + sel.width), y - (sel.y + sel.height)) < 14) {
+      if (sel && sel.type === "image" && Math.hypot(x - (sel.x + sel.width + pad), y - (sel.y + sel.height + pad)) < 14) {
         pushHistory();
         dragRef.current = { mode: "resize", id: sel.id };
         return;
       }
       if (sel && sel.type === "stroke") {
         const b = annotationBBox(sel);
-        if (Math.hypot(x - (b.x + b.w), y - (b.y + b.h)) < 14) {
+        if (Math.hypot(x - (b.x + b.w + pad), y - (b.y + b.h + pad)) < 14) {
           pushHistory();
           dragRef.current = { mode: "resize", id: sel.id };
           return;
@@ -3633,7 +3638,11 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         if (boxes.length) {
           const b = unionBBox(boxes);
           const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
-          if (Math.hypot(x - (b.x + b.w), y - (b.y + b.h)) < 14) {
+          // A bolinha é desenhada no canto + pad (mesma conta usada no render
+          // da pdfSelectionBox), então o teste de clique tem que mirar nesse
+          // mesmo ponto — senão a área que realmente responde ao toque fica
+          // deslocada da bolinha que aparece na tela.
+          if (Math.hypot(x - (b.x + b.w + pad), y - (b.y + b.h + pad)) < 14) {
             pushHistory();
             lassoGroupDragRef.current = { mode: "resize" };
             return;
