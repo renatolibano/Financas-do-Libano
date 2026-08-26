@@ -354,20 +354,20 @@ export function resizeShapeAnnotation(ann, x, y) {
   if (ann.type === "stroke") {
     // Escala todos os pontos do traço a partir do canto oposto (fixo),
     // igual ao comportamento de imagem: o canto superior-esquerdo da caixa
-    // delimitadora fica parado e o traço todo (inclusive a espessura da
-    // caneta/marca-texto) acompanha proporcionalmente o cantinho arrastado.
+    // delimitadora fica parado e o traço todo acompanha proporcionalmente
+    // o cantinho arrastado. A espessura da caneta/marca-texto NÃO muda —
+    // fica sempre a mesma, esticando ou encolhendo só o traço em si.
     const box = annotationBBox(ann);
     const newW = Math.max(6, x - box.x);
     const newH = Math.max(6, y - box.y);
     const scaleX = newW / (box.w || newW || 1);
     const scaleY = newH / (box.h || newH || 1);
-    const scaleAvg = (scaleX + scaleY) / 2;
     const points = (ann.points || []).map((p) => ({
       ...p,
       x: box.x + (p.x - box.x) * scaleX,
       y: box.y + (p.y - box.y) * scaleY,
     }));
-    return { ...ann, points, width: Math.max(0.5, (ann.width || 1) * scaleAvg) };
+    return { ...ann, points };
   }
   if (ann.type !== "shape") return ann;
   const next = { ...ann, x2: x, y2: y };
@@ -377,6 +377,61 @@ export function resizeShapeAnnotation(ann, x, y) {
     next.r = Math.max(Math.abs(x - ann.x1), Math.abs(y - ann.y1)) / 2;
   }
   return next;
+}
+
+// Escala um elemento (de qualquer tipo) a partir de um ponto-âncora fixo —
+// usado no redimensionamento de um GRUPO selecionado pelo laço: todo mundo
+// escala junto mantendo as posições relativas, com o canto superior-esquerdo
+// da seleção (a âncora) parado no lugar, igual a puxar o cantinho de uma
+// caixa que envolve tudo.
+export function scaleAnnotationFromAnchor(ann, anchor, scaleX, scaleY) {
+  if (ann.type === "image") {
+    return {
+      ...ann,
+      x: anchor.x + (ann.x - anchor.x) * scaleX,
+      y: anchor.y + (ann.y - anchor.y) * scaleY,
+      width: Math.max(6, ann.width * scaleX),
+      height: Math.max(6, ann.height * scaleY),
+    };
+  }
+  if (ann.type === "text") {
+    const box = annotationBBox(ann);
+    return {
+      ...ann,
+      x: anchor.x + (ann.x - anchor.x) * scaleX,
+      y: anchor.y + (ann.y - anchor.y) * scaleY,
+      width: Math.max(30, box.w * scaleX),
+      height: Math.max(18, box.h * scaleY),
+    };
+  }
+  if (ann.type === "shape") {
+    // A espessura da linha (width) não muda — só a geometria (posição/tamanho).
+    const next = {
+      ...ann,
+      x1: anchor.x + (ann.x1 - anchor.x) * scaleX,
+      y1: anchor.y + (ann.y1 - anchor.y) * scaleY,
+      x2: anchor.x + (ann.x2 - anchor.x) * scaleX,
+      y2: anchor.y + (ann.y2 - anchor.y) * scaleY,
+    };
+    if (ann.cx != null) {
+      next.cx = anchor.x + (ann.cx - anchor.x) * scaleX;
+      next.cy = anchor.y + (ann.cy - anchor.y) * scaleY;
+      next.r = Math.max(2, ann.r * ((scaleX + scaleY) / 2));
+    }
+    return next;
+  }
+  if (ann.type === "stroke") {
+    // Espessura da caneta/marca-texto fica igual — só os pontos escalam.
+    return {
+      ...ann,
+      points: (ann.points || []).map((p) => ({
+        ...p,
+        x: anchor.x + (p.x - anchor.x) * scaleX,
+        y: anchor.y + (p.y - anchor.y) * scaleY,
+      })),
+    };
+  }
+  return ann;
 }
 
 // Borracha parcial: remove os pontos de um traço que caíram dentro do raio

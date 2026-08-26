@@ -37,7 +37,7 @@ import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
 import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
-  translateAnnotation, resizeShapeAnnotation, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
+  translateAnnotation, resizeShapeAnnotation, scaleAnnotationFromAnchor, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
   shape3DGeometry,
 } from "./lib/annotations";
 import Auth, { ResetPassword } from "./Auth";
@@ -3633,9 +3633,14 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         if (boxes.length) {
           const b = unionBBox(boxes);
           const pad = Math.max(basePageSize.width, basePageSize.height) * 0.012;
+          if (Math.hypot(x - (b.x + b.w), y - (b.y + b.h)) < 14) {
+            pushHistory();
+            lassoGroupDragRef.current = { mode: "resize" };
+            return;
+          }
           if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) {
             pushHistory();
-            lassoGroupDragRef.current = { lastX: x, lastY: y };
+            lassoGroupDragRef.current = { mode: "move", lastX: x, lastY: y };
             return;
           }
         }
@@ -3671,6 +3676,22 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       if (lassoGroupDragRef.current) {
         const { x, y } = toPageCoords(e.clientX, e.clientY);
         const drag = lassoGroupDragRef.current;
+        if (drag.mode === "resize") {
+          setDrawings(prev => {
+            const list = prev[pageNum] || [];
+            const selected = list.filter(a => lassoSelectedIds.includes(a.id));
+            if (!selected.length) return prev;
+            const box = unionBBox(selected.map(annotationBBox));
+            const anchor = { x: box.x, y: box.y };
+            const scaleX = Math.max(6, x - anchor.x) / (box.w || 1);
+            const scaleY = Math.max(6, y - anchor.y) / (box.h || 1);
+            const next = list.map(a => lassoSelectedIds.includes(a.id) ? scaleAnnotationFromAnchor(a, anchor, scaleX, scaleY) : a);
+            const nextAll = { ...prev, [pageNum]: next };
+            scheduleDrawingsSave(nextAll);
+            return nextAll;
+          });
+          return;
+        }
         const dx = x - drag.lastX, dy = y - drag.lastY;
         drag.lastX = x; drag.lastY = y;
         setDrawings(prev => {
@@ -4307,7 +4328,13 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
                   const toolbarTop = (b.y-pad)/basePageSize.height*100;
                   return (
                     <React.Fragment>
-                      <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}/>
+                      <div className="pdfSelectionBox" style={{left:left+"%", top:top+"%", width:w+"%", height:h+"%"}}>
+                        <div
+                          className="pdfSelectionHandle"
+                          onPointerDown={(e)=>{ e.stopPropagation(); pushHistory(); lassoGroupDragRef.current={mode:"resize"}; }}
+                          onPointerUp={()=>{ lassoGroupDragRef.current=null; }}
+                        />
+                      </div>
                       <div className="lassoToolbar" style={{left:toolbarLeft+"%", top:toolbarTop+"%"}} onPointerDown={e=>e.stopPropagation()}>
                         <span className="lassoToolbarLabel">COR</span>
                         <div className="lassoToolbarColors">
@@ -5450,9 +5477,10 @@ function Whiteboard({ board, onClose, onSave }) {
       let nearResizeHandle = false;
       if (selectedId) {
         const sel = elements.find(a => a.id === selectedId);
-        if (sel && (sel.type === "shape" || sel.type === "image")) {
-          const cx = sel.type === "image" ? sel.x + sel.width : sel.x2;
-          const cy = sel.type === "image" ? sel.y + sel.height : sel.y2;
+        if (sel && (sel.type === "shape" || sel.type === "image" || sel.type === "text" || sel.type === "stroke")) {
+          const b = elementBBox(sel);
+          const cx = sel.type === "shape" ? sel.x2 : b.x + b.w;
+          const cy = sel.type === "shape" ? sel.y2 : b.y + b.h;
           nearResizeHandle = Math.hypot(x - cx, y - cy) < 20 / view.zoom;
         }
       }
@@ -5496,9 +5524,14 @@ function Whiteboard({ board, onClose, onSave }) {
         if (boxes.length) {
           const b = unionBBox(boxes);
           const pad = 10 / view.zoom;
+          if (Math.hypot(x - (b.x + b.w), y - (b.y + b.h)) < 18 / view.zoom) {
+            pushHistory();
+            lassoGroupDragRef.current = { mode: "resize" };
+            return;
+          }
           if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) {
             pushHistory();
-            lassoGroupDragRef.current = { lastX: x, lastY: y };
+            lassoGroupDragRef.current = { mode: "move", lastX: x, lastY: y };
             return;
           }
         }
@@ -5554,6 +5587,18 @@ function Whiteboard({ board, onClose, onSave }) {
     if (lassoGroupDragRef.current) {
       const { x, y } = toWorld(e.clientX, e.clientY);
       const drag = lassoGroupDragRef.current;
+      if (drag.mode === "resize") {
+        setElements(prev => {
+          const selected = prev.filter(a => lassoSelectedIds.includes(a.id));
+          if (!selected.length) return prev;
+          const box = unionBBox(selected.map(elementBBox));
+          const anchor = { x: box.x, y: box.y };
+          const scaleX = Math.max(6 / view.zoom, x - anchor.x) / (box.w || 1);
+          const scaleY = Math.max(6 / view.zoom, y - anchor.y) / (box.h || 1);
+          return prev.map(a => lassoSelectedIds.includes(a.id) ? scaleAnnotationFromAnchor(a, anchor, scaleX, scaleY) : a);
+        });
+        return;
+      }
       const dx = x - drag.lastX, dy = y - drag.lastY;
       drag.lastX = x; drag.lastY = y;
       setElements(prev => prev.map(a => lassoSelectedIds.includes(a.id) ? translateElement(a, dx, dy) : a));
@@ -5772,7 +5817,16 @@ function Whiteboard({ board, onClose, onSave }) {
                   if (!boxes.length) return null;
                   const b = unionBBox(boxes);
                   const pad = 8 / view.zoom;
-                  return <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>;
+                  const onResizeStart = e => { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {} pushHistory(); lassoGroupDragRef.current = { mode: "resize" }; };
+                  return (
+                    <g>
+                      <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="var(--accent)" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom}/>
+                      <g style={{ cursor: "nwse-resize" }} onPointerDown={onResizeStart}>
+                        <circle cx={b.x + b.w + pad} cy={b.y + b.h + pad} r={18 / view.zoom} fill="transparent"/>
+                        <circle cx={b.x + b.w + pad} cy={b.y + b.h + pad} r={6 / view.zoom} fill="var(--accent)" pointerEvents="none"/>
+                      </g>
+                    </g>
+                  );
                 })()}
                 {tool === "laser" && laserPoints.map((p, i) => (
                   <circle key={p.id} cx={p.x} cy={p.y} r={Math.max(2, 6 - (laserPoints.length - i) * 0.15) / view.zoom} fill="#ff3b3b" opacity={Math.max(0, 1 - (laserPoints.length - i) * 0.03)}/>
