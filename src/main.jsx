@@ -57,6 +57,7 @@ import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell 
 import { LanguagePicker } from "./components/languagePicker";
 import { languageName } from "./lib/languages";
 import { fetchTranslationSuggestions } from "./lib/translate";
+import { uploadFlashcardImage, deleteFlashcardImage } from "./lib/flashcardImages";
 
 const initialTransactions = [
   {id:1, desc:"Salário", cat:"Renda", value:3000, type:"in", date:"11/08"},
@@ -162,7 +163,15 @@ function App({session,theme,setTheme}){
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at"});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
   const studyFlashcards = useEntity("study_flashcards", [], session);
-  const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {orderable:true});
+  const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {
+    orderable: true,
+    // A listagem (grade de listas) só precisa desses campos pra mostrar o
+    // título/descrição/contagem — o jsonb `cards` (que pode ter fotos e HTML
+    // pesado) só é buscado com fetchFull(), no momento de estudar ou editar
+    // uma lista específica. Isso evita rebaixar todas as fotos/termos de
+    // todas as listas toda vez que a aba Flashcards é aberta.
+    listSelect: "id,title,description,folder_id,sort_order,created_at,completed,term_lang,definition_lang,card_count",
+  });
   const studyFlashcardFolders = useEntity("study_flashcard_folders", [], session, "asc", {orderable:true});
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
@@ -492,7 +501,7 @@ function App({session,theme,setTheme}){
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
-      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals}/>}
+      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session}/>}
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises}/>}
@@ -1206,6 +1215,36 @@ function resizeImageToDataUrl(file, maxWidth, maxHeight, quality = 0.85) {
         canvas.height = height;
         canvas.getContext("2d").drawImage(img, 0, 0, width, height);
         resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Igual a resizeImageToDataUrl, mas devolve um Blob (JPEG) em vez de uma
+// string base64 — usado quando o destino é upload pro Storage, pra não pagar
+// o custo de ~33% a mais de tamanho que o base64 tem sobre o binário original.
+function resizeImageToBlob(file, maxWidth, maxHeight, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Arquivo não é uma imagem válida"));
+      img.onload = () => {
+        let { width, height } = img;
+        const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error("Falha ao gerar imagem")); return; }
+          resolve(blob);
+        }, "image/jpeg", quality);
       };
       img.src = reader.result;
     };
@@ -7332,9 +7371,9 @@ function FlashcardTile({ card, onDelete }) {
 const rid = () => Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 const shuffleArr = (arr) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
 
-function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
+function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, session }) {
   const { data: pdfCards, remove: removePdfCard } = entity;
-  const { data: lists, add: addList, remove: removeList, update: updateList } = listsEntity;
+  const { data: lists, add: addList, remove: removeList, update: updateList, fetchFull: fetchFullList } = listsEntity;
   const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
 
   const [openFolderId, setOpenFolderId] = useState(null);
@@ -7342,10 +7381,32 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
   const [listForm, setListForm] = useState(null); // null | "new" | list being edited
   const [viewingListId, setViewingListId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null); // "list:<id>" | "folder:<id>"
+  const [openingListId, setOpeningListId] = useState(null); // id cujo `cards` completo está sendo buscado
 
   const viewingList = viewingListId ? lists.find(l => l.id === viewingListId) : null;
   const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
   const visibleLists = lists.filter(l => (l.folder_id || null) === openFolderId);
+
+  const openListToStudy = async (id) => {
+    setOpeningListId(id);
+    try {
+      await fetchFullList(id);
+      setViewingListId(id);
+    } finally {
+      setOpeningListId(null);
+    }
+  };
+
+  const openListToEdit = async (l) => {
+    setOpenMenuId(null);
+    setOpeningListId(l.id);
+    try {
+      const full = await fetchFullList(l.id);
+      setListForm(full || l);
+    } finally {
+      setOpeningListId(null);
+    }
+  };
 
   const confirmDeleteList = (id) => { setOpenMenuId(null); if (confirm("Excluir esta lista de cartões?")) removeList(id); };
   const confirmDeleteFolder = (id) => {
@@ -7369,6 +7430,7 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
     return <FlashcardListForm
       list={listForm === "new" ? null : listForm}
       defaultFolderId={openFolderId}
+      session={session}
       onCancel={() => setListForm(null)}
       onSave={(payload) => {
         if (listForm === "new") addList(payload); else updateList(listForm.id, payload);
@@ -7435,18 +7497,20 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
               <p className="emptyHint">Nenhuma lista {currentFolder ? "nesta pasta" : "por aqui"} ainda.</p>
             ) : (
               <div className="flashListGrid">
-                {visibleLists.map(l => (
+                {visibleLists.map(l => {
+                  const cardCount = l.card_count ?? l.cards?.length ?? 0;
+                  return (
                   <div key={l.id} className="flashListTile">
-                    <span className="flashListBadge"><Layers size={12}/> {l.cards.length} termo{l.cards.length===1?"":"s"}</span>
+                    <span className="flashListBadge"><Layers size={12}/> {cardCount} termo{cardCount===1?"":"s"}</span>
                     <h4>{l.title || "Lista sem título"}</h4>
                     <p>{l.description || "Sem descrição"}</p>
                     <div className="flashListTileFoot">
-                      <button className="flashStudyBtn" onClick={() => setViewingListId(l.id)}><Zap size={14}/> Estudar</button>
+                      <button className="flashStudyBtn" disabled={openingListId===l.id} onClick={() => openListToStudy(l.id)}><Zap size={14}/> {openingListId===l.id ? "Abrindo..." : "Estudar"}</button>
                       <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id===`list:${l.id}`?null:`list:${l.id}`); }}><MoreVertical size={16}/></button>
                     </div>
                     {openMenuId===`list:${l.id}` && (
                       <div className="flashMenuPop" onClick={e=>e.stopPropagation()}>
-                        <button onClick={()=>{ setOpenMenuId(null); setListForm(l); }}><Pencil size={13}/> Editar</button>
+                        <button onClick={()=>openListToEdit(l)}><Pencil size={13}/> Editar</button>
                         {folders.length>0 && (
                           <select defaultValue="__placeholder__" onClick={e=>e.stopPropagation()} onChange={(e)=>{ const v=e.target.value; updateList(l.id, {folder_id: v==="__none__" ? null : v}); setOpenMenuId(null); }}>
                             <option value="__placeholder__" disabled>Mover para pasta...</option>
@@ -7458,7 +7522,8 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals }) {
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -7504,7 +7569,7 @@ function FolderModal({ folder, onClose, onSave }) {
   );
 }
 
-function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
+function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave }) {
   const [title, setTitle] = useState(list?.title || "");
   const [description, setDescription] = useState(list?.description || "");
   // Par de idiomas do termo/definição — usado só pra dar sugestão de tradução
@@ -7520,7 +7585,16 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
   const [importText, setImportText] = useState("");
 
   const setRow = (id, field, value) => setRows(rs => rs.map(r => r.id===id ? {...r, [field]: value} : r));
-  const removeRow = (id) => setRows(rs => rs.filter(r => r.id !== id));
+  const removeRow = (id) => {
+    setRows(rs => {
+      const row = rs.find(r => r.id === id);
+      if (row?.image && cloudConfigured && session?.user?.id && row.image.includes("/flashcard_images/")) {
+        // Best-effort: não trava a remoção da linha se o storage falhar.
+        deleteFlashcardImage(session.user.id, id).catch(() => {});
+      }
+      return rs.filter(r => r.id !== id);
+    });
+  };
   const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null }]);
 
   const parseImportText = (text) => {
@@ -7590,14 +7664,34 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
     if (!file) return;
     setUploadingId(id);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 640, 640, 0.82);
-      setRow(id, "image", dataUrl);
+      if (cloudConfigured && session?.user?.id) {
+        // Logado na nuvem: sobe pro Storage e guarda só a URL no cartão — assim
+        // o navegador cacheia a imagem normalmente, em vez de baixar um base64
+        // embutido no JSON toda vez que a lista é carregada (isso é o que mais
+        // pesava no egress do plano gratuito nas listas com fotos).
+        const blob = await resizeImageToBlob(file, 640, 640, 0.82);
+        const url = await uploadFlashcardImage(session.user.id, id, blob);
+        setRow(id, "image", url);
+      } else {
+        // Modo local (sem login/Supabase configurado): não há onde subir o
+        // arquivo, então mantém o comportamento antigo de embutir o base64.
+        const dataUrl = await resizeImageToDataUrl(file, 640, 640, 0.82);
+        setRow(id, "image", dataUrl);
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
     } finally {
       setUploadingId(null);
     }
+  };
+
+  const handleRemoveRowImage = (id) => {
+    const row = rows.find(r => r.id === id);
+    if (row?.image && cloudConfigured && session?.user?.id && row.image.includes("/flashcard_images/")) {
+      deleteFlashcardImage(session.user.id, id).catch(() => {});
+    }
+    setRow(id, "image", null);
   };
 
   const submit = () => {
@@ -7610,6 +7704,7 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
       term_lang: termLang,
       definition_lang: defLang,
       cards,
+      card_count: cards.length,
       // Editar os cartões desmarca a lista como "estudada", já que o conteúdo revisado mudou —
       // isso também recoloca a meta vinculada (se houver) em andamento na próxima sincronização.
       ...(list ? { completed: false } : {})
@@ -7677,6 +7772,7 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
           onChangeField={setRow}
           onRemove={removeRow}
           onImage={handleRowImage}
+          onRemoveImage={handleRemoveRowImage}
           termLang={termLang}
           defLang={defLang}
         />
@@ -7689,7 +7785,7 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
 
 const FLASH_HIGHLIGHT_COLOR = "#997700";
 
-function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage, termLang, defLang }) {
+function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage, onRemoveImage, termLang, defLang }) {
   const termRef = useRef(null);
   const defRef = useRef(null);
 
@@ -7808,7 +7904,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
             )}
             <input type="file" accept="image/*" hidden onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if (f) onImage(row.id, f); }}/>
           </label>
-          {row.image && <button className="flashFormImageRemove" onClick={()=>onChangeField(row.id,"image",null)}><X size={12}/></button>}
+          {row.image && <button className="flashFormImageRemove" onClick={()=>onRemoveImage(row.id)}><X size={12}/></button>}
           <label>IMAGEM</label>
         </div>
       </div>

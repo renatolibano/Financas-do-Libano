@@ -726,3 +726,41 @@ create policy "update_shared_study_goals" on study_goals for update using (
        or (pl.user_b = study_goals.user_id and pl.user_a = auth.uid())
   )
 );
+
+-- Atualização: Storage para imagens de flashcards (listas estilo Quizlet).
+-- Antes, cada imagem ficava embutida como base64 direto no jsonb `cards` de
+-- study_flashcard_lists — isso fazia a página Flashcards baixar tudo de novo
+-- (imagens incluídas) toda vez que era aberta, mesmo sem editar nada. Com o
+-- Storage, o campo `image` de cada cartão passa a guardar só a URL pública,
+-- e o navegador cacheia a imagem normalmente em vez de rebaixá-la à toa.
+-- Bucket PÚBLICO (diferente de books/study_pdfs): a foto de um flashcard não
+-- é dado sensível, e URLs públicas permitem cache HTTP comum em <img>.
+-- Upload/edição/exclusão continuam restritos à própria pasta do usuário.
+insert into storage.buckets (id, name, public)
+values ('flashcard_images', 'flashcard_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_flashcard_images" on storage.objects;
+drop policy if exists "insert_own_flashcard_images" on storage.objects;
+drop policy if exists "update_own_flashcard_images" on storage.objects;
+drop policy if exists "delete_own_flashcard_images" on storage.objects;
+
+create policy "select_public_flashcard_images" on storage.objects for select
+  using (bucket_id = 'flashcard_images');
+create policy "insert_own_flashcard_images" on storage.objects for insert
+  with check (bucket_id = 'flashcard_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_flashcard_images" on storage.objects for update
+  using (bucket_id = 'flashcard_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_flashcard_images" on storage.objects for delete
+  using (bucket_id = 'flashcard_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: card_count denormalizado em study_flashcard_lists.
+-- A grade de listas (aba Flashcards) só mostrava "N termos" e por isso
+-- precisava buscar o jsonb `cards` inteiro (que pode ter fotos/HTML pesado)
+-- de TODAS as listas só pra contar os itens de cada uma. Com essa coluna, a
+-- listagem passa a pedir só os campos leves (ver listSelect no app) e o
+-- `cards` completo só é buscado quando uma lista específica é aberta (pra
+-- estudar ou editar).
+alter table study_flashcard_lists add column if not exists card_count int not null default 0;
+update study_flashcard_lists set card_count = jsonb_array_length(cards)
+  where card_count = 0 and jsonb_array_length(cards) <> 0;
