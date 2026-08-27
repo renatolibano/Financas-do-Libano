@@ -58,6 +58,12 @@ import { LanguagePicker } from "./components/languagePicker";
 import { languageName } from "./lib/languages";
 import { fetchTranslationSuggestions } from "./lib/translate";
 import { uploadFlashcardImage, deleteFlashcardImage } from "./lib/flashcardImages";
+import { uploadShoppingImage, deleteShoppingImage } from "./lib/shoppingImages";
+import { uploadMediaItemImage, deleteMediaItemImage, uploadMediaGroupCover, deleteMediaGroupCover } from "./lib/mediaImages";
+import { uploadGameItemImage, deleteGameItemImage, uploadGameGroupCover, deleteGameGroupCover } from "./lib/gameImages";
+import { uploadWorkoutFolderCover, deleteWorkoutFolderCover } from "./lib/workoutImages";
+import { uploadBookGroupCover, deleteBookGroupCover } from "./lib/bookGroupImages";
+import { uploadStudyPdfGroupCover, deleteStudyPdfGroupCover } from "./lib/studyPdfGroupImages";
 
 const initialTransactions = [
   {id:1, desc:"Salário", cat:"Renda", value:3000, type:"in", date:"11/08"},
@@ -491,7 +497,7 @@ function App({session,theme,setTheme}){
       {page==="Orçamento" && <Budgets entity={budgets} transactions={monthTransactions} month={selectedMonth}/>}
       {page==="Metas" && <Goals entity={goals} session={session}/>}
       {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
-      {page==="Lista de Compras" && <ShoppingList entity={shoppingItems}/>}
+      {page==="Lista de Compras" && <ShoppingList entity={shoppingItems} session={session}/>}
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
@@ -504,9 +510,9 @@ function App({session,theme,setTheme}){
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session}/>}
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
-      {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises}/>}
-      {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems}/>}
-      {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems}/>}
+      {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
+      {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
+      {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
 
       <ToastHost/>
 
@@ -2242,6 +2248,9 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
       ? `Excluir a pasta "${group.name}"? Os ${count} livro(s) dela voltam para fora da pasta (não são apagados).`
       : `Excluir a pasta "${group.name}"?`;
     if (!confirm(msg)) return;
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/book_group_images/")) {
+      deleteBookGroupCover(session.user.id, group.id).catch(() => {});
+    }
     await Promise.all(data.filter(b => b.group_id === group.id).map(b => update(b.id, { group_id: null })));
     await groupsEntity.remove(group.id);
     if (currentGroupId === group.id) setCurrentGroupId(null);
@@ -2250,8 +2259,14 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
   const handleSetGroupCover = async (group, file) => {
     setOpenMenuId(null);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
-      await groupsEntity.update(group.id, { cover_image: dataUrl });
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 360, 480, 0.85);
+        const url = await uploadBookGroupCover(session.user.id, group.id, blob);
+        await groupsEntity.update(group.id, { cover_image: url });
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
+        await groupsEntity.update(group.id, { cover_image: dataUrl });
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
@@ -2260,6 +2275,9 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
 
   const handleRemoveGroupCover = async (group) => {
     setOpenMenuId(null);
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/book_group_images/")) {
+      deleteBookGroupCover(session.user.id, group.id).catch(() => {});
+    }
     await groupsEntity.update(group.id, { cover_image: null });
   };
 
@@ -4761,6 +4779,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       ? `Excluir a pasta "${group.name}"? Os ${count} PDF(s) dela voltam para fora da pasta (não são apagados).`
       : `Excluir a pasta "${group.name}"?`;
     if (!confirm(msg)) return;
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/study_pdf_group_images/")) {
+      deleteStudyPdfGroupCover(session.user.id, group.id).catch(() => {});
+    }
     await Promise.all(data.filter(p => p.group_id === group.id).map(p => update(p.id, { group_id: null })));
     await groupsEntity.remove(group.id);
     if (currentGroupId === group.id) setCurrentGroupId(null);
@@ -4769,8 +4790,14 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
   const handleSetGroupCover = async (group, file) => {
     setOpenMenuId(null);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
-      await groupsEntity.update(group.id, { cover_image: dataUrl });
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 360, 480, 0.85);
+        const url = await uploadStudyPdfGroupCover(session.user.id, group.id, blob);
+        await groupsEntity.update(group.id, { cover_image: url });
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 360, 480, 0.85);
+        await groupsEntity.update(group.id, { cover_image: dataUrl });
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
@@ -4779,6 +4806,9 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
 
   const handleRemoveGroupCover = async (group) => {
     setOpenMenuId(null);
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/study_pdf_group_images/")) {
+      deleteStudyPdfGroupCover(session.user.id, group.id).catch(() => {});
+    }
     await groupsEntity.update(group.id, { cover_image: null });
   };
 
@@ -6053,14 +6083,19 @@ function Whiteboard({ board, onClose, onSave }) {
 
 // ---------- Lista de compras (Finanças) ----------
 
-function ShoppingList({ entity }) {
+function ShoppingList({ entity, session }) {
   const { data, add, remove, update } = entity;
   const [formOpen, setFormOpen] = useState(null); // null | "new" | item sendo editado
   const [openMenuId, setOpenMenuId] = useState(null);
 
   const confirmDelete = (item) => {
     setOpenMenuId(null);
-    if (confirm(`Excluir "${item.name}" da lista de compras?`)) remove(item.id);
+    if (confirm(`Excluir "${item.name}" da lista de compras?`)) {
+      if (item.photo && cloudConfigured && session?.user?.id && item.photo.includes("/shopping_images/")) {
+        deleteShoppingImage(session.user.id, item.id).catch(() => {});
+      }
+      remove(item.id);
+    }
   };
 
   return (
@@ -6104,9 +6139,10 @@ function ShoppingList({ entity }) {
       {formOpen && (
         <ShoppingItemModal
           item={formOpen === "new" ? null : formOpen}
+          session={session}
           onClose={() => setFormOpen(null)}
           onSave={(payload) => {
-            if (formOpen === "new") add({ id: crypto.randomUUID(), ...payload });
+            if (formOpen === "new") add(payload);
             else update(formOpen.id, payload);
             setFormOpen(null);
           }}
@@ -6140,7 +6176,8 @@ function ShoppingItemTile({ item, menuOpen, onToggleMenu, onEdit, onDelete }) {
   );
 }
 
-function ShoppingItemModal({ item, onClose, onSave }) {
+function ShoppingItemModal({ item, session, onClose, onSave }) {
+  const [itemId] = useState(() => item?.id || crypto.randomUUID());
   const [name, setName] = useState(item?.name || "");
   const [price, setPrice] = useState(item?.price ?? "");
   const [link, setLink] = useState(item?.link || "");
@@ -6152,8 +6189,16 @@ function ShoppingItemModal({ item, onClose, onSave }) {
     if (!file) return;
     setUploading(true);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      setPhoto(dataUrl);
+      if (cloudConfigured && session?.user?.id) {
+        // Sobe pro Storage e guarda só a URL — evita embutir o base64 no
+        // banco, que era baixado por inteiro toda vez que a lista abria.
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadShoppingImage(session.user.id, itemId, blob);
+        setPhoto(url);
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        setPhoto(dataUrl);
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
@@ -6161,9 +6206,16 @@ function ShoppingItemModal({ item, onClose, onSave }) {
     setUploading(false);
   };
 
+  const handleRemovePhoto = () => {
+    if (photo && cloudConfigured && session?.user?.id && photo.includes("/shopping_images/")) {
+      deleteShoppingImage(session.user.id, itemId).catch(() => {});
+    }
+    setPhoto("");
+  };
+
   const handleSubmit = () => {
     if (!name.trim()) return;
-    onSave({ name: name.trim(), price: price === "" ? null : Number(price), link: link.trim() || null, photo: photo || null });
+    onSave({ id: itemId, name: name.trim(), price: price === "" ? null : Number(price), link: link.trim() || null, photo: photo || null });
   };
 
   return (
@@ -6177,7 +6229,7 @@ function ShoppingItemModal({ item, onClose, onSave }) {
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleFile(f); }}/>
           <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>{uploading ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
-          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+          {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
         </label>
 
         <label>Nome do produto<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Tênis de corrida" onKeyDown={e => { if (e.key === "Enter" && name.trim()) handleSubmit(); }}/></label>
@@ -6204,7 +6256,7 @@ const workoutFmtValue = (ex) => {
   return `${Number(ex.value) || 0} repetições`;
 };
 
-function WorkoutShelf({ foldersEntity, exercisesEntity }) {
+function WorkoutShelf({ foldersEntity, exercisesEntity, session }) {
   const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
   const { data: exercises, add: addExercise, remove: removeExercise, update: updateExercise, reorder: reorderExercises } = exercisesEntity;
 
@@ -6226,14 +6278,26 @@ function WorkoutShelf({ foldersEntity, exercisesEntity }) {
   const handleSetCover = async (folder, file) => {
     setOpenMenuId(null);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      await updateFolder(folder.id, { cover_image: dataUrl });
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadWorkoutFolderCover(session.user.id, folder.id, blob);
+        await updateFolder(folder.id, { cover_image: url });
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        await updateFolder(folder.id, { cover_image: dataUrl });
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
     }
   };
-  const handleRemoveCover = (folder) => { setOpenMenuId(null); updateFolder(folder.id, { cover_image: null }); };
+  const handleRemoveCover = (folder) => {
+    setOpenMenuId(null);
+    if (folder.cover_image && cloudConfigured && session?.user?.id && folder.cover_image.includes("/workout_images/")) {
+      deleteWorkoutFolderCover(session.user.id, folder.id).catch(() => {});
+    }
+    updateFolder(folder.id, { cover_image: null });
+  };
 
   const confirmDeleteFolder = (folder) => {
     setOpenMenuId(null);
@@ -6242,6 +6306,9 @@ function WorkoutShelf({ foldersEntity, exercisesEntity }) {
       ? `Excluir o treino "${folder.name}"? Os ${count} exercício(s) dele também serão apagados.`
       : `Excluir o treino "${folder.name}"?`;
     if (!confirm(msg)) return;
+    if (folder.cover_image && cloudConfigured && session?.user?.id && folder.cover_image.includes("/workout_images/")) {
+      deleteWorkoutFolderCover(session.user.id, folder.id).catch(() => {});
+    }
     exercises.filter(e => e.folder_id === folder.id).forEach(e => removeExercise(e.id));
     removeFolder(folder.id);
     if (openFolderId === folder.id) setOpenFolderId(null);
@@ -6712,7 +6779,7 @@ function mediaStatusLabel(status) {
   return "Quero ver";
 }
 
-function MediaShelf({ groupsEntity, itemsEntity }) {
+function MediaShelf({ groupsEntity, itemsEntity, session }) {
   const { data: groups, add: addGroup, remove: removeGroup, update: updateGroup } = groupsEntity;
   const { data: items, add: addItem, remove: removeItem, update: updateItem } = itemsEntity;
 
@@ -6739,14 +6806,28 @@ function MediaShelf({ groupsEntity, itemsEntity }) {
   const handleSetCover = async (group, file) => {
     setOpenMenuId(null);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      await updateGroup(group.id, { cover_image: dataUrl });
+      if (cloudConfigured && session?.user?.id) {
+        // Sobe pro Storage e guarda só a URL — evita embutir o base64 no
+        // banco, rebaixado por inteiro toda vez que a estante era aberta.
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadMediaGroupCover(session.user.id, group.id, blob);
+        await updateGroup(group.id, { cover_image: url });
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        await updateGroup(group.id, { cover_image: dataUrl });
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
     }
   };
-  const handleRemoveCover = (group) => { setOpenMenuId(null); updateGroup(group.id, { cover_image: null }); };
+  const handleRemoveCover = (group) => {
+    setOpenMenuId(null);
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/media_images/")) {
+      deleteMediaGroupCover(session.user.id, group.id).catch(() => {});
+    }
+    updateGroup(group.id, { cover_image: null });
+  };
 
   const confirmDeleteGroup = (group) => {
     setOpenMenuId(null);
@@ -6755,20 +6836,35 @@ function MediaShelf({ groupsEntity, itemsEntity }) {
       ? `Excluir "${group.name}"? Os ${count} título(s) dentro dela também serão apagados.`
       : `Excluir "${group.name}"?`;
     if (!confirm(msg)) return;
-    items.filter(i => i.group_id === group.id).forEach(i => removeItem(i.id));
+    const cloudCleanup = cloudConfigured && session?.user?.id;
+    if (cloudCleanup && group.cover_image?.includes("/media_images/")) {
+      deleteMediaGroupCover(session.user.id, group.id).catch(() => {});
+    }
+    items.filter(i => i.group_id === group.id).forEach(i => {
+      if (cloudCleanup && i.photo?.includes("/media_images/")) {
+        deleteMediaItemImage(session.user.id, i.id).catch(() => {});
+      }
+      removeItem(i.id);
+    });
     removeGroup(group.id);
     if (currentGroupId === group.id) setCurrentGroupId(null);
   };
 
   const confirmDeleteItem = (item) => {
     setOpenMenuId(null);
-    if (confirm(`Excluir "${item.title}"?`)) removeItem(item.id);
+    if (confirm(`Excluir "${item.title}"?`)) {
+      if (item.photo && cloudConfigured && session?.user?.id && item.photo.includes("/media_images/")) {
+        deleteMediaItemImage(session.user.id, item.id).catch(() => {});
+      }
+      removeItem(item.id);
+    }
   };
 
   if (itemForm !== null) {
     return <MediaItemForm
       item={itemForm === "new" ? null : itemForm}
       kind={tab}
+      session={session}
       onCancel={() => setItemForm(null)}
       onSave={(payload) => {
         if (itemForm === "new") addItem({ kind: tab, group_id: currentGroupId, ...payload });
@@ -6965,8 +7061,9 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
   );
 }
 
-function MediaItemForm({ item, kind, onCancel, onSave }) {
+function MediaItemForm({ item, kind, session, onCancel, onSave }) {
   const isSeries = kind === "serie";
+  const [itemId] = useState(() => item?.id || crypto.randomUUID());
   const [title, setTitle] = useState(item?.title || "");
   const [link, setLink] = useState(item?.link || "");
   const [status, setStatus] = useState(item?.status || "quero_ver");
@@ -6983,8 +7080,14 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
     if (!file) return;
     setUploadingPhoto(true);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      setPhoto(dataUrl);
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadMediaItemImage(session.user.id, itemId, blob);
+        setPhoto(url);
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        setPhoto(dataUrl);
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
@@ -6993,13 +7096,20 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
     }
   };
 
+  const handleRemovePhoto = () => {
+    if (photo && cloudConfigured && session?.user?.id && photo.includes("/media_images/")) {
+      deleteMediaItemImage(session.user.id, itemId).catch(() => {});
+    }
+    setPhoto("");
+  };
+
   const setSeasonField = (season, field, value) => setSeasons(ss => ss.map(s => s.season === season ? { ...s, [field]: value } : s));
   const addSeason = () => setSeasons(ss => [...ss, { season: (Math.max(0, ...ss.map(s => Number(s.season) || 0)) + 1), total_episodes: 0, current_episode: 0 }]);
   const removeSeason = (season) => setSeasons(ss => ss.length > 1 ? ss.filter(s => s.season !== season) : ss);
 
   const handleSubmit = () => {
     if (!title.trim()) return;
-    const payload = { title: title.trim(), link: link.trim() || null, status, photo: photo || null };
+    const payload = { id: itemId, title: title.trim(), link: link.trim() || null, status, photo: photo || null };
     if (isSeries) {
       payload.has_seasons = hasSeasons;
       if (hasSeasons) {
@@ -7039,7 +7149,7 @@ function MediaItemForm({ item, kind, onCancel, onSave }) {
           </div>
           <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
           <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
-          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+          {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
         </label>
         <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder={isSeries ? "Ex.: Breaking Bad" : "Ex.: Interestelar"}/></label>
         <label>Link para assistir (opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
@@ -7091,7 +7201,7 @@ function gameFranchisePct(items) {
   return Math.round((done / items.length) * 100);
 }
 
-function GameShelf({ groupsEntity, itemsEntity }) {
+function GameShelf({ groupsEntity, itemsEntity, session }) {
   const { data: groups, add: addGroup, remove: removeGroup, update: updateGroup } = groupsEntity;
   const { data: items, add: addItem, remove: removeItem, update: updateItem } = itemsEntity;
 
@@ -7114,14 +7224,26 @@ function GameShelf({ groupsEntity, itemsEntity }) {
   const handleSetCover = async (group, file) => {
     setOpenMenuId(null);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      await updateGroup(group.id, { cover_image: dataUrl });
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadGameGroupCover(session.user.id, group.id, blob);
+        await updateGroup(group.id, { cover_image: url });
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        await updateGroup(group.id, { cover_image: dataUrl });
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
     }
   };
-  const handleRemoveCover = (group) => { setOpenMenuId(null); updateGroup(group.id, { cover_image: null }); };
+  const handleRemoveCover = (group) => {
+    setOpenMenuId(null);
+    if (group.cover_image && cloudConfigured && session?.user?.id && group.cover_image.includes("/game_images/")) {
+      deleteGameGroupCover(session.user.id, group.id).catch(() => {});
+    }
+    updateGroup(group.id, { cover_image: null });
+  };
 
   const confirmDeleteGroup = (group) => {
     setOpenMenuId(null);
@@ -7130,19 +7252,34 @@ function GameShelf({ groupsEntity, itemsEntity }) {
       ? `Excluir "${group.name}"? Os ${count} jogo(s) dentro dela também serão apagados.`
       : `Excluir "${group.name}"?`;
     if (!confirm(msg)) return;
-    items.filter(i => i.group_id === group.id).forEach(i => removeItem(i.id));
+    const cloudCleanup = cloudConfigured && session?.user?.id;
+    if (cloudCleanup && group.cover_image?.includes("/game_images/")) {
+      deleteGameGroupCover(session.user.id, group.id).catch(() => {});
+    }
+    items.filter(i => i.group_id === group.id).forEach(i => {
+      if (cloudCleanup && i.photo?.includes("/game_images/")) {
+        deleteGameItemImage(session.user.id, i.id).catch(() => {});
+      }
+      removeItem(i.id);
+    });
     removeGroup(group.id);
     if (currentGroupId === group.id) setCurrentGroupId(null);
   };
 
   const confirmDeleteItem = (item) => {
     setOpenMenuId(null);
-    if (confirm(`Excluir "${item.title}"?`)) removeItem(item.id);
+    if (confirm(`Excluir "${item.title}"?`)) {
+      if (item.photo && cloudConfigured && session?.user?.id && item.photo.includes("/game_images/")) {
+        deleteGameItemImage(session.user.id, item.id).catch(() => {});
+      }
+      removeItem(item.id);
+    }
   };
 
   if (itemForm !== null) {
     return <GameItemForm
       item={itemForm === "new" ? null : itemForm}
+      session={session}
       onCancel={() => setItemForm(null)}
       onSave={(payload) => {
         if (itemForm === "new") addItem({ group_id: currentGroupId, ...payload });
@@ -7294,7 +7431,8 @@ function GameItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusC
   );
 }
 
-function GameItemForm({ item, onCancel, onSave }) {
+function GameItemForm({ item, session, onCancel, onSave }) {
+  const [itemId] = useState(() => item?.id || crypto.randomUUID());
   const [title, setTitle] = useState(item?.title || "");
   const [link, setLink] = useState(item?.link || "");
   const [status, setStatus] = useState(item?.status || "quero_jogar");
@@ -7306,8 +7444,14 @@ function GameItemForm({ item, onCancel, onSave }) {
     if (!file) return;
     setUploadingPhoto(true);
     try {
-      const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-      setPhoto(dataUrl);
+      if (cloudConfigured && session?.user?.id) {
+        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
+        const url = await uploadGameItemImage(session.user.id, itemId, blob);
+        setPhoto(url);
+      } else {
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
+        setPhoto(dataUrl);
+      }
     } catch (e) {
       console.error(e);
       alert("Não foi possível usar essa imagem. Tente outra foto.");
@@ -7316,9 +7460,16 @@ function GameItemForm({ item, onCancel, onSave }) {
     }
   };
 
+  const handleRemovePhoto = () => {
+    if (photo && cloudConfigured && session?.user?.id && photo.includes("/game_images/")) {
+      deleteGameItemImage(session.user.id, itemId).catch(() => {});
+    }
+    setPhoto("");
+  };
+
   const handleSubmit = () => {
     if (!title.trim()) return;
-    onSave({ title: title.trim(), link: link.trim() || null, status, photo: photo || null });
+    onSave({ id: itemId, title: title.trim(), link: link.trim() || null, status, photo: photo || null });
   };
 
   return (
@@ -7338,7 +7489,7 @@ function GameItemForm({ item, onCancel, onSave }) {
           </div>
           <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
           <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
-          {photo && <button type="button" className="ghost" onClick={() => setPhoto("")}><X size={13}/> Remover foto</button>}
+          {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
         </label>
         <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: The Legend of Zelda: Tears of the Kingdom"/></label>
         <label>Link (loja, wiki etc. — opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>

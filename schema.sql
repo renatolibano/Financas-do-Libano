@@ -764,3 +764,132 @@ create policy "delete_own_flashcard_images" on storage.objects for delete
 alter table study_flashcard_lists add column if not exists card_count int not null default 0;
 update study_flashcard_lists set card_count = jsonb_array_length(cards)
   where card_count = 0 and jsonb_array_length(cards) <> 0;
+
+-- Atualização: Storage para fotos da Lista de Compras (shopping_items.photo).
+-- Mesmo padrão do flashcard_images: antes a foto ficava em base64 direto no
+-- jsonb/coluna, baixada por completo (todos os itens, todas as fotos) toda
+-- vez que a Lista de Compras abria. Agora o campo `photo` guarda só a URL
+-- pública, e o navegador cacheia a imagem normalmente entre uma abertura e
+-- outra da página.
+insert into storage.buckets (id, name, public)
+values ('shopping_images', 'shopping_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_shopping_images" on storage.objects;
+drop policy if exists "insert_own_shopping_images" on storage.objects;
+drop policy if exists "update_own_shopping_images" on storage.objects;
+drop policy if exists "delete_own_shopping_images" on storage.objects;
+
+create policy "select_public_shopping_images" on storage.objects for select
+  using (bucket_id = 'shopping_images');
+create policy "insert_own_shopping_images" on storage.objects for insert
+  with check (bucket_id = 'shopping_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_shopping_images" on storage.objects for update
+  using (bucket_id = 'shopping_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_shopping_images" on storage.objects for delete
+  using (bucket_id = 'shopping_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: Storage para fotos de Filmes e Séries (media_items.photo e
+-- media_groups.cover_image). Mesmo padrão de flashcard_images/shopping_images
+-- — um bucket só, com prefixo "item-"/"group-" dentro da pasta do usuário,
+-- pra não precisar de um bucket separado pra cada tipo de imagem.
+insert into storage.buckets (id, name, public)
+values ('media_images', 'media_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_media_images" on storage.objects;
+drop policy if exists "insert_own_media_images" on storage.objects;
+drop policy if exists "update_own_media_images" on storage.objects;
+drop policy if exists "delete_own_media_images" on storage.objects;
+
+create policy "select_public_media_images" on storage.objects for select
+  using (bucket_id = 'media_images');
+create policy "insert_own_media_images" on storage.objects for insert
+  with check (bucket_id = 'media_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_media_images" on storage.objects for update
+  using (bucket_id = 'media_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_media_images" on storage.objects for delete
+  using (bucket_id = 'media_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: Storage para fotos de Jogos (game_items.photo e
+-- game_groups.cover_image). Mesmo padrão de media_images: um bucket só, com
+-- prefixo "item-"/"group-" dentro da pasta do usuário.
+insert into storage.buckets (id, name, public)
+values ('game_images', 'game_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_game_images" on storage.objects;
+drop policy if exists "insert_own_game_images" on storage.objects;
+drop policy if exists "update_own_game_images" on storage.objects;
+drop policy if exists "delete_own_game_images" on storage.objects;
+
+create policy "select_public_game_images" on storage.objects for select
+  using (bucket_id = 'game_images');
+create policy "insert_own_game_images" on storage.objects for insert
+  with check (bucket_id = 'game_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_game_images" on storage.objects for update
+  using (bucket_id = 'game_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_game_images" on storage.objects for delete
+  using (bucket_id = 'game_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: Storage para capas de pasta de Treino (workout_folders.cover_image).
+-- Mesmo padrão dos outros buckets de imagem do app.
+insert into storage.buckets (id, name, public)
+values ('workout_images', 'workout_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_workout_images" on storage.objects;
+drop policy if exists "insert_own_workout_images" on storage.objects;
+drop policy if exists "update_own_workout_images" on storage.objects;
+drop policy if exists "delete_own_workout_images" on storage.objects;
+
+create policy "select_public_workout_images" on storage.objects for select
+  using (bucket_id = 'workout_images');
+create policy "insert_own_workout_images" on storage.objects for insert
+  with check (bucket_id = 'workout_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_workout_images" on storage.objects for update
+  using (bucket_id = 'workout_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_workout_images" on storage.objects for delete
+  using (bucket_id = 'workout_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: Storage para capas de pasta de Livros (book_groups.cover_image).
+-- Os livros individuais já eram otimizados (listSelect + cover_thumb pequeno);
+-- só as pastas ficavam de fora. Mesmo padrão dos outros buckets de imagem.
+insert into storage.buckets (id, name, public)
+values ('book_group_images', 'book_group_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_book_group_images" on storage.objects;
+drop policy if exists "insert_own_book_group_images" on storage.objects;
+drop policy if exists "update_own_book_group_images" on storage.objects;
+drop policy if exists "delete_own_book_group_images" on storage.objects;
+
+create policy "select_public_book_group_images" on storage.objects for select
+  using (bucket_id = 'book_group_images');
+create policy "insert_own_book_group_images" on storage.objects for insert
+  with check (bucket_id = 'book_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_book_group_images" on storage.objects for update
+  using (bucket_id = 'book_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_book_group_images" on storage.objects for delete
+  using (bucket_id = 'book_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: Storage para capas de pasta de PDFs de Estudo
+-- (study_pdf_groups.cover_image). Mesmo padrão de book_group_images: os
+-- PDFs individuais já eram otimizados, só as pastas ficavam de fora.
+insert into storage.buckets (id, name, public)
+values ('study_pdf_group_images', 'study_pdf_group_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_study_pdf_group_images" on storage.objects;
+drop policy if exists "insert_own_study_pdf_group_images" on storage.objects;
+drop policy if exists "update_own_study_pdf_group_images" on storage.objects;
+drop policy if exists "delete_own_study_pdf_group_images" on storage.objects;
+
+create policy "select_public_study_pdf_group_images" on storage.objects for select
+  using (bucket_id = 'study_pdf_group_images');
+create policy "insert_own_study_pdf_group_images" on storage.objects for insert
+  with check (bucket_id = 'study_pdf_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_study_pdf_group_images" on storage.objects for update
+  using (bucket_id = 'study_pdf_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_study_pdf_group_images" on storage.objects for delete
+  using (bucket_id = 'study_pdf_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
