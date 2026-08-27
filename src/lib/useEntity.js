@@ -1,8 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
-import { usePersistentState } from "./storage";
+import { usePersistentState, loadLocal, saveLocal } from "./storage";
 
 const uid = () => Date.now() + Math.random();
+
+// Cache local (localStorage) do último resultado de cada tabela — evita
+// rebuscar tudo do Supabase toda vez que o PWA é reaberto (fechar e abrir de
+// novo é muito comum em app instalado no celular). Se o cache ainda estiver
+// "fresco" (dentro do TTL), a tela usa ele direto e nenhuma requisição sai.
+// Passado o TTL, a próxima abertura busca do servidor de novo normalmente.
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const cacheKey = (table, userId) => `cache:${table}:${userId}`;
 
 // table: nome da tabela no Supabase (e também a chave usada no localStorage)
 // initialData: dados de exemplo usados apenas no modo local, na primeira vez
@@ -16,31 +24,65 @@ const uid = () => Date.now() + Math.random();
 export function useEntity(table, initialData, session, order = "asc", opts = {}) {
   const { orderable = false, listSelect = "*" } = opts;
   const cloud = cloudConfigured && !!session;
+  const userId = session?.user?.id || null;
   const [localData, setLocalData] = usePersistentState(table, initialData);
-  const [cloudData, setCloudData] = useState([]);
-  const [loading, setLoading] = useState(cloud);
+
+  // Estado inicial já tenta ler o cache local — assim a tela mostra algo na
+  // hora, em vez de ficar em branco até a primeira resposta da rede.
+  const [cloudData, setCloudDataRaw] = useState(() => {
+    if (!cloudConfigured || !userId) return [];
+    return loadLocal(cacheKey(table, userId), null)?.data || [];
+  });
+  const [loading, setLoading] = useState(cloud && cloudData.length === 0);
   const [error, setError] = useState(null);
 
-  const fetchCloud = useCallback(async () => {
-    if (!cloud) {
+  // Toda vez que os dados em memória mudam (por fetch OU por add/update/
+  // remove/reorder), grava também no cache local — assim uma mutação feita
+  // agora já fica disponível pro cache na próxima reabertura do PWA, mesmo
+  // que o TTL do fetch original ainda não tenha vencido.
+  const setCloudData = useCallback(
+    (updater) => {
+      setCloudDataRaw((prev) => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        if (cloudConfigured && userId) saveLocal(cacheKey(table, userId), { data: next, ts: Date.now() });
+        return next;
+      });
+    },
+    [table, userId]
+  );
+
+  const fetchCloud = useCallback(
+    async (force = false) => {
+      if (!cloud) {
+        setLoading(false);
+        return;
+      }
+      if (!force) {
+        const cached = loadLocal(cacheKey(table, userId), null);
+        if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+          // Cache ainda fresco — usa direto, sem gastar egress nenhum.
+          setCloudDataRaw(cached.data);
+          setLoading(false);
+          return;
+        }
+      }
+      setLoading(true);
+      let query = supabase.from(table).select(listSelect);
+      query = orderable
+        ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
+        : query.order("created_at", { ascending: order === "asc" });
+      const { data, error } = await query;
+      if (error) {
+        console.error(error);
+        setError(error.message);
+      } else {
+        setCloudData(data || []);
+      }
       setLoading(false);
-      return;
-    }
-    setLoading(true);
-    let query = supabase.from(table).select(listSelect);
-    query = orderable
-      ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
-      : query.order("created_at", { ascending: order === "asc" });
-    const { data, error } = await query;
-    if (error) {
-      console.error(error);
-      setError(error.message);
-    } else {
-      setCloudData(data || []);
-    }
-    setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloud, table, order, orderable, listSelect]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [cloud, table, order, orderable, listSelect, userId, setCloudData]
+  );
 
   useEffect(() => {
     let active = true;
@@ -51,7 +93,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloud, table, session?.user?.id]);
+  }, [cloud, table, userId]);
 
   const data = cloud ? cloudData : localData;
 
@@ -161,5 +203,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
     [cloud, table, cloudData, localData]
   );
 
-  return { data, add, remove, update, reorder, loading, error, cloud, refresh: fetchCloud, fetchFull };
+  const refresh = useCallback(() => fetchCloud(true), [fetchCloud]);
+
+  return { data, add, remove, update, reorder, loading, error, cloud, refresh, fetchFull };
 }

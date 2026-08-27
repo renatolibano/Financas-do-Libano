@@ -841,6 +841,18 @@ h1{font-size:23px}
 .switchPill.on .switchKnob{transform:translateX(16px)}
 .flashPager button{width:32px;height:32px;border-radius:9px;border:1px solid var(--border);display:grid;place-items:center;color:var(--text-1)}
 .flashPager button:disabled{opacity:.35}
+.flashShortcutsBtn{width:32px;height:32px;padding:0;display:grid;place-items:center;border-radius:9px}
+
+.flashShortcutsBody{display:flex;flex-direction:column;gap:16px;padding-top:4px}
+.flashShortcutRow{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.flashShortcutRow>div:first-child{display:flex;flex-direction:column;gap:2px}
+.flashShortcutRow b{font-size:13.5px;color:var(--text-1)}
+.flashShortcutRow small{font-size:11.5px;color:var(--text-2)}
+.flashShortcutKeys{display:flex;gap:6px;flex-shrink:0}
+.flashShortcutKeyBtn{min-width:38px;height:38px;padding:0 10px;border-radius:9px;border:1px solid var(--border);background:var(--bg-surface-3);color:var(--text-1);font-weight:700;font-size:13px;white-space:nowrap}
+.flashShortcutKeyBtn.listening{border-color:var(--accent);color:var(--accent);font-weight:600;font-size:11px}
+.flashShortcutsHint{font-size:11.5px;color:var(--text-2);margin:0}
+.flashShortcutsRestore{align-self:flex-start;font-size:12.5px;display:flex;align-items:center;gap:6px}
 
 .flashFlipDone{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;padding:20px}
 .flashFlipDoneIcon{width:76px;height:76px;border-radius:20px;background:#3ecf6a22;color:#3ecf6a;display:grid;place-items:center}

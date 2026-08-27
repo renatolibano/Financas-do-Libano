@@ -8105,6 +8105,12 @@ function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
   );
 }
 
+// Atalhos de teclado do modo "Cartões" (virar/marcar). Guardados no
+// localStorage pra persistir entre sessões e poderem ser trocados no botão
+// de atalhos. "flip" aceita 2 teclas (ex.: W e S, como setas pra cima/baixo);
+// "back" e "next" aceitam 1 cada.
+const DEFAULT_FLASHCARD_SHORTCUTS = { flip: ["w", "s"], back: ["a"], next: ["d"] };
+
 function FlashcardFlipMode({ cards, onComplete }) {
   // Modo "sei / não sei" (com marcação e estatísticas) vs. modo "só passar os
   // cartões" (só virar e navegar, sem marcar nada). Fica salvo entre sessões.
@@ -8123,6 +8129,8 @@ function FlashcardFlipMode({ cards, onComplete }) {
   // durante o meio da animação.
   const [noFlipAnim, setNoFlipAnim] = useState(false);
   const card = deck[index];
+  const [shortcuts, setShortcuts] = usePersistentState("flashKeyboardShortcuts", DEFAULT_FLASHCARD_SHORTCUTS);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const finishDeck = () => {
     setFinished(true);
@@ -8191,24 +8199,30 @@ function FlashcardFlipMode({ cards, onComplete }) {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (finished) return;
+      if (finished || shortcutsOpen) return;
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
       if (e.code === "Space") { e.preventDefault(); if (!feedback) setFlipped(f=>!f); return; }
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const isFlipKey = shortcuts.flip.includes(key);
+      const isBackKey = shortcuts.back.includes(key);
+      const isNextKey = shortcuts.next.includes(key);
       if (trackMode) {
-        // Modo com marcação: ←/→ já respondem "ainda aprendendo"/"já sei"; ↑/↓ só vira o cartão.
-        if (e.key === "ArrowRight") { e.preventDefault(); respond("know"); }
-        else if (e.key === "ArrowLeft") { e.preventDefault(); respond("learning"); }
-        else if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); if (!feedback) setFlipped(f=>!f); }
+        // Modo com marcação: ←/→ (fixas) e a tecla "next"/"back" já respondem
+        // "já sei"/"ainda aprendendo"; ↑/↓ (fixas) e a tecla "flip" só viram o cartão.
+        if (e.key === "ArrowRight" || isNextKey) { e.preventDefault(); respond("know"); }
+        else if (e.key === "ArrowLeft" || isBackKey) { e.preventDefault(); respond("learning"); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowDown" || isFlipKey) { e.preventDefault(); if (!feedback) setFlipped(f=>!f); }
       } else {
-        // Modo "só passar": ←/→ só navegam entre os cartões.
-        if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
-        else if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+        // Modo "só passar": ←/→ (fixas) e a tecla "next"/"back" navegam entre os cartões.
+        if (e.key === "ArrowRight" || isNextKey) { e.preventDefault(); go(1); }
+        else if (e.key === "ArrowLeft" || isBackKey) { e.preventDefault(); go(-1); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowDown" || isFlipKey) { e.preventDefault(); if (!feedback) setFlipped(f=>!f); }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finished, trackMode, feedback, flipped, index, deck.length]);
+  }, [finished, trackMode, feedback, flipped, index, deck.length, shortcuts, shortcutsOpen]);
 
   const trackToggle = (
     <label className="flashTrackToggle">
@@ -8269,10 +8283,18 @@ function FlashcardFlipMode({ cards, onComplete }) {
           </div>
         ) : <span/>}
         <div className="flashFlipToggles">
+          <button className="ghost flashShortcutsBtn" title="Atalhos de teclado" onClick={()=>setShortcutsOpen(true)}><Settings size={15}/></button>
           {shuffleToggle}
           {trackToggle}
         </div>
       </div>
+      {shortcutsOpen && (
+        <FlashcardShortcutsModal
+          shortcuts={shortcuts}
+          onChange={setShortcuts}
+          onClose={()=>setShortcutsOpen(false)}
+        />
+      )}
       <div className="flashFlipCard" onClick={()=>{ if(!feedback) setFlipped(f=>!f); }}>
         <div className={"flashFlipInner"+(flipped?" flipped":"")+(noFlipAnim?" noFlipAnim":"")}>
           <div className="flashFlipFace flashFlipFront">
@@ -8298,6 +8320,77 @@ function FlashcardFlipMode({ cards, onComplete }) {
         {!trackMode && <button disabled={index===0} onClick={()=>go(-1)}><ChevronLeft size={16}/></button>}
         <span>{index+1} / {deck.length}</span>
         {!trackMode && <button onClick={()=>go(1)}>{atLast ? <Check size={16}/> : <ArrowRight size={16}/>}</button>}
+      </div>
+    </div>
+  );
+}
+
+// Teclas que não podem ser usadas como atalho (já têm função fixa na tela,
+// ou atrapalhariam digitar em outro lugar do app).
+const FLASHCARD_SHORTCUT_BLOCKED_KEYS = new Set([" ", "arrowup", "arrowdown", "arrowleft", "arrowright", "escape", "tab", "enter", "shift", "control", "alt", "meta", "capslock"]);
+
+// Modal pra remapear as teclas do modo "Cartões". Cada linha mostra a(s)
+// tecla(s) atuais da ação; clicar em "Trocar" entra em modo de escuta e a
+// PRÓXIMA tecla pressionada assume aquele lugar (removendo-a de qualquer
+// outra ação que já a usasse, pra nunca ter duas ações na mesma tecla).
+function FlashcardShortcutsModal({ shortcuts, onChange, onClose }) {
+  const [listening, setListening] = useState(null); // null | {action, slot}
+
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (e) => {
+      e.preventDefault();
+      if (e.key === "Escape") { setListening(null); return; }
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (FLASHCARD_SHORTCUT_BLOCKED_KEYS.has(key.toLowerCase())) return;
+      onChange(prev => {
+        const next = { flip: [...prev.flip], back: [...prev.back], next: [...prev.next] };
+        // Remove essa tecla de qualquer ação que já a usava.
+        for (const act of ["flip", "back", "next"]) {
+          next[act] = next[act].map(k => k === key ? "" : k);
+        }
+        next[listening.action][listening.slot] = key;
+        return next;
+      });
+      setListening(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [listening, onChange]);
+
+  const restoreDefaults = () => onChange(DEFAULT_FLASHCARD_SHORTCUTS);
+
+  const row = (action, label, hint) => (
+    <div className="flashShortcutRow">
+      <div><b>{label}</b><small>{hint}</small></div>
+      <div className="flashShortcutKeys">
+        {shortcuts[action].map((k, slot) => {
+          const isListening = listening?.action === action && listening?.slot === slot;
+          return (
+            <button
+              key={slot}
+              className={"flashShortcutKeyBtn" + (isListening ? " listening" : "")}
+              onClick={() => setListening({ action, slot })}
+            >
+              {isListening ? "Pressione uma tecla..." : (k ? k.toUpperCase() : "—")}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Atalhos de teclado</h2><button type="button" onClick={onClose}><X/></button></div>
+        <div className="flashShortcutsBody">
+          {row("flip", "Virar cartão", "Mostra o verso / volta pra frente")}
+          {row("back", "Voltar", "No modo com marcação: \"Ainda aprendendo\". No modo só passar: cartão anterior")}
+          {row("next", "Avançar", "No modo com marcação: \"Já sei\". No modo só passar: próximo cartão")}
+          <p className="flashShortcutsHint">As setas do teclado e a barra de espaço continuam funcionando sempre, além dessas teclas.</p>
+          <button type="button" className="ghost flashShortcutsRestore" onClick={restoreDefaults}><RotateCcw size={14}/> Restaurar padrão (W/S, A, D)</button>
+        </div>
       </div>
     </div>
   );
