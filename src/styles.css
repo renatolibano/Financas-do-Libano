@@ -768,6 +768,32 @@ h1{font-size:23px}
 .flashFormImageField label:last-child{font-size:10px;color:var(--text-3);letter-spacing:.04em}
 @media (max-width:640px){.flashFormImageField{width:100%;flex-direction:row;justify-content:flex-start}.flashFormImageBtn{width:56px;height:56px;flex-shrink:0}}
 
+/* Barra de idiomas termo/definição (sugestões de tradução nos flashcards) */
+.flashLangBar{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 4px;margin:-4px 0 4px}
+.flashLangBarCol{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.flashLangBarCol>span{font-size:10px;color:var(--text-3);letter-spacing:.04em;font-weight:700}
+@media (max-width:640px){.flashLangBar{grid-template-columns:1fr}}
+.flashLangHint{display:flex;align-items:center;gap:6px;color:var(--accent);font-size:12px;margin:0 4px 14px;padding:0}
+
+.langPickerWrap{position:relative}
+.langPickerBtn{color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.03em}
+.langPickerBtn:hover{text-decoration:underline}
+.langPickerPop{position:absolute;top:calc(100% + 8px);right:0;z-index:40;width:240px;max-height:280px;display:flex;flex-direction:column;background:var(--bg-surface-2,var(--bg-reader-toolbar));border:1px solid var(--border-soft);border-radius:12px;box-shadow:0 16px 40px #0009;overflow:hidden}
+.langPickerSearch{margin:10px;width:calc(100% - 20px);background:var(--bg-surface);border:1px solid var(--border-soft);border-radius:9px;color:var(--text-1);font-size:13px;padding:8px 10px;outline:none}
+.langPickerSearch:focus{border-color:var(--accent)}
+.langPickerList{overflow-y:auto;display:flex;flex-direction:column;padding:0 6px 8px}
+.langPickerItem,.langPickerClear{text-align:left;padding:9px 10px;border-radius:8px;font-size:13.5px;color:var(--text-1)}
+.langPickerItem:hover,.langPickerClear:hover{background:var(--bg-hover)}
+.langPickerItem.active{background:var(--accent);color:var(--accent-text-on);font-weight:700}
+.langPickerClear{color:var(--text-3);font-size:12px;border-bottom:1px solid var(--border-soft);border-radius:0;margin-bottom:4px;padding-bottom:10px}
+.langPickerEmpty{padding:10px;margin:0;color:var(--text-3);font-size:12.5px;text-align:center}
+
+.flashDefFieldWrap{position:relative}
+.flashSuggestPop{position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:35;background:var(--bg-surface-2,var(--bg-reader-toolbar));border:1px solid var(--border-soft);border-radius:12px;box-shadow:0 16px 40px #0009;padding:6px;display:flex;flex-direction:column;gap:2px}
+.flashSuggestItem{text-align:left;padding:9px 10px;border-radius:8px;font-size:13.5px;color:var(--text-1)}
+.flashSuggestItem:hover{background:var(--bg-hover);color:var(--accent)}
+.flashSuggestLoading{padding:10px;font-size:12.5px;color:var(--text-3)}
+
 .modalActions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
 
 .flashTabs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}

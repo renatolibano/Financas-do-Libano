@@ -50,6 +50,11 @@ A análise de gastos por IA roda em uma Supabase Edge Function (`supabase/functi
    supabase functions deploy ai-insights
    ```
 6. Pronto — no app, entre logado e clique em "Perguntar à IA" na Visão Geral. O botão de IA só funciona com sincronização ativa (a função exige login).
+7. Publique também a função de sugestões de tradução dos flashcards (reaproveita a mesma chave `GEMINI_API_KEY`, não precisa configurar segredo novo):
+   ```
+   supabase functions deploy translate-suggestions
+   ```
+   Rode também o `schema.sql` de novo, se ainda não rodou — ele cria as colunas `term_lang`/`definition_lang` usadas pelo par de idiomas das listas de flashcards.
 
 ## Ativar a integração bancária (Pluggy)
 

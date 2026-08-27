@@ -383,6 +383,11 @@ end loop; end $$;
 -- Cada lista marca sozinha "completed=true" assim que é estudada até o fim (em qualquer modo),
 -- e a meta soma quantas das listas vinculadas (link_list_ids) já estão concluídas.
 alter table study_flashcard_lists add column if not exists completed boolean not null default false;
+
+-- Atualização: par de idiomas (termo/definição) de uma lista, usado só para
+-- sugerir traduções ao criar/editar os cartões (opcional, pode ficar nulo).
+alter table study_flashcard_lists add column if not exists term_lang text;
+alter table study_flashcard_lists add column if not exists definition_lang text;
 alter table study_goals add column if not exists link_list_ids uuid[];
 alter table study_goals drop constraint if exists study_goals_link_source_check;
 alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards'));

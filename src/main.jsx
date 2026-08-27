@@ -54,6 +54,9 @@ import {
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
 } from "./lib/notifications";
 import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell } from "./components/shared";
+import { LanguagePicker } from "./components/languagePicker";
+import { languageName } from "./lib/languages";
+import { fetchTranslationSuggestions } from "./lib/translate";
 
 const initialTransactions = [
   {id:1, desc:"Salário", cat:"Renda", value:3000, type:"in", date:"11/08"},
@@ -7504,6 +7507,10 @@ function FolderModal({ folder, onClose, onSave }) {
 function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
   const [title, setTitle] = useState(list?.title || "");
   const [description, setDescription] = useState(list?.description || "");
+  // Par de idiomas do termo/definição — usado só pra dar sugestão de tradução
+  // enquanto a pessoa digita (não afeta o estudo/o jogo, é opcional).
+  const [termLang, setTermLang] = useState(list?.term_lang || null);
+  const [defLang, setDefLang] = useState(list?.definition_lang || null);
   const [rows, setRows] = useState(
     list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null }))
       : [{ id: rid(), term: "", definition: "", image: null }, { id: rid(), term: "", definition: "", image: null }]
@@ -7600,6 +7607,8 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
       title: title.trim() || "Lista sem título",
       description: description.trim(),
       folder_id: list ? (list.folder_id ?? null) : (defaultFolderId ?? null),
+      term_lang: termLang,
+      definition_lang: defLang,
       cards,
       // Editar os cartões desmarca a lista como "estudada", já que o conteúdo revisado mudou —
       // isso também recoloca a meta vinculada (se houver) em andamento na próxima sincronização.
@@ -7643,6 +7652,22 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
         </div>
       )}
 
+      <div className="flashLangBar">
+        <div className="flashLangBarCol">
+          <span>TERMO</span>
+          <LanguagePicker value={termLang} onChange={setTermLang}/>
+        </div>
+        <div className="flashLangBarCol">
+          <span>DEFINIÇÃO</span>
+          <LanguagePicker value={defLang} onChange={setDefLang}/>
+        </div>
+      </div>
+      {termLang && defLang && termLang !== defLang && (
+        <p className="flashLangHint">
+          <Sparkle size={13}/> Digite o termo em {languageName(termLang)} e vamos sugerir a tradução em {languageName(defLang)}.
+        </p>
+      )}
+
       {rows.map((r, i) => (
         <FlashFormRow
           key={r.id}
@@ -7652,6 +7677,8 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
           onChangeField={setRow}
           onRemove={removeRow}
           onImage={handleRowImage}
+          termLang={termLang}
+          defLang={defLang}
         />
       ))}
 
@@ -7662,7 +7689,7 @@ function FlashcardListForm({ list, defaultFolderId, onCancel, onSave }) {
 
 const FLASH_HIGHLIGHT_COLOR = "#997700";
 
-function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage }) {
+function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage, termLang, defLang }) {
   const termRef = useRef(null);
   const defRef = useRef(null);
 
@@ -7679,6 +7706,42 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage 
     document.execCommand(command, false, value);
     if (termRef.current) onChangeField(row.id, "term", termRef.current.innerHTML);
     if (defRef.current) onChangeField(row.id, "definition", defRef.current.innerHTML);
+  };
+
+  // Sugestões de tradução: enquanto a pessoa digita o termo (com os dois
+  // idiomas escolhidos), busca opções de tradução e mostra num dropdown
+  // embaixo do campo de definição — clicar numa opção preenche a definição.
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestTimerRef = useRef(null);
+  const suggestReqIdRef = useRef(0);
+  const translationEnabled = !!(termLang && defLang && termLang !== defLang);
+
+  useEffect(() => {
+    if (!translationEnabled) { setSuggestions([]); setShowSuggestions(false); return; }
+    const plain = stripHtml(row.term || "").trim();
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+    if (!plain) { setSuggestions([]); setShowSuggestions(false); return; }
+    const reqId = ++suggestReqIdRef.current;
+    suggestTimerRef.current = setTimeout(async () => {
+      setSuggestLoading(true);
+      const result = await fetchTranslationSuggestions(plain, languageName(termLang), languageName(defLang));
+      if (reqId !== suggestReqIdRef.current) return; // resposta antiga, termo já mudou
+      setSuggestLoading(false);
+      setSuggestions(result);
+      setShowSuggestions(result.length > 0);
+    }, 500);
+    return () => clearTimeout(suggestTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.term, termLang, defLang, translationEnabled]);
+
+  const applySuggestion = (text) => {
+    if (defRef.current) {
+      defRef.current.innerHTML = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      onChangeField(row.id, "definition", defRef.current.innerHTML);
+    }
+    setShowSuggestions(false);
   };
 
   return (
@@ -7704,21 +7767,35 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage 
             className="flashRichField"
             contentEditable
             suppressContentEditableWarning
-            data-placeholder="Digite o termo"
+            data-placeholder={termLang ? `Digite em ${languageName(termLang)}` : "Digite o termo"}
             onInput={()=>onChangeField(row.id, "term", termRef.current.innerHTML)}
           />
           <label>TERMO</label>
         </div>
-        <div>
+        <div className="flashDefFieldWrap">
           <div
             ref={defRef}
             className="flashRichField"
             contentEditable
             suppressContentEditableWarning
-            data-placeholder="Digite a definição"
-            onInput={()=>onChangeField(row.id, "definition", defRef.current.innerHTML)}
+            data-placeholder={defLang ? `Digite em ${languageName(defLang)}` : "Digite a definição"}
+            onInput={()=>{ onChangeField(row.id, "definition", defRef.current.innerHTML); setShowSuggestions(false); }}
+            onFocus={()=>{ if (suggestions.length) setShowSuggestions(true); }}
           />
           <label>DEFINIÇÃO</label>
+          {translationEnabled && (suggestLoading || (showSuggestions && suggestions.length > 0)) && (
+            <div className="flashSuggestPop">
+              {suggestLoading ? (
+                <div className="flashSuggestLoading">Buscando traduções...</div>
+              ) : (
+                suggestions.map((s, i) => (
+                  <button type="button" key={i} className="flashSuggestItem" onMouseDown={(e)=>{ e.preventDefault(); applySuggestion(s); }}>
+                    {s}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </div>
         <div className="flashFormImageField">
           <label className="flashFormImageBtn">
