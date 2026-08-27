@@ -91,7 +91,8 @@ Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Br
             },
           ],
           generationConfig: {
-            maxOutputTokens: 500,
+            maxOutputTokens: 1024,
+            thinkingConfig: { thinkingLevel: "low" },
           },
         }),
       }

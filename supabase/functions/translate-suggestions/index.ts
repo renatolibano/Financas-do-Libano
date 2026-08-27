@@ -79,8 +79,9 @@ Regras:
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
-            maxOutputTokens: 200,
+            maxOutputTokens: 500,
             responseMimeType: "application/json",
+            thinkingConfig: { thinkingLevel: "low" },
           },
         }),
       }
