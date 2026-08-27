@@ -30,10 +30,10 @@ import { clearAllPdfCache } from "./lib/pdfCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
-import { uploadBookFile, downloadBookFile, deleteBookFile } from "./lib/books";
+import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
 import { useReadingStats, currentMonthKey } from "./lib/readingStats";
-import { createBlankPdfBlob, appendImagePageToPdfBlob } from "./lib/pdfPages";
+import { createBlankPdfBlob } from "./lib/pdfPages";
 import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
@@ -1486,16 +1486,45 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const searchToken = useRef(0);
   const renderTaskRef = useRef(null);
 
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [downloadingOffline, setDownloadingOffline] = useState(false);
+
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         setLoading(true);
-        const blob = await downloadBookFile(book.file_path);
-        const buf = await blob.arrayBuffer();
-        // wasmUrl: ver comentário em src/lib/pdf.js — sem isso, imagens em
-        // fax/CCITT (comuns em provas escaneadas) somem da página em silêncio.
-        const doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
+        // Se o livro já foi baixado por completo neste aparelho (ex.: pelo
+        // botão "Baixar para leitura offline"), abre a cópia local — 0 egress,
+        // funciona sem internet. Senão, abre por streaming: o pdf.js busca só
+        // as páginas visitadas via Range requests, em vez do PDF inteiro —
+        // importante pra livros grandes que nem sempre são lidos de uma vez.
+        const cachedBlob = await peekCachedBookFile(book.file_path);
+        let doc;
+        if (cachedBlob) {
+          const buf = await cachedBlob.arrayBuffer();
+          // wasmUrl: ver comentário em src/lib/pdf.js — sem isso, imagens em
+          // fax/CCITT (comuns em provas escaneadas) somem da página em silêncio.
+          doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
+          if (active) setOfflineReady(true);
+        } else {
+          try {
+            const signedUrl = await getBookFileUrl(book.file_path);
+            doc = await pdfjsLib.getDocument({
+              url: signedUrl,
+              wasmUrl: pdfWasmUrl,
+              rangeChunkSize: 256 * 1024,
+            }).promise;
+          } catch (streamErr) {
+            // Servidor/rede não deu pra abrir por partes (ex.: sem suporte a
+            // Range) — cai pro caminho antigo, baixando o arquivo inteiro.
+            console.warn("Streaming do PDF falhou, baixando arquivo inteiro:", streamErr);
+            const blob = await downloadBookFile(book.file_path);
+            const buf = await blob.arrayBuffer();
+            doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
+            if (active) setOfflineReady(true);
+          }
+        }
         if (!active) return;
         setPdf(doc);
         setNumPages(doc.numPages);
@@ -1585,6 +1614,24 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
   const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
   const resetZoom = () => setFitWidth(true);
+
+  // Baixa o livro inteiro uma vez e guarda localmente (Cache Storage) — pra
+  // quando a pessoa sabe que vai ler tudo (ex.: antes de viajar sem
+  // internet). Fora isso, o leitor abre por streaming (ver useEffect acima)
+  // e nunca baixa mais do que as páginas realmente vistas.
+  const handleDownloadOffline = async () => {
+    if (downloadingOffline || offlineReady) return;
+    try {
+      setDownloadingOffline(true);
+      await downloadBookFile(book.file_path);
+      setOfflineReady(true);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível baixar o livro para leitura offline: " + (e.message || e));
+    } finally {
+      setDownloadingOffline(false);
+    }
+  };
 
   // Zoom com o gesto de pinça no touchpad: navegadores reportam esse gesto
   // como um evento "wheel" com ctrlKey=true (mesmo sem a tecla Ctrl estar
@@ -1946,6 +1993,16 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
             <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
             <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
+          </div>
+          <div className="pdfToolbarGroup">
+            <button
+              title={offlineReady ? "Livro já disponível offline neste aparelho" : "Baixar livro inteiro para ler offline"}
+              className={offlineReady ? "active" : ""}
+              disabled={downloadingOffline || offlineReady}
+              onClick={handleDownloadOffline}
+            >
+              <Download size={16}/> <span>{downloadingOffline ? "Baixando..." : (offlineReady ? "Offline" : "Baixar offline")}</span>
+            </button>
           </div>
           <form className="pdfToolbarGroup pdfJumpForm" onSubmit={handleJump}>
             <input type="number" min="1" max={numPages||undefined} placeholder={`Ir p/ página (1-${numPages||"?"})`} value={jumpValue} onChange={e=>setJumpValue(e.target.value)}/>
@@ -3026,7 +3083,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const lassoGroupDragRef = useRef(null);
   const [editingTextId, setEditingTextId] = useState(null);
   const [exporting, setExporting] = useState(false);
-  const [addingPage, setAddingPage] = useState(false);
   const [pastePulse, setPastePulse] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
 
@@ -3072,7 +3128,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
   const notesSaveTimer = useRef(null);
   const searchToken = useRef(0);
   const renderTaskRef = useRef(null);
-  const pdfBytesRef = useRef(null); // bytes crus do PDF atual, usados pra anexar página colada
+  const pdfBytesRef = useRef(null); // bytes crus do PDF atual, usados pelo "Baixar PDF" (arquivo exatamente como está salvo)
 
   useEffect(() => {
     let active = true;
@@ -3083,7 +3139,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
         const buf = await blob.arrayBuffer();
         // Guarda uma cópia antes: pdf.js pode "esvaziar" o ArrayBuffer que
         // recebe (transferable), então o que sobra pra reaproveitar depois
-        // (colar uma página nova) precisa ser um buffer separado.
+        // (botão "Baixar PDF") precisa ser um buffer separado.
         pdfBytesRef.current = buf.slice(0);
         const doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
         if (!active) return;
@@ -3098,47 +3154,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     return () => { active = false; };
   }, [pdfDoc.file_path]);
 
-  // ---- Colar print (Ctrl+V) ou escolher arquivo direto no leitor: vira uma
-  // página nova no final do próprio PDF, e não um arquivo separado montado
-  // antes de existir.
-  const appendPastedImage = async (file) => {
-    if (!file || !file.type?.startsWith("image/") || !pdfBytesRef.current) return;
-    try {
-      setAddingPage(true);
-      // Comprime pro tamanho final que a página vai ter (documento/print não
-      // precisa da resolução da foto original) — isso é o que baixa de novo
-      // toda vez que esse PDF é aberto/sincronizado, então vale a pena.
-      const { dataUrl, width, height } = await compressImageForPage(file, 1600, 2200, 0.82);
-
-      const bg = pdfDoc.bg_color || "white";
-      const blob = await appendImagePageToPdfBlob(pdfBytesRef.current, dataUrl, width, height, bg);
-      const newBuf = await blob.arrayBuffer();
-      pdfBytesRef.current = newBuf.slice(0);
-      const newDoc = await pdfjsLib.getDocument({ data: newBuf, wasmUrl: pdfWasmUrl }).promise;
-      setPdf(newDoc);
-      setNumPages(newDoc.numPages);
-      setPageNum(newDoc.numPages);
-      onTotalPagesChange?.(pdfDoc.id, newDoc.numPages);
-      // PDF "criado" começa em branco (sem capa útil); a primeira página de
-      // verdade que entra vira a capa, gerada do documento que já está em
-      // memória (sem baixar nada de novo).
-      if (!pdfDoc.cover_thumb) {
-        renderCoverThumbFromDoc(newDoc).then(dataUrl => onCoverGenerated?.(pdfDoc.id, dataUrl)).catch(() => {});
-      }
-
-      const { data: userData } = await supabase.auth.getUser();
-      if (userData?.user) {
-        const uploadFile = new File([blob], "page.pdf", { type: "application/pdf" });
-        await uploadStudyPdfFile(userData.user.id, pdfDoc.id, uploadFile);
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Não foi possível adicionar essa página: " + (e.message || e));
-    } finally {
-      setAddingPage(false);
-    }
-  };
-
   useEffect(() => {
     const handlePaste = (e) => {
       const tag = e.target?.tagName;
@@ -3148,7 +3163,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
       for (const item of items) {
         if (item.type?.startsWith("image/")) {
           e.preventDefault();
-          appendPastedImage(item.getAsFile());
+          insertImageAnnotation(item.getAsFile());
           setPastePulse(true);
           setTimeout(() => setPastePulse(false), 260);
           break;
@@ -3847,9 +3862,7 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     setLiveAnn(null);
   };
 
-  // Baixa o PDF exatamente como está (sem anotações "queimadas") — o que já
-  // foi colado/adicionado como página entra, claro, porque já faz parte do
-  // arquivo salvo.
+  // Baixa o PDF exatamente como está (sem anotações "queimadas").
   const downloadCurrentPdf = () => {
     if (!pdfBytesRef.current) return;
     const blob = new Blob([pdfBytesRef.current], { type: "application/pdf" });
@@ -3861,15 +3874,6 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
-  const addPageFileInputRef = useRef(null);
-  const handleAddPageFiles = async (fileList) => {
-    const files = Array.from(fileList || []).filter(f => f.type?.startsWith("image/"));
-    for (const file of files) {
-      // eslint-disable-next-line no-await-in-loop
-      await appendPastedImage(file);
-    }
   };
 
   const handleExportAnnotated = async () => {
@@ -4165,15 +4169,8 @@ function StudyPdfReader({ pdfDoc, onClose, onProgress, onNotesChange, onFavorite
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
-          <div className="pdfToolbarGroup">
-            <button title="Adicionar página a partir de uma imagem" onClick={()=>addPageFileInputRef.current?.click()}>
-              <ImagePlus size={16}/> <span>Adicionar página</span>
-            </button>
-            <input ref={addPageFileInputRef} type="file" accept="image/*" multiple hidden
-              onChange={(e)=>{ handleAddPageFiles(e.target.files); e.target.value=""; }}/>
-          </div>
-          {addingPage && (
-            <p className={"pdfPasteHint"+(pastePulse?" flash":"")}>Adicionando página...</p>
+          {pastePulse && (
+            <p className="pdfPasteHint flash">Imagem colada!</p>
           )}
         </div>
 

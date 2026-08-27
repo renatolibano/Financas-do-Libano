@@ -81,6 +81,32 @@ export async function downloadPdfCached({ bucket, path, downloadFn, getMetaFn })
   return blob;
 }
 
+/**
+ * Só verifica se já existe uma cópia local válida — nunca baixa nada.
+ * Usado pelos leitores que preferem abrir por streaming (Range requests) na
+ * primeira vez, mas continuam usando a cópia local inteira (0 egress) se ela
+ * já tiver sido baixada antes (ex.: pelo botão "Baixar para leitura offline").
+ *
+ * getMetaFn é opcional aqui de propósito: como isso roda toda vez que um PDF
+ * é aberto, e sempre chega a acontecer bem antes de decidir por streaming,
+ * evitamos gastar uma chamada de rede extra só pra validar a versão — se
+ * o arquivo mudou desde o último "baixar offline", o dono vai perceber
+ * poucas vezes (edição de PDF de estudo não se aplica a livros) e pode
+ * baixar de novo manualmente.
+ */
+export async function peekPdfCache({ bucket, path }) {
+  const store = await getCacheStore();
+  if (!store) return null;
+  try {
+    const cachedRes = await store.match(cacheKey(bucket, path));
+    if (!cachedRes) return null;
+    return await cachedRes.blob();
+  } catch (e) {
+    console.warn("Falha ao ler PDF do cache:", e);
+    return null;
+  }
+}
+
 // Chamado depois de um re-upload (ex.: adicionar página a um PDF existente)
 // pra garantir que essa mesma aba não continue servindo a versão antiga.
 export async function invalidatePdfCache(bucket, path) {

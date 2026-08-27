@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient";
-import { downloadPdfCached, invalidatePdfCache } from "./pdfCache";
+import { downloadPdfCached, invalidatePdfCache, peekPdfCache } from "./pdfCache";
 
 const BUCKET = "books";
 
@@ -45,6 +45,24 @@ export async function downloadBookFile(path) {
     },
     getMetaFn: () => getBookFileMeta(path),
   });
+}
+
+// Só olha se o livro já está baixado neste aparelho — nunca baixa nada.
+// Usado pelo leitor pra decidir entre abrir a cópia local (0 egress) ou
+// abrir por streaming (Range requests, ver getBookFileUrl).
+export function peekCachedBookFile(path) {
+  return peekPdfCache({ bucket: BUCKET, path });
+}
+
+// URL assinada e temporária pro arquivo — permite que o pdf.js abra o PDF
+// direto por HTTP (com Range requests), baixando só as páginas visitadas em
+// vez do arquivo inteiro. O bucket é privado (ver schema.sql), por isso
+// precisa ser assinada; expira sozinha, então não tem problema gerar uma
+// nova a cada abertura do leitor.
+export async function getBookFileUrl(path, expiresInSeconds = 3600) {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, expiresInSeconds);
+  if (error) throw error;
+  return data.signedUrl;
 }
 
 export async function deleteBookFile(path) {
