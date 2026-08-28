@@ -25,7 +25,8 @@ import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
-import { clearLocal, usePersistentState, loadLocal, saveLocal } from "./lib/storage";
+import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
+import { idbGet, idbSet } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
@@ -5101,20 +5102,54 @@ function WhiteboardThumbnail({ board }) {
 }
 
 function WhiteboardLibrary({ onClose }) {
-  const [boards, setBoards] = useState(() => {
-    const saved = loadLocal("whiteboards_v2", null);
-    if (Array.isArray(saved)) return saved;
-    const legacy = loadLocal("whiteboard_v1", null);
-    return legacy?.elements?.length
-      ? [{ id: crypto.randomUUID(), name: "Quadro 1", elements: legacy.elements, bg: "black", updatedAt: Date.now() }]
-      : [];
-  });
+  const [boards, setBoards] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
 
+  // Os quadros ficam no IndexedDB (não no localStorage) porque acumulam
+  // imagens em base64 e estourariam fácil o teto de 5-10MB do localStorage.
+  // Isso é armazenamento local do navegador — nada disso sai pela rede.
   useEffect(() => {
-    saveLocal("whiteboards_v2", boards);
-  }, [boards]);
+    let cancelled = false;
+    (async () => {
+      const fromIdb = await idbGet("whiteboards_v2", null);
+      if (cancelled) return;
+      if (Array.isArray(fromIdb)) {
+        setBoards(fromIdb);
+        setLoaded(true);
+        return;
+      }
+      // Migração única: primeiro tenta o localStorage novo (whiteboards_v2),
+      // depois o formato antigo de quadro único (whiteboard_v1). Depois de
+      // migrar pro IndexedDB, limpa as chaves antigas do localStorage pra
+      // liberar aquele espaço apertado.
+      const savedLocal = loadLocal("whiteboards_v2", null);
+      if (Array.isArray(savedLocal)) {
+        setBoards(savedLocal);
+        await idbSet("whiteboards_v2", savedLocal);
+        removeLocalKey("whiteboards_v2");
+        setLoaded(true);
+        return;
+      }
+      const legacy = loadLocal("whiteboard_v1", null);
+      const migrated = legacy?.elements?.length
+        ? [{ id: crypto.randomUUID(), name: "Quadro 1", elements: legacy.elements, bg: "black", updatedAt: Date.now() }]
+        : [];
+      setBoards(migrated);
+      if (migrated.length) {
+        await idbSet("whiteboards_v2", migrated);
+        removeLocalKey("whiteboard_v1");
+      }
+      setLoaded(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return; // evita sobrescrever com [] antes do load terminar
+    idbSet("whiteboards_v2", boards);
+  }, [boards, loaded]);
 
   const createBoard = () => {
     const number = boards.length + 1;
@@ -5159,7 +5194,7 @@ function WhiteboardLibrary({ onClose }) {
             <div className="bookTile addTile" onClick={createBoard}>
               <div className="bookCoverWrap addCover whiteboardNewTile"><Plus size={28}/><span>Novo quadro</span></div>
             </div>
-            {boards.map(board => (
+            {loaded && boards.map(board => (
               <div className="bookTile whiteboardBookTile" key={board.id} onClick={() => setEditingId(board.id)}>
                 <div className="bookCoverWrap whiteboardCover">
                   <WhiteboardThumbnail board={board}/>
@@ -5177,7 +5212,7 @@ function WhiteboardLibrary({ onClose }) {
               </div>
             ))}
           </div>
-          {!boards.length && <div className="whiteboardLibraryEmpty"><LayoutGrid size={34}/><b>Nenhum quadro criado</b><span>Crie quantos quadros quiser para separar matérias, projetos ou anotações.</span></div>}
+          {loaded && !boards.length && <div className="whiteboardLibraryEmpty"><LayoutGrid size={34}/><b>Nenhum quadro criado</b><span>Crie quantos quadros quiser para separar matérias, projetos ou anotações.</span></div>}
         </div>
       </div>
     </div>

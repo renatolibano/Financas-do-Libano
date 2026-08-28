@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
-import { usePersistentState, loadLocal, saveLocal } from "./storage";
+import { loadLocal, saveLocal } from "./storage";
+import { useIdbPersistentState } from "./idbStorage";
 
 const uid = () => Date.now() + Math.random();
 
@@ -25,7 +26,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   const { orderable = false, listSelect = "*" } = opts;
   const cloud = cloudConfigured && !!session;
   const userId = session?.user?.id || null;
-  const [localData, setLocalData] = usePersistentState(table, initialData);
+  const [localData, setLocalData, localLoaded] = useIdbPersistentState(table, initialData);
 
   // Estado inicial já tenta ler o cache local — assim a tela mostra algo na
   // hora, em vez de ficar em branco até a primeira resposta da rede.
@@ -33,7 +34,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
     if (!cloudConfigured || !userId) return [];
     return loadLocal(cacheKey(table, userId), null)?.data || [];
   });
-  const [loading, setLoading] = useState(cloud && cloudData.length === 0);
+  const [cloudLoading, setCloudLoading] = useState(cloud && cloudData.length === 0);
   const [error, setError] = useState(null);
 
   // Toda vez que os dados em memória mudam (por fetch OU por add/update/
@@ -54,7 +55,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   const fetchCloud = useCallback(
     async (force = false) => {
       if (!cloud) {
-        setLoading(false);
+        setCloudLoading(false);
         return;
       }
       if (!force) {
@@ -62,11 +63,11 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
         if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
           // Cache ainda fresco — usa direto, sem gastar egress nenhum.
           setCloudDataRaw(cached.data);
-          setLoading(false);
+          setCloudLoading(false);
           return;
         }
       }
-      setLoading(true);
+      setCloudLoading(true);
       let query = supabase.from(table).select(listSelect);
       query = orderable
         ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
@@ -78,7 +79,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       } else {
         setCloudData(data || []);
       }
-      setLoading(false);
+      setCloudLoading(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [cloud, table, order, orderable, listSelect, userId, setCloudData]
@@ -96,6 +97,10 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   }, [cloud, table, userId]);
 
   const data = cloud ? cloudData : localData;
+  // No modo nuvem, "carregando" é o fetch do Supabase; no modo local, é só
+  // o instante inicial (bem curto) até o IndexedDB responder — evita mostrar
+  // os dados de exemplo (initialData) antes do dado real do usuário chegar.
+  const loading = cloud ? cloudLoading : !localLoaded;
 
   const add = useCallback(
     async (row) => {

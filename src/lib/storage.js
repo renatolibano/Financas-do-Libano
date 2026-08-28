@@ -20,6 +20,14 @@ export function saveLocal(key, value) {
   }
 }
 
+export function removeLocalKey(key) {
+  try {
+    localStorage.removeItem(STORAGE_PREFIX + key);
+  } catch (e) {
+    console.warn("Não foi possível remover", key, e);
+  }
+}
+
 export function clearLocal() {
   Object.keys(localStorage)
     .filter((k) => k.startsWith(STORAGE_PREFIX))
