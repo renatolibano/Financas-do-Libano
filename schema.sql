@@ -893,3 +893,37 @@ create policy "update_own_study_pdf_group_images" on storage.objects for update
   using (bucket_id = 'study_pdf_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "delete_own_study_pdf_group_images" on storage.objects for delete
   using (bucket_id = 'study_pdf_group_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: economia de egress na biblioteca de Notas — antes, abrir a
+-- lista de notas baixava o "content" (HTML) inteiro de cada nota só pra
+-- mostrar um resuminho de ~90 caracteres. Agora a listagem busca só um
+-- resumo em texto puro (coluna "preview", mantida pelo próprio app a cada
+-- salvamento) e o "content" completo só é buscado quando a nota é aberta.
+alter table notes add column if not exists preview text not null default '';
+
+-- Backfill único: gera o preview das notas que já existiam antes dessa coluna
+-- (baseado no content puro, sem HTML — aproximação simples só pra não deixar
+-- o preview vazio nas notas antigas; a partir de agora o app mantém isso).
+update notes set preview = left(regexp_replace(coalesce(content, ''), '<[^>]*>', ' ', 'g'), 200)
+  where preview = '' and content is not null and content <> '';
+
+-- Busca em texto completo no servidor (título, conteúdo e tags) — a busca no
+-- app não tem mais o "content" inteiro de todas as notas em memória (só o
+-- preview), então uma busca por um trecho que não esteja nos primeiros ~200
+-- caracteres precisa ser resolvida aqui, no banco. security invoker (padrão):
+-- roda com o RLS de quem chama, então só enxerga as próprias notas.
+create or replace function search_notes(p_query text)
+returns setof notes
+language sql
+stable
+as $$
+  select *
+  from notes
+  where deleted_at is null
+    and (
+      title ilike '%' || p_query || '%'
+      or content ilike '%' || p_query || '%'
+      or exists (select 1 from unnest(tags) tg where tg ilike '%' || p_query || '%')
+    )
+  order by coalesce(sort_order, 2147483647), created_at asc;
+$$;
