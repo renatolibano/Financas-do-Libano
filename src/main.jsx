@@ -2882,7 +2882,7 @@ const BOARD_SHORTCUT_DEFAULTS = {
   undo: { key: "z", ctrl: true },
   redo: { key: "z", ctrl: true, shift: true },
   deleteSelection: { key: "Delete" },
-  straightLine: { key: "Shift" },
+  straightLine: { modifierOnly: "shift" },
   toolPen: { key: "1" },
   toolHighlighter: { key: "2" },
   toolEraser: { key: "3" },
@@ -2892,10 +2892,23 @@ const BOARD_SHORTCUT_DEFAULTS = {
   toolLasso: { key: "7" },
 };
 
+const BARE_MODIFIER_KEYS = { shift: "shift", control: "control", alt: "alt", meta: "meta" };
+// Conserta na leitura um atalho salvo antigamente como "tecla Shift" comum
+// (bug: comparava e.shiftKey === false, o que falhava ao segurar o Shift) —
+// converte pro formato correto de "só modificador" sem exigir que o usuário
+// resete manualmente os atalhos salvos no aparelho dele.
+function normalizeBinding(binding) {
+  if (binding && !binding.modifierOnly && typeof binding.key === "string" && !binding.ctrl && !binding.shift && !binding.alt) {
+    const normalized = BARE_MODIFIER_KEYS[binding.key.toLowerCase()];
+    if (normalized) return { modifierOnly: normalized };
+  }
+  return binding;
+}
+
 // Sempre usar esta função pra ler um atalho: cobre o caso de o usuário ter
 // atalhos salvos de uma versão antiga, sem as chaves mais novas.
 function getBinding(shortcuts, id) {
-  return (shortcuts && shortcuts[id]) || BOARD_SHORTCUT_DEFAULTS[id];
+  return normalizeBinding((shortcuts && shortcuts[id]) || BOARD_SHORTCUT_DEFAULTS[id]);
 }
 
 function formatShortcut(binding) {
