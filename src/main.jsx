@@ -2754,6 +2754,12 @@ const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPo
   if (ann.type === "shape") {
     const stroke = ann.color, sw = ann.width, op = ann.opacity;
     if (ann.shape === "line") {
+      if (ann.tool === "highlighter") {
+        // Barra de marca-texto reta: ponta quadrada (sem afinar as pontas) e
+        // mistura "multiply" pra se comportar igual ao traço do destacador
+        // normal (a cor clara "tinge" o que está embaixo em vez de cobrir).
+        return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="butt" opacity={op} style={{ mixBlendMode: "multiply", cursor: onPointerDown ? "pointer" : undefined }} onPointerDown={onPointerDown} />;
+      }
       return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} onPointerDown={onPointerDown} />;
     }
     if (ann.shape === "arrow") {
@@ -3149,6 +3155,10 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const [dockPosition, setDockPosition] = usePersistentState("studyPdfDockPosition", "left");
   const [styleFlyoutOpen, setStyleFlyoutOpen] = useState(false);
   const straightLineHeldRef = useRef(false);
+  // true quando o traço atual foi retificado pelo atalho de linha reta —
+  // usado no fim do traço pra virar a mesma "forma" de linha que a correção
+  // automática produz, em vez de continuar como um traço à mão livre.
+  const straightLineUsedRef = useRef(false);
   const [drawings, setDrawings] = useState(pdfDoc.drawings || {});
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [liveAnn, setLiveAnn] = useState(null);
@@ -3762,6 +3772,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     const { x, y } = toPageCoords(e.clientX, e.clientY);
     if (tool === "pen" || tool === "highlighter") {
       isDrawingRef.current = true;
+      straightLineUsedRef.current = false;
       setLiveAnn({
         id: crypto.randomUUID(), type: "stroke", tool,
         color: tool === "highlighter" ? hlColor : color,
@@ -3882,6 +3893,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
         const p = { x, y, p: tool === "highlighter" ? 0.5 : (e.pressure || 0.5) };
         if (straightLineHeldRef.current) {
           const start = prev.points[0];
+          straightLineUsedRef.current = true;
           return { ...prev, points: [start, snapPointToAngle(start, p)] };
         }
         return { ...prev, points: [...prev.points, p] };
@@ -3922,7 +3934,19 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     // pode ser descartado silenciosamente.
     if ((tool === "pen" || tool === "highlighter") && liveAnn.points.length >= 1) {
       let finalAnn = liveAnn;
-      if (tool === "pen" && autoShape && finalAnn.points.length > 6) {
+      if ((tool === "pen" || tool === "highlighter") && straightLineUsedRef.current && finalAnn.points.length === 2) {
+        // Mesmo resultado de quando a "correção automática" reconhece uma
+        // reta: vira uma forma de linha de verdade, não um traço à mão livre
+        // de 2 pontos — assim o atalho e a correção automática desenham
+        // exatamente igual. Pro destacador, vira uma barra de marca-texto
+        // reta (ponta quadrada, sem afinar) em vez de uma linha fina.
+        const [p0, p1] = finalAnn.points;
+        finalAnn = {
+          id: finalAnn.id, type: "shape", shape: "line", tool: finalAnn.tool,
+          color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
+          x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y,
+        };
+      } else if (tool === "pen" && autoShape && finalAnn.points.length > 6) {
         const detected = detectShapeFromPoints(finalAnn.points);
         if (detected) {
           finalAnn = {
@@ -5060,6 +5084,67 @@ function resizeElementCorner(el, x, y) {
   }
   return resizeShapeAnnotation(el, x, y);
 }
+
+// Redimensiona uma imagem "grudando" no tamanho de outra imagem do quadro
+// quando os dois ficam bem próximos — pra facilitar deixar imagens do mesmo
+// tamanho sem precisar acertar o pixel exato. `zoom` converte a margem (em
+// pixels de tela) pra unidades do mundo, e `stickRef` guarda, entre uma
+// chamada e outra do mesmo gesto de arrastar, em qual imagem/dimensão já
+// tinha grudado — isso cria a "trava": uma vez grudado, só solta quando o
+// gesto se afasta o suficiente (margem de saída maior que a de entrada).
+const RESIZE_SNAP_ENTER_PX = 10;
+const RESIZE_SNAP_EXIT_PX = 26;
+function resizeImageWithSnap(el, x, y, otherImages, zoom, stickRef) {
+  const ratio = el.height / el.width;
+  const rawW = Math.max(24, x - el.x);
+  const rawH = rawW * ratio;
+  const enterMargin = RESIZE_SNAP_ENTER_PX / zoom;
+  const exitMargin = RESIZE_SNAP_EXIT_PX / zoom;
+
+  const prev = stickRef.current && stickRef.current.elId === el.id ? stickRef.current : null;
+  if (prev) {
+    const target = otherImages.find(o => o.id === prev.targetId);
+    if (target) {
+      if (prev.dim === "both" && Math.abs(rawW - target.width) < exitMargin && Math.abs(rawH - target.height) < exitMargin) {
+        return { width: target.width, height: target.height, targetId: target.id };
+      }
+      if (prev.dim === "w" && Math.abs(rawW - target.width) < exitMargin) {
+        return { width: target.width, height: target.width * ratio, targetId: target.id };
+      }
+      if (prev.dim === "h" && Math.abs(rawH - target.height) < exitMargin) {
+        return { width: target.height / ratio, height: target.height, targetId: target.id };
+      }
+    }
+  }
+
+  let best = null;
+  for (const img of otherImages) {
+    const dw = Math.abs(rawW - img.width);
+    const dh = Math.abs(rawH - img.height);
+    let candidate = null;
+    if (dw < enterMargin && dh < enterMargin) {
+      candidate = { dim: "both", targetId: img.id, score: dw + dh, width: img.width, height: img.height };
+    } else if (dw < enterMargin) {
+      candidate = { dim: "w", targetId: img.id, score: dw, width: img.width, height: rawH };
+    } else if (dh < enterMargin) {
+      candidate = { dim: "h", targetId: img.id, score: dh, width: img.height / ratio, height: img.height };
+    }
+    if (!candidate) continue;
+    if (!best) { best = candidate; continue; }
+    // "both" (mesmo tamanho nos dois eixos) sempre ganha de um snap de eixo
+    // único; dentro do mesmo tipo, fica o candidato mais próximo.
+    const candidateRank = candidate.dim === "both" ? 0 : 1;
+    const bestRank = best.dim === "both" ? 0 : 1;
+    if (candidateRank < bestRank || (candidateRank === bestRank && candidate.score < best.score)) best = candidate;
+  }
+
+  if (best) {
+    stickRef.current = { elId: el.id, targetId: best.targetId, dim: best.dim };
+    return { width: best.width, height: best.height, targetId: best.targetId };
+  }
+  stickRef.current = null;
+  return { width: rawW, height: rawH, targetId: null };
+}
 function eraseElementAtPoint(el, x, y, radius) {
   // Prints (imagens) nunca são apagados pela borracha — só à mão, selecionando
   // e excluindo. Assim escrever/rabiscar por cima de um print e apagar o
@@ -5277,6 +5362,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcuts, setShortcuts] = usePersistentState("quadroShortcuts", BOARD_SHORTCUT_DEFAULTS);
   const straightLineHeldRef = useRef(false);
+  const straightLineUsedRef = useRef(false);
 
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [selectedId, setSelectedId] = useState(null);
@@ -5296,6 +5382,12 @@ function Whiteboard({ board, onClose, onSave }) {
   const [styleFlyoutOpen, setStyleFlyoutOpen] = useState(false);
   const isDrawingRef = useRef(false);
   const dragRef = useRef(null);
+  // Guarda o "estado grudado" do snap de tamanho ao redimensionar uma imagem:
+  // enquanto o alvo continuar dentro da margem de saída, o snap se mantém
+  // mesmo com pequenos tremores do dedo/mouse — só solta quando o gesto
+  // realmente se afasta do tamanho encontrado.
+  const resizeStickRef = useRef(null);
+  const [snapGuideTargetId, setSnapGuideTargetId] = useState(null);
   const panRef = useRef(null);
   const eraseGestureRef = useRef(false);
   const spaceDownRef = useRef(false);
@@ -5540,6 +5632,14 @@ function Whiteboard({ board, onClose, onSave }) {
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.mode === "resize") {
+      const el = elements.find(a => a.id === drag.id);
+      if (el && el.type === "image") {
+        const others = elements.filter(o => o.type === "image" && o.id !== el.id);
+        const { width, height, targetId } = resizeImageWithSnap(el, x, y, others, view.zoom, resizeStickRef);
+        setSnapGuideTargetId(targetId);
+        setElements(prev => prev.map(a => (a.id === el.id ? { ...a, width, height } : a)));
+        return;
+      }
       setElements(prev => prev.map(a => (a.id === drag.id ? resizeElementCorner(a, x, y) : a)));
       return;
     }
@@ -5712,6 +5812,7 @@ function Whiteboard({ board, onClose, onSave }) {
     }
     if (tool === "pen" || tool === "highlighter") {
       isDrawingRef.current = e.pointerId;
+      straightLineUsedRef.current = false;
       if (showPenCursor) setShowPenCursor(false);
       setLiveEl({
         id: crypto.randomUUID(), type: "stroke", tool,
@@ -5834,6 +5935,7 @@ function Whiteboard({ board, onClose, onSave }) {
         // primeiro e o atual (com ângulo arredondado pro múltiplo de 45°).
         if (straightLineHeldRef.current) {
           const start = prev.points[0];
+          straightLineUsedRef.current = true;
           return { ...prev, points: [start, snapPointToAngle(start, p)] };
         }
         return { ...prev, points: [...prev.points, p] };
@@ -5852,6 +5954,8 @@ function Whiteboard({ board, onClose, onSave }) {
     }
     if (dragRef.current) {
       dragRef.current = null;
+      resizeStickRef.current = null;
+      setSnapGuideTargetId(null);
       return;
     }
     if (lassoGroupDragRef.current) { lassoGroupDragRef.current = null; return; }
@@ -5878,7 +5982,19 @@ function Whiteboard({ board, onClose, onSave }) {
     // desenhar isso como uma bolinha, então não pode ser descartado.
     if ((tool === "pen" || tool === "highlighter") && liveEl.points.length >= 1) {
       let finalEl = liveEl;
-      if (tool === "pen" && autoShape && finalEl.points.length > 6) {
+      if ((tool === "pen" || tool === "highlighter") && straightLineUsedRef.current && finalEl.points.length === 2) {
+        // Mesmo resultado de quando a "correção automática" reconhece uma
+        // reta: vira uma forma de linha de verdade, não um traço à mão livre
+        // de 2 pontos — assim o atalho e a correção automática desenham
+        // exatamente igual. Pro destacador, vira uma barra de marca-texto
+        // reta (ponta quadrada, sem afinar) em vez de uma linha fina.
+        const [p0, p1] = finalEl.points;
+        finalEl = {
+          id: finalEl.id, type: "shape", shape: "line", tool: finalEl.tool,
+          color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
+          x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y,
+        };
+      } else if (tool === "pen" && autoShape && finalEl.points.length > 6) {
         const detected = detectShapeFromPoints(finalEl.points);
         if (detected) {
           finalEl = {
@@ -6020,6 +6136,18 @@ function Whiteboard({ board, onClose, onSave }) {
                         );
                       })()}
                     </g>
+                  );
+                })()}
+                {snapGuideTargetId && (() => {
+                  const target = elements.find(a => a.id === snapGuideTargetId);
+                  if (!target) return null;
+                  const b = elementBBox(target);
+                  const pad = 6 / view.zoom;
+                  // Contorno tracejado (em outra cor) sobre a imagem cujo tamanho
+                  // foi encontrado — só aparece enquanto o redimensionamento
+                  // estiver "grudado" nela.
+                  return (
+                    <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="#f5a524" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom} pointerEvents="none"/>
                   );
                 })()}
                 {lassoPath && lassoPath.length > 1 && (
