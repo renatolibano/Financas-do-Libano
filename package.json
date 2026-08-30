@@ -24,5 +24,10 @@
   },
   "devDependencies": {
     "vite-plugin-pwa": "^1.3.0"
-  }
+  },
+  "description": "Dashboard financeiro pessoal + organização de vida.",
+  "main": "vite.config.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }

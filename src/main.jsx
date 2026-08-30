@@ -54,7 +54,7 @@ import {
   playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
 } from "./lib/notifications";
-import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell } from "./components/shared";
+import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell, HandwritingPad } from "./components/shared";
 import { LanguagePicker } from "./components/languagePicker";
 import { languageName } from "./lib/languages";
 import { fetchTranslationSuggestions } from "./lib/translate";
@@ -3181,6 +3181,12 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const lassoDrawRef = useRef(null);
   const lassoGroupDragRef = useRef(null);
   const [editingTextId, setEditingTextId] = useState(null);
+  // Modo "caneta vira texto" da caixa de texto: handwritingId marca qual
+  // texto está com o painel de caneta aberto (em vez do textarea), e
+  // pendingTextDraft guarda o conteúdo acumulado enquanto alterna entre
+  // teclado e caneta (o texto reconhecido vai sendo somado ali).
+  const [handwritingId, setHandwritingId] = useState(null);
+  const [pendingTextDraft, setPendingTextDraft] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [pastePulse, setPastePulse] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
@@ -3206,6 +3212,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const historyRef = useRef([]);
   const redoRef = useRef([]);
   const dragRef = useRef(null);
+  const textResizeAnnRef = useRef(null);
   const eraseGestureRef = useRef(false);
   const drawSaveTimer = useRef(null);
   const penCursorRef = useRef(null);
@@ -3655,13 +3662,17 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
 
   const addTextAnnotation = (x, y) => {
     const id = crypto.randomUUID();
-    const ann = { id, type: "text", x, y, fontSize: 16, color, content: "" };
+    const ann = { id, type: "text", x, y, fontSize: 16, color, content: "", width: 220, height: Math.round(16 * 1.6) + 14 };
     commitAnnotation(ann);
+    setPendingTextDraft(null);
+    setHandwritingId(null);
     setEditingTextId(id);
   };
 
   const commitTextEdit = (id, value) => {
     setEditingTextId(null);
+    setHandwritingId(null);
+    setPendingTextDraft(null);
     setDrawings(prev => {
       const list = prev[pageNum] || [];
       const next = value.trim()
@@ -3852,6 +3863,19 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     } else if (showPenCursor) {
       setShowPenCursor(false);
     }
+    if (textResizeAnnRef.current) {
+      const { x } = toPageCoords(e.clientX, e.clientY);
+      const { id, startX, startWidth } = textResizeAnnRef.current;
+      const newWidth = Math.max(60, startWidth + (x - startX));
+      setDrawings(prev => {
+        const list = prev[pageNum] || [];
+        const next = list.map(a => a.id === id ? { ...a, width: newWidth } : a);
+        const nextAll = { ...prev, [pageNum]: next };
+        scheduleDrawingsSave(nextAll);
+        return nextAll;
+      });
+      return;
+    }
     if (tool === "select") {
       if (!dragRef.current) return;
       const { x, y } = toPageCoords(e.clientX, e.clientY);
@@ -3919,6 +3943,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   };
 
   const handleDrawPointerUp = () => {
+    if (textResizeAnnRef.current) { textResizeAnnRef.current = null; return; }
     if (tool === "select") { dragRef.current = null; return; }
     if (tool === "lasso") {
       if (lassoGroupDragRef.current) { lassoGroupDragRef.current = null; return; }
@@ -4447,25 +4472,82 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                     }}
                   />
                 )}
-                {annotationsVisible && basePageSize.width>0 && (drawings[pageNum]||[]).filter(a=>a.type==="text").map(a => (
+                {annotationsVisible && basePageSize.width>0 && (drawings[pageNum]||[]).filter(a=>a.type==="text").map(a => {
+                  const aMinH = Math.round(a.fontSize*1.6)+14;
+                  const aWidth = a.width ?? 220;
+                  const aHeight = a.height ?? aMinH;
+                  const autoGrowPdfTextarea = (ta) => {
+                    if (!ta) return;
+                    ta.style.height = "auto";
+                    const newH = Math.max(aMinH, ta.scrollHeight + 2);
+                    ta.style.height = newH + "px";
+                    if (newH !== aHeight) {
+                      setDrawings(prev => {
+                        const list = prev[pageNum] || [];
+                        const next = list.map(x => x.id === a.id ? { ...x, height: newH } : x);
+                        const nextAll = { ...prev, [pageNum]: next };
+                        scheduleDrawingsSave(nextAll);
+                        return nextAll;
+                      });
+                    }
+                  };
+                  return (
                   <div
                     key={a.id}
                     className={`pdfTextAnn${editingTextId===a.id?" editing":""}`}
                     style={{
                       left: (a.x/basePageSize.width*100)+"%",
                       top: (a.y/basePageSize.height*100)+"%",
+                      width: (aWidth/basePageSize.width*100)+"%",
                       fontSize: (a.fontSize/basePageSize.height*100)+"vh",
                       color: a.color,
                       pointerEvents: penMode && tool==="select" ? "auto" : "none",
                     }}
                     onPointerDown={(e)=>{ if(penMode && tool==="select"){ e.stopPropagation(); setSelectedAnnId(a.id); pushHistory(); const {x,y}=toPageCoords(e.clientX,e.clientY); dragRef.current={mode:"move", id:a.id, lastX:x, lastY:y}; } }}
-                    onDoubleClick={()=>{ if(penMode) setEditingTextId(a.id); }}
+                    onDoubleClick={()=>{ if(penMode){ setPendingTextDraft(null); setHandwritingId(null); setEditingTextId(a.id); } }}
                   >
+                    {editingTextId===a.id && (
+                      <div className="textAnnToolbar">
+                        <button type="button" title={handwritingId===a.id?"Voltar pro teclado":"Escrever à mão e converter"}
+                          className={handwritingId===a.id?"active":""}
+                          onClick={()=>{
+                            if(handwritingId===a.id){ setHandwritingId(null); return; }
+                            setPendingTextDraft(prev => prev ?? a.content ?? "");
+                            setHandwritingId(a.id);
+                          }}>
+                          <Pencil size={13}/>
+                        </button>
+                      </div>
+                    )}
                     {editingTextId===a.id
-                      ? <textarea autoFocus defaultValue={a.content} onBlur={(e)=>commitTextEdit(a.id, e.target.value)} onPointerDown={e=>e.stopPropagation()}/>
-                      : (a.content || (penMode ? "Toque duas vezes para escrever" : ""))}
+                      ? (handwritingId===a.id
+                          ? <HandwritingPad
+                              onCancel={()=>setHandwritingId(null)}
+                              onConvert={(text)=>{
+                                setPendingTextDraft(prev => {
+                                  const base = prev ?? a.content ?? "";
+                                  return base ? base + "\n" + text : text;
+                                });
+                                setHandwritingId(null);
+                              }}
+                            />
+                          : <textarea autoFocus ref={autoGrowPdfTextarea} defaultValue={pendingTextDraft ?? a.content}
+                              style={{ height: aHeight + "px" }}
+                              onInput={(e)=>autoGrowPdfTextarea(e.target)}
+                              onBlur={(e)=>commitTextEdit(a.id, e.target.value)} onPointerDown={e=>e.stopPropagation()}/>)
+                      : <div className="pdfTextAnnLabel" style={{ height: aHeight + "px" }}>{a.content || (penMode ? "Toque duas vezes para escrever" : "")}</div>}
+                    {editingTextId===a.id && handwritingId!==a.id && (
+                      <div className="textAnnResizeHandle"
+                        onPointerDown={(e)=>{
+                          e.stopPropagation(); e.preventDefault();
+                          const { x } = toPageCoords(e.clientX, e.clientY);
+                          textResizeAnnRef.current = { id: a.id, startX: x, startWidth: aWidth };
+                        }}
+                      />
+                    )}
                   </div>
-                ))}
+                  );
+                })}
                 {penMode && tool==="select" && selectedAnnId && basePageSize.width>0 && (() => {
                   const ann = (drawings[pageNum]||[]).find(a=>a.id===selectedAnnId);
                   if (!ann) return null;
@@ -5384,6 +5466,8 @@ function Whiteboard({ board, onClose, onSave }) {
   const lassoDrawRef = useRef(null);
   const lassoGroupDragRef = useRef(null);
   const [editingTextId, setEditingTextId] = useState(null);
+  const [handwritingId, setHandwritingId] = useState(null);
+  const [pendingTextDraft, setPendingTextDraft] = useState(null);
   const [liveEl, setLiveEl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [flash, setFlash] = useState(false);
@@ -5395,6 +5479,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const [styleFlyoutOpen, setStyleFlyoutOpen] = useState(false);
   const isDrawingRef = useRef(false);
   const dragRef = useRef(null);
+  const textResizeRef = useRef(null);
   // Guarda o "estado grudado" do snap de tamanho ao redimensionar uma imagem:
   // enquanto o alvo continuar dentro da margem de saída, o snap se mantém
   // mesmo com pequenos tremores do dedo/mouse — só solta quando o gesto
@@ -5590,11 +5675,15 @@ function Whiteboard({ board, onClose, onSave }) {
 
   const addTextElement = (x, y) => {
     const id = crypto.randomUUID();
-    commitElement({ id, type: "text", x, y, fontSize: 18, color, content: "" });
+    commitElement({ id, type: "text", x, y, fontSize: 18, color, content: "", width: 220, height: Math.round(18 * 1.6) + 14 });
+    setPendingTextDraft(null);
+    setHandwritingId(null);
     setEditingTextId(id);
   };
   const commitTextEdit = (id, value) => {
     setEditingTextId(null);
+    setHandwritingId(null);
+    setPendingTextDraft(null);
     setElements(prev => value.trim() ? prev.map(a => a.id === id ? { ...a, content: value } : a) : prev.filter(a => a.id !== id));
   };
 
@@ -5709,7 +5798,7 @@ function Whiteboard({ board, onClose, onSave }) {
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
       if (matchesShortcut(e, getBinding(shortcuts, "pan"))) { spaceDownRef.current = true; e.preventDefault(); }
       if (matchesShortcut(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = true;
-      if (e.key === "Escape") { if (editingTextId) setEditingTextId(null); else if (tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else onClose(); }
+      if (e.key === "Escape") { if (editingTextId) { setEditingTextId(null); setHandwritingId(null); setPendingTextDraft(null); } else if (tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else onClose(); }
       if (matchesShortcut(e, getBinding(shortcuts, "redo"))) { e.preventDefault(); redo(); }
       else if (matchesShortcut(e, getBinding(shortcuts, "undo"))) { e.preventDefault(); undo(); }
       if (matchesShortcut(e, getBinding(shortcuts, "deleteSelection"))) {
@@ -5892,6 +5981,13 @@ function Whiteboard({ board, onClose, onSave }) {
     } else if (showPenCursor) {
       setShowPenCursor(false);
     }
+    if (textResizeRef.current) {
+      const { x } = toWorld(e.clientX, e.clientY);
+      const { id, startX, startWidth } = textResizeRef.current;
+      const newWidth = Math.max(60, startWidth + (x - startX));
+      setElements(prev => prev.map(a => a.id === id ? { ...a, width: newWidth } : a));
+      return;
+    }
     if (panRef.current) {
       // Importante: tirar esses valores do ref e guardar em variáveis locais
       // ANTES do setView. O React só executa a função de atualização depois
@@ -5961,6 +6057,7 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const handlePointerUp = (e) => {
+    if (textResizeRef.current) { textResizeRef.current = null; return; }
     if (panRef.current) {
       panRef.current = null;
       return;
@@ -6105,29 +6202,83 @@ function Whiteboard({ board, onClose, onSave }) {
                   <WhiteboardElementShape key={el.id} el={el}/>
                 ))}
                 {liveEl && liveEl.type !== "text" && <AnnotationShape ann={liveEl} preview/>}
-                {elements.filter(el => el.type === "text").map(el => (
-                  <foreignObject key={el.id} x={el.x} y={el.y} width={el.width ?? Math.max(160, (el.content?.length || 10) * el.fontSize * 0.6)} height={el.height ?? el.fontSize * 4}>
-                    {editingTextId === el.id ? (
+                {elements.filter(el => el.type === "text").map(el => {
+                  const elMinH = Math.round(el.fontSize * 1.6) + 14;
+                  const elWidth = el.width ?? 220;
+                  const elHeight = el.height ?? elMinH;
+                  const autoGrowWhiteboardTextarea = (ta) => {
+                    if (!ta) return;
+                    ta.style.height = "auto";
+                    const newH = Math.max(elMinH, ta.scrollHeight + 2);
+                    ta.style.height = newH + "px";
+                    if (newH !== elHeight) {
+                      setElements(prev => prev.map(a => a.id === el.id ? { ...a, height: newH } : a));
+                    }
+                  };
+                  return (
+                  <foreignObject key={el.id} x={el.x} y={el.y}
+                    width={handwritingId === el.id ? 380 : elWidth}
+                    height={handwritingId === el.id ? 190 : elHeight}
+                    style={{ overflow: "visible" }}
+                  >
+                    {editingTextId === el.id && (
+                      <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }}>
+                        <button type="button" title={handwritingId === el.id ? "Voltar pro teclado" : "Escrever à mão e converter"}
+                          className={handwritingId === el.id ? "active" : ""}
+                          onClick={() => {
+                            if (handwritingId === el.id) { setHandwritingId(null); return; }
+                            setPendingTextDraft(prev => prev ?? el.content ?? "");
+                            setHandwritingId(el.id);
+                          }}>
+                          <Pencil size={13}/>
+                        </button>
+                      </div>
+                    )}
+                    {editingTextId === el.id && handwritingId === el.id ? (
+                      <HandwritingPad
+                        onCancel={() => setHandwritingId(null)}
+                        onConvert={(text) => {
+                          setPendingTextDraft(prev => {
+                            const base = prev ?? el.content ?? "";
+                            return base ? base + "\n" + text : text;
+                          });
+                          setHandwritingId(null);
+                        }}
+                      />
+                    ) : editingTextId === el.id ? (
                       <textarea
                         autoFocus
-                        defaultValue={el.content}
+                        ref={autoGrowWhiteboardTextarea}
+                        defaultValue={pendingTextDraft ?? el.content}
                         className="whiteboardTextInput"
-                        style={{ color: el.color, fontSize: el.fontSize }}
+                        style={{ color: el.color, fontSize: el.fontSize, width: elWidth + "px", height: elHeight + "px" }}
+                        onInput={e => autoGrowWhiteboardTextarea(e.target)}
                         onBlur={e => commitTextEdit(el.id, e.target.value)}
                         onPointerDown={e => e.stopPropagation()}
                       />
                     ) : (
                       <div
                         className="whiteboardTextLabel"
-                        style={{ color: el.color, fontSize: el.fontSize, pointerEvents: tool === "select" ? "auto" : "none" }}
+                        style={{ color: el.color, fontSize: el.fontSize, width: elWidth + "px", height: elHeight + "px", pointerEvents: tool === "select" ? "auto" : "none" }}
                         onPointerDown={e => { if (tool === "select") { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
-                        onDoubleClick={() => setEditingTextId(el.id)}
+                        onDoubleClick={() => { setPendingTextDraft(null); setHandwritingId(null); setEditingTextId(el.id); }}
                       >
                         {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
                       </div>
                     )}
+                    {editingTextId === el.id && handwritingId !== el.id && (
+                      <div className="textAnnResizeHandle"
+                        onPointerDown={e => {
+                          e.stopPropagation(); e.preventDefault();
+                          try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
+                          const { x } = toWorld(e.clientX, e.clientY);
+                          textResizeRef.current = { id: el.id, startX: x, startWidth: elWidth };
+                        }}
+                      />
+                    )}
                   </foreignObject>
-                ))}
+                  );
+                })}
                 {tool === "select" && selectedId && (() => {
                   const el = elements.find(a => a.id === selectedId);
                   if (!el) return null;

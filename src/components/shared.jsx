@@ -1,8 +1,124 @@
 import React, { useState, useEffect, useRef } from "react";
-import { MoreVertical, CheckCircle2, Bell, CheckCheck, Cake, CircleDollarSign, CalendarClock, Repeat2, Target, Flag, PartyPopper } from "lucide-react";
+import { MoreVertical, CheckCircle2, Bell, CheckCheck, Cake, CircleDollarSign, CalendarClock, Repeat2, Target, Flag, PartyPopper, Eraser, Keyboard, WandSparkles } from "lucide-react";
 import { urgencyClass } from "../lib/calendar";
 import { playNotifSound } from "../lib/notifications";
 import { useDismissedToday } from "../hooks";
+import { recognizeHandwriting } from "../lib/handwriting";
+
+// Painel de "caneta vira texto": um canvas onde a pessoa escreve à mão (com
+// o dedo, mouse ou stylus) e um botão "Converter" que manda o desenho pra
+// IA transcrever. Usado tanto na caixa de texto do anotador de PDF quanto
+// na do quadro infinito — os dois só trocam o textarea por este painel
+// enquanto o modo caneta está ativo. Resolução interna do canvas é fixa
+// (maior que a caixa na tela) pra a transcrição sair mais nítida.
+const HANDWRITING_CANVAS_W = 640;
+const HANDWRITING_CANVAS_H = 220;
+
+export function HandwritingPad({ onConvert, onCancel }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const lastPtRef = useRef(null);
+  const hasInkRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    hasInkRef.current = false;
+    setError(null);
+  };
+
+  const handlePointerDown = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try { canvasRef.current.setPointerCapture?.(e.pointerId); } catch (err) {}
+    drawingRef.current = true;
+    lastPtRef.current = getPos(e);
+  };
+  const handlePointerMove = (e) => {
+    if (!drawingRef.current) return;
+    e.stopPropagation();
+    const pos = getPos(e);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(lastPtRef.current.x, lastPtRef.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastPtRef.current = pos;
+    hasInkRef.current = true;
+  };
+  const handlePointerUp = (e) => {
+    if (drawingRef.current) e.stopPropagation();
+    drawingRef.current = false;
+  };
+
+  const handleConvert = async () => {
+    if (!hasInkRef.current || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const dataUrl = canvasRef.current.toDataURL("image/png");
+      const text = await recognizeHandwriting(dataUrl);
+      if (!text) {
+        setError("Não consegui reconhecer nada legível — tente escrever maior ou mais separado.");
+        return;
+      }
+      onConvert(text);
+    } catch (err) {
+      setError(err.message || "Não foi possível converter agora.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="handwritingPad" onPointerDown={e => e.stopPropagation()}>
+      <canvas
+        ref={canvasRef}
+        width={HANDWRITING_CANVAS_W}
+        height={HANDWRITING_CANVAS_H}
+        className="handwritingPadCanvas"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+        onContextMenu={e => e.preventDefault()}
+      />
+      {error && <div className="handwritingPadError">{error}</div>}
+      <div className="handwritingPadBar">
+        <button type="button" title="Limpar" onClick={clearCanvas} disabled={busy}><Eraser size={15}/></button>
+        <button type="button" title="Voltar pro teclado" onClick={onCancel} disabled={busy}><Keyboard size={15}/></button>
+        <button type="button" className="handwritingPadConvert" onClick={handleConvert} disabled={busy}>
+          <WandSparkles size={15}/> {busy ? "Convertendo…" : "Converter"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children}){
   const cls = urgencyClass(days);
