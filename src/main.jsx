@@ -6517,17 +6517,16 @@ function Whiteboard({ board, onClose, onSave }) {
               </div>
             )}
 
-            {showFavColorBar && (
-              <div className="whiteboardFavColorBar">
-                {favPenColors.map(hex => (
-                  <button key={hex} type="button" title={hex} style={{ background: hex }}
-                    className={color === hex ? "active" : ""}
-                    onClick={() => setColor(hex)}/>
-                ))}
-              </div>
-            )}
-
             <div className="whiteboardDock">
+              {showFavColorBar && (
+                <div className="whiteboardDockRow whiteboardFavColorBar">
+                  {favPenColors.map(hex => (
+                    <button key={hex} type="button" title={hex} style={{ background: hex }}
+                      className={color === hex ? "active" : ""}
+                      onClick={() => setColor(hex)}/>
+                  ))}
+                </div>
+              )}
               <div className="whiteboardDockRow">
                 <button title="Caneta (2 toques: opções)" className={tool === "pen" ? "active" : ""} onClick={() => { setTool("pen"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><PenTool size={16}/></button>
                 <button title="Marca-texto (2 toques: opções)" className={tool === "highlighter" ? "active" : ""} onClick={() => { setTool("highlighter"); setSelectedId(null); }} onDoubleClick={() => setStyleFlyoutOpen(v => !v)}><Highlighter size={16}/></button>
