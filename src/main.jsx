@@ -18,7 +18,7 @@ import {
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
-  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -26,6 +26,7 @@ import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
+import { hashPin } from "./lib/lock";
 import { idbGet, idbSet } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
@@ -42,7 +43,7 @@ import {
   shape3DGeometry,
 } from "./lib/annotations";
 import Auth, { ResetPassword } from "./Auth";
-import { money, maskMoney, timeAgo } from "./lib/format";
+import { money, maskMoney, timeAgo, formatBytes } from "./lib/format";
 import {
   WEEKDAY_LABELS, MONTH_LABELS, pad2, parseReminderDate, daysUntil, daysUntilMonthlyDay,
   daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
@@ -151,9 +152,24 @@ const initialCardPurchases = [
   {id:5, cat:"Outros", value:100},
 ];
 
+// Opções da "Tela inicial" (Configurações) — mesmas páginas do navTree, numa
+// lista plana com o rótulo já resolvido, pra alimentar o <select>. Mantida
+// separada do navTree (que é montado dentro do App) porque esse aqui não
+// depende de nenhum estado do componente.
+const HOME_PAGE_OPTIONS = [
+  { group: "Finanças", pages: ["Visão Geral","Movimentações","Pagamentos Fixos","Dívidas","Cartões","Orçamento","Metas","Recorrentes",{key:"Lista de Compras", label:"Lista de compras"}] },
+  { group: "Lembretes", pages: [{key:"Lembretes Comuns", label:"Lembretes comuns"},"Aniversários"] },
+  { group: "Geral", pages: ["Calendário","Notas"] },
+  { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
+  { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF"] },
+  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos"] },
+];
+
 function Root(){
   const {session, checking, recovery} = useSession();
   const [theme,setTheme] = useTheme();
+  const [pinHash, setPinHash] = usePersistentState("libano-app-pin-hash", null);
+  const [unlocked, setUnlocked] = useState(false);
 
   if(cloudConfigured && checking){
     return <div className="bootScreen">Carregando…</div>;
@@ -166,11 +182,68 @@ function Root(){
   if(cloudConfigured && !session){
     return <Auth/>;
   }
-  return <App session={session} theme={theme} setTheme={setTheme}/>;
+  // PIN local (ver src/lib/lock.js): pedido de novo a cada abertura/recarga
+  // do app neste aparelho, mesmo já logado na nuvem — é uma camada separada
+  // da conta, guardada só neste dispositivo.
+  if(pinHash && !unlocked){
+    return <LockScreen pinHash={pinHash} onUnlock={()=>setUnlocked(true)}/>;
+  }
+  return <App session={session} theme={theme} setTheme={setTheme} pinHash={pinHash} setPinHash={setPinHash}/>;
 }
 
-function App({session,theme,setTheme}){
-  const [page,setPage] = useState("Visão Geral");
+function LockScreen({ pinHash, onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (pin.length < 4 || checking) return;
+    setChecking(true);
+    const hash = await hashPin(pin);
+    setChecking(false);
+    if (hash === pinHash) {
+      onUnlock();
+    } else {
+      setError(true);
+      setPin("");
+      setTimeout(() => setError(false), 1400);
+    }
+  };
+
+  const forgotPin = () => {
+    if (!confirm("Isso remove o PIN deste aparelho — seus dados continuam salvos, só o bloqueio de tela some. Continuar?")) return;
+    removeLocalKey("libano-app-pin-hash");
+    location.reload();
+  };
+
+  return (
+    <div className="bootScreen">
+      <form className="modal lockScreenModal" onSubmit={submit}>
+        <div className="lockScreenIcon"><Lock size={24}/></div>
+        <h2>App bloqueado</h2>
+        <p className="authSub">Digite o PIN pra continuar.</p>
+        <input
+          type="password" inputMode="numeric" autoFocus
+          value={pin}
+          onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+          className={"lockScreenPinInput" + (error ? " lockScreenError" : "")}
+          placeholder="••••"
+        />
+        {error && <small className="lockScreenErrorMsg">PIN incorreto.</small>}
+        <button className="primary" type="submit" disabled={pin.length < 4 || checking}>Entrar</button>
+        <button type="button" className="ghost" onClick={forgotPin}>Esqueci meu PIN</button>
+      </form>
+    </div>
+  );
+}
+
+function App({session,theme,setTheme,pinHash,setPinHash}){
+  // Tela inicial (Configurações): a página com que o app abre. Só lê o valor
+  // salvo uma vez, na montagem — depois disso "page" navega normalmente e
+  // não volta a seguir esse valor até o app ser reaberto/recarregado.
+  const [homePage, setHomePage] = usePersistentState("libano-home-page", "Visão Geral");
+  const [page,setPage] = useState(homePage);
   const [openNoteId,setOpenNoteId] = useState(null);
   const [mobileOpen,setMobileOpen] = useState(false);
   // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
@@ -218,6 +291,16 @@ function App({session,theme,setTheme}){
   const calendarEvents = useEntity("calendar_recurring_events", [], session);
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
+  // Espaço ocupado neste aparelho (Configurações → junto dos botões de
+  // limpar cache/dados). navigator.storage.estimate() soma tudo que o app
+  // guarda localmente (cache de PDFs, IndexedDB, localStorage) — só calcula
+  // quando a modal de Configurações é aberta, não fica rodando à toa.
+  const [storageUsage, setStorageUsage] = useState(null);
+  const refreshStorageUsage = () => {
+    if (typeof navigator === "undefined" || !navigator.storage?.estimate) { setStorageUsage(null); return; }
+    navigator.storage.estimate().then(({ usage }) => setStorageUsage(usage ?? null)).catch(() => setStorageUsage(null));
+  };
+  useEffect(() => { if (showSettings) refreshStorageUsage(); }, [showSettings]);
   // Preferências de notificações: chave-mestra liga/desliga tudo; "kinds" guarda
   // por categoria (ausente ou true = ligada, false = desligada). Persistido localmente.
   const [notifSettings, setNotifSettings] = usePersistentState("libano-notif-settings", { enabled: true, kinds: {} });
@@ -372,6 +455,69 @@ function App({session,theme,setTheme}){
   const [aiLoading,setAiLoading] = useState(false);
   const [aiError,setAiError] = useState(null);
   const aiAvailable = cloudConfigured && !!session;
+
+  // Backup: exporta tudo que já está carregado em memória (nenhuma requisição
+  // nova ao Supabase — usa só o que as listas já buscaram) como um único JSON
+  // baixável. Itens com listagem "enxuta" (livros, PDFs de estudo, notas,
+  // listas de flashcards — ver listSelect em useEntity) entram com os campos
+  // básicos; anotações/desenhos/conteúdo completo só vêm se o item já tiver
+  // sido aberto nesta sessão (o que preenche esses campos via fetchFull).
+  const [exportingData, setExportingData] = useState(false);
+  const exportAllData = () => {
+    setExportingData(true);
+    try {
+      const payload = {
+        app: "Libano", exported_at: new Date().toISOString(), format_version: 1,
+        financas: {
+          transacoes: transactions.data, pagamentos_fixos: fixed.data, dividas: debts.data,
+          compras_cartao: cardPurchases.data, orcamentos: budgets.data, metas: goals.data,
+          recorrentes: recurring.data, valores_manuais_visao_geral: overview,
+        },
+        lembretes_calendario: { lembretes: reminders.data, eventos_recorrentes: calendarEvents.data },
+        notas: notes.data,
+        livros: { livros: books.data, pastas: bookGroups.data },
+        estudos: {
+          metas_de_estudo: studyGoals.data, pdfs: studyPdfs.data, pastas_de_pdfs: studyPdfGroups.data,
+          flashcards: studyFlashcards.data, listas_de_flashcards: studyFlashcardLists.data, pastas_de_flashcards: studyFlashcardFolders.data,
+        },
+        treino: { pastas: workoutFolders.data, exercicios: workoutExercises.data },
+        lista_de_compras: shoppingItems.data,
+        filmes_e_series: { pastas: mediaGroups.data, itens: mediaItems.data },
+        jogos: { pastas: gameGroups.data, itens: gameItems.data },
+        preferencias_do_app: { tema: theme, notificacoes: notifSettings, modo_economia_de_dados: egressSaver, ocultar_valores: hideValues },
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `libano-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível gerar o backup: " + (e.message || e));
+    } finally {
+      setExportingData(false);
+    }
+  };
+
+  // PIN local (Configurações): pede duas vezes por window.prompt, igual ao
+  // padrão já usado em outras ações rápidas do app (renomear pasta, etc.).
+  const handleSetPin = () => {
+    const p1 = window.prompt("Escolha um PIN (4 a 8 números):");
+    if (p1 === null) return;
+    if (!/^\d{4,8}$/.test(p1)) { alert("O PIN precisa ter de 4 a 8 números."); return; }
+    const p2 = window.prompt("Digite o PIN de novo pra confirmar:");
+    if (p2 === null) return;
+    if (p1 !== p2) { alert("Os PINs não coincidem. Tente de novo."); return; }
+    hashPin(p1).then(hash => setPinHash(hash));
+  };
+  const handleRemovePin = () => {
+    if (!confirm("Remover o PIN? O app vai abrir direto, sem pedir bloqueio.")) return;
+    setPinHash(null);
+  };
 
   const askAI = async ()=>{
     if(!aiAvailable){
@@ -561,6 +707,19 @@ function App({session,theme,setTheme}){
             <button type="button" className={theme==="light"?"active":""} onClick={()=>setTheme("light")}><Sun size={14}/> Claro</button>
           </div>
         </label>
+        <label>Tela inicial
+          <select value={homePage} onChange={e=>setHomePage(e.target.value)}>
+            {HOME_PAGE_OPTIONS.map(group => (
+              <optgroup key={group.group} label={group.group}>
+                {group.pages.map(p => {
+                  const key = typeof p === "string" ? p : p.key;
+                  const label = typeof p === "string" ? p : p.label;
+                  return <option key={key} value={key}>{label}</option>;
+                })}
+              </optgroup>
+            ))}
+          </select>
+        </label>
         <div className="notifSettingsBlock">
           <label className="notifToggleRow">
             <span><Bell size={15}/> Notificações</span>
@@ -598,6 +757,20 @@ function App({session,theme,setTheme}){
             Oculta capas de pastas, fotos (compras, mídia, jogos), gifs de exercício e imagens de flashcard pra economizar dados. Livros e PDFs continuam mostrando a capa salva — só param de baixar o arquivo inteiro pra gerar uma nova.
           </small>
         </div>
+        <div className="notifSettingsBlock">
+          <label className="notifToggleRow" style={{cursor:"default"}}>
+            <span><Lock size={15}/> Bloqueio por PIN</span>
+            {pinHash
+              ? <button type="button" className="ghost" onClick={handleRemovePin}>Remover</button>
+              : <button type="button" className="ghost" onClick={handleSetPin}>Definir PIN</button>}
+          </label>
+          <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
+            {pinHash
+              ? "O app pede esse PIN toda vez que é aberto neste aparelho. Não criptografa os dados — é só uma tela antes de entrar."
+              : "Peça um PIN de 4 a 8 números pra abrir o app neste aparelho. Útil se o celular fica destravado por perto."}
+          </small>
+          {pinHash && <button className="resetData" onClick={()=>location.reload()}><Lock size={14}/> Trancar agora</button>}
+        </div>
         <div className="cloud">
           {cloudConfigured && session ? <Cloud size={20}/> : <CloudOff size={20}/>}
           <div>
@@ -605,9 +778,17 @@ function App({session,theme,setTheme}){
             <small>{cloudConfigured && session ? ("Conectado como "+session.user.email) : "Salvo neste dispositivo"}</small>
           </div>
         </div>
+        <button className="resetData" onClick={exportAllData} disabled={exportingData}><Download size={14}/> {exportingData ? "Gerando..." : "Baixar meus dados (backup)"}</button>
+        <small className="boardSettingsHint" style={{display:"block", marginTop:-6, marginBottom:8}}>
+          Gera um arquivo .json com tudo que está carregado agora (finanças, lembretes, notas, livros, estudos, treino, listas, filmes/séries e jogos). Anotações e desenhos de itens que você não abriu nesta sessão podem não vir completos.
+        </small>
         {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
+        {storageUsage != null && (
+          <p className="emptyHint" style={{margin:"-4px 0 0"}}>Ocupando {formatBytes(storageUsage)} neste aparelho (PDFs em cache, imagens e dados locais).</p>
+        )}
         <button className="resetData" onClick={async ()=>{
           await clearAllPdfCache();
+          refreshStorageUsage();
           alert("Cache de PDFs limpo. Eles serão baixados de novo na próxima leitura.");
         }}><FileText size={14}/> Limpar cache de PDFs</button>
         <button className="resetData" onClick={()=>{
