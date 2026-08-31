@@ -2790,14 +2790,19 @@ const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPo
       return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} strokeDasharray={ann.dashed ? `${sw * 2.2} ${sw * 1.8}` : undefined} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} />;
     }
     if (ann.shape === "arrow") {
+      // Ponta em "V" aberto (2 traços do mesmo jeito da linha, com ponta e
+      // junção arredondadas) em vez de um triângulo preenchido — fica mais
+      // fina e parecida com uma seta desenhada à mão, sem aquele efeito de
+      // "bico gordo" que o triângulo sólido dava numa linha mais grossa.
       const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
-      const headLen = Math.max(8, sw * 3);
-      const hx1 = ann.x2 - headLen * Math.cos(angle - Math.PI / 7), hy1 = ann.y2 - headLen * Math.sin(angle - Math.PI / 7);
-      const hx2 = ann.x2 - headLen * Math.cos(angle + Math.PI / 7), hy2 = ann.y2 - headLen * Math.sin(angle + Math.PI / 7);
+      const headLen = Math.max(10, sw * 2.6);
+      const spread = Math.PI / 6.2;
+      const hx1 = ann.x2 - headLen * Math.cos(angle - spread), hy1 = ann.y2 - headLen * Math.sin(angle - spread);
+      const hx2 = ann.x2 - headLen * Math.cos(angle + spread), hy2 = ann.y2 - headLen * Math.sin(angle + spread);
       return (
         <g onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }}>
           <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} />
-          <polygon points={`${ann.x2},${ann.y2} ${hx1},${hy1} ${hx2},${hy2}`} fill={stroke} opacity={op} />
+          <path d={`M ${hx1} ${hy1} L ${ann.x2} ${ann.y2} L ${hx2} ${hy2}`} fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" opacity={op} />
         </g>
       );
     }

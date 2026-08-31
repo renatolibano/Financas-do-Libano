@@ -558,14 +558,17 @@ export async function drawAnnotationOnCanvas(ctx, ann) {
       ctx.stroke();
       if (ann.dashed) ctx.setLineDash([]);
       if (ann.shape === "arrow") {
+        // Mesma ponta em "V" aberto (2 traços, não triângulo preenchido)
+        // usada na tela — ver AnnotationShape no main.jsx.
         const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
-        const headLen = Math.max(8, (ann.width || 2) * 3);
+        const headLen = Math.max(10, (ann.width || 2) * 2.6);
+        const spread = Math.PI / 6.2;
+        ctx.lineJoin = "round";
         ctx.beginPath();
-        ctx.moveTo(ann.x2, ann.y2);
-        ctx.lineTo(ann.x2 - headLen * Math.cos(angle - Math.PI / 7), ann.y2 - headLen * Math.sin(angle - Math.PI / 7));
-        ctx.lineTo(ann.x2 - headLen * Math.cos(angle + Math.PI / 7), ann.y2 - headLen * Math.sin(angle + Math.PI / 7));
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(ann.x2 - headLen * Math.cos(angle - spread), ann.y2 - headLen * Math.sin(angle - spread));
+        ctx.lineTo(ann.x2, ann.y2);
+        ctx.lineTo(ann.x2 - headLen * Math.cos(angle + spread), ann.y2 - headLen * Math.sin(angle + spread));
+        ctx.stroke();
       }
     } else if (ann.shape === "rect") {
       const x = Math.min(ann.x1, ann.x2), y = Math.min(ann.y1, ann.y2);
