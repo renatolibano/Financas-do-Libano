@@ -2721,6 +2721,33 @@ function PdfOutlineList({ items, onGoTo }) {
 // e no quadro infinito, que acumula muito mais conteúdo do que uma página
 // de PDF, isso ia deixando o traço cada vez mais travado conforme o quadro
 // enchia. Com o memo, um elemento só recalcula quando ele mesmo muda.
+// Ícone de "linha tracejada" pro seletor de estilo de linha reta da caneta
+// (o lucide-react não tem um pronto). Só 3 tracinhos simples, na cor atual.
+function DashedLineIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <line x1="1" y1="8" x2="4.2" y2="8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="6.9" y1="8" x2="9.1" y2="8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <line x1="11.8" y1="8" x2="15" y2="8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Quando um traço de caneta é reconhecido como reta (atalho de linha reta ou
+// a correção automática), essa função decide em que tipo de anotação ele
+// vira, de acordo com o estilo escolhido no seletor "Linha reta" da caneta:
+// linha normal, linha tracejada ou seta. Destacador nunca usa isso (sempre
+// vira barra reta normal) — só a caneta tem esse seletor.
+function penStraightLineShape({ id, tool, color, width, opacity, x1, y1, x2, y2 }, lineStyle) {
+  if (tool === "pen" && lineStyle === "arrow") {
+    return { id, type: "shape", shape: "arrow", tool, color, width, opacity, x1, y1, x2, y2 };
+  }
+  return {
+    id, type: "shape", shape: "line", tool, color, width, opacity, x1, y1, x2, y2,
+    ...(tool === "pen" && lineStyle === "dashed" ? { dashed: true } : {}),
+  };
+}
+
 const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPointerDown }) {
   if (ann.type === "image") {
     return (
@@ -2760,7 +2787,7 @@ const AnnotationShape = React.memo(function AnnotationShape({ ann, preview, onPo
         // normal (a cor clara "tinge" o que está embaixo em vez de cobrir).
         return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="butt" opacity={op} style={{ mixBlendMode: "multiply", cursor: onPointerDown ? "pointer" : undefined }} onPointerDown={onPointerDown} />;
       }
-      return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} onPointerDown={onPointerDown} />;
+      return <line x1={ann.x1} y1={ann.y1} x2={ann.x2} y2={ann.y2} stroke={stroke} strokeWidth={sw} strokeLinecap="round" opacity={op} strokeDasharray={ann.dashed ? `${sw * 2.2} ${sw * 1.8}` : undefined} onPointerDown={onPointerDown} style={{ cursor: onPointerDown ? "pointer" : undefined }} />;
     }
     if (ann.shape === "arrow") {
       const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
@@ -3153,6 +3180,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const [penStyle, setPenStyle] = useState("normal"); // normal | pencil | marker
   const [eraserMode, setEraserMode] = useState("partial"); // partial | object
   const [shapeType, setShapeType] = useState("line"); // line | arrow | rect | circle
+  const [penLineStyle, setPenLineStyle] = useState("solid"); // solid | dashed | arrow — em que a linha reta da caneta (atalho/correção automática) vira
   const [color, setColor] = useState("#1f2937");
   const [favPenColors, setFavPenColors] = usePersistentState("pdfFavPenColors", ["#1f2937", "#e11d48", "#2563eb", "#16a34a"]);
   const [thickness, setThickness] = useState(3);
@@ -3667,6 +3695,12 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     setPendingTextDraft(null);
     setHandwritingId(null);
     setEditingTextId(id);
+    // Sem isso a ferramenta continua em "text": a caixa recém-criada fica com
+    // pointer-events desligado (só liga com tool==="select"), então o clique
+    // no botão "escrever à mão" atravessa a caixa e cai na camada de desenho,
+    // que interpreta como um novo toque com a ferramenta texto — criando
+    // outra caixa em vez de abrir o painel de caneta.
+    setTool("select");
   };
 
   const commitTextEdit = (id, value) => {
@@ -3977,22 +4011,27 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
         // reta: vira uma forma de linha de verdade, não um traço à mão livre
         // de 2 pontos — assim o atalho e a correção automática desenham
         // exatamente igual. Pro destacador, vira uma barra de marca-texto
-        // reta (ponta quadrada, sem afinar) em vez de uma linha fina.
+        // reta (ponta quadrada, sem afinar) em vez de uma linha fina. Pra
+        // caneta, respeita o estilo escolhido (normal/tracejada/seta).
         const [p0, p1] = finalAnn.points;
-        finalAnn = {
-          id: finalAnn.id, type: "shape", shape: "line", tool: finalAnn.tool,
-          color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
+        finalAnn = penStraightLineShape({
+          id: finalAnn.id, tool: finalAnn.tool, color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
           x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y,
-        };
+        }, penLineStyle);
       } else if (tool === "pen" && autoShape && finalAnn.points.length > 6) {
         const detected = detectShapeFromPoints(finalAnn.points);
         if (detected) {
-          finalAnn = {
-            id: finalAnn.id, type: "shape", shape: detected.type,
-            color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
-            x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
-            ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
-          };
+          finalAnn = detected.type === "line"
+            ? penStraightLineShape({
+                id: finalAnn.id, tool: finalAnn.tool, color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
+                x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+              }, penLineStyle)
+            : {
+                id: finalAnn.id, type: "shape", shape: detected.type,
+                color: finalAnn.color, width: finalAnn.width, opacity: finalAnn.opacity,
+                x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+                ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
+              };
         }
       }
       commitAnnotation(finalAnn);
@@ -4329,6 +4368,11 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e=>setThickness(+e.target.value)}/></label>
                   <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e=>setOpacity(+e.target.value)}/></label>
                   <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e=>setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+                  <div className="penToolGroup">
+                    <button title="Linha normal" className={penLineStyle==="solid"?"active":""} onClick={()=>setPenLineStyle("solid")}><Minus size={16}/></button>
+                    <button title="Linha tracejada" className={penLineStyle==="dashed"?"active":""} onClick={()=>setPenLineStyle("dashed")}><DashedLineIcon size={16}/></button>
+                    <button title="Seta" className={penLineStyle==="arrow"?"active":""} onClick={()=>setPenLineStyle("arrow")}><ArrowUpRight size={16}/></button>
+                  </div>
                 </>)}
                 {tool === "highlighter" && (<>
                   <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
@@ -4501,13 +4545,13 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                       width: (aWidth/basePageSize.width*100)+"%",
                       fontSize: (a.fontSize/basePageSize.height*100)+"vh",
                       color: a.color,
-                      pointerEvents: penMode && tool==="select" ? "auto" : "none",
+                      pointerEvents: (penMode && tool==="select") || editingTextId===a.id ? "auto" : "none",
                     }}
                     onPointerDown={(e)=>{ if(penMode && tool==="select"){ e.stopPropagation(); setSelectedAnnId(a.id); pushHistory(); const {x,y}=toPageCoords(e.clientX,e.clientY); dragRef.current={mode:"move", id:a.id, lastX:x, lastY:y}; } }}
                     onDoubleClick={()=>{ if(penMode){ setPendingTextDraft(null); setHandwritingId(null); setEditingTextId(a.id); } }}
                   >
                     {editingTextId===a.id && (
-                      <div className="textAnnToolbar">
+                      <div className="textAnnToolbar" onPointerDown={e=>e.stopPropagation()}>
                         <button type="button" title={handwritingId===a.id?"Voltar pro teclado":"Escrever à mão e converter"}
                           className={handwritingId===a.id?"active":""}
                           onClick={()=>{
@@ -5442,6 +5486,7 @@ function Whiteboard({ board, onClose, onSave }) {
   }, [elements, bg, onSave]);
   const [tool, setTool] = useState("pen"); // pen|highlighter|eraser|shape|text|select|pan
   const [shapeType, setShapeType] = useState("line");
+  const [penLineStyle, setPenLineStyle] = useState("solid"); // solid | dashed | arrow — em que a linha reta da caneta (atalho/correção automática) vira
   const [penStyle, setPenStyle] = useState("normal");
   const [eraserMode, setEraserMode] = useState("partial");
   const [eraserRadius, setEraserRadius] = useState(14);
@@ -5679,6 +5724,10 @@ function Whiteboard({ board, onClose, onSave }) {
     setPendingTextDraft(null);
     setHandwritingId(null);
     setEditingTextId(id);
+    // Idem ao leitor de PDF: sem trocar pra "select" aqui, um clique no botão
+    // "escrever à mão" (dentro do foreignObject) borbulha pro pointerdown do
+    // <svg>, que ainda está em modo "text" e cria outro elemento de texto.
+    setTool("select");
   };
   const commitTextEdit = (id, value) => {
     setEditingTextId(null);
@@ -6097,22 +6146,27 @@ function Whiteboard({ board, onClose, onSave }) {
         // reta: vira uma forma de linha de verdade, não um traço à mão livre
         // de 2 pontos — assim o atalho e a correção automática desenham
         // exatamente igual. Pro destacador, vira uma barra de marca-texto
-        // reta (ponta quadrada, sem afinar) em vez de uma linha fina.
+        // reta (ponta quadrada, sem afinar) em vez de uma linha fina. Pra
+        // caneta, respeita o estilo escolhido (normal/tracejada/seta).
         const [p0, p1] = finalEl.points;
-        finalEl = {
-          id: finalEl.id, type: "shape", shape: "line", tool: finalEl.tool,
-          color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
+        finalEl = penStraightLineShape({
+          id: finalEl.id, tool: finalEl.tool, color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
           x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y,
-        };
+        }, penLineStyle);
       } else if (tool === "pen" && autoShape && finalEl.points.length > 6) {
         const detected = detectShapeFromPoints(finalEl.points);
         if (detected) {
-          finalEl = {
-            id: finalEl.id, type: "shape", shape: detected.type,
-            color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
-            x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
-            ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
-          };
+          finalEl = detected.type === "line"
+            ? penStraightLineShape({
+                id: finalEl.id, tool: finalEl.tool, color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
+                x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+              }, penLineStyle)
+            : {
+                id: finalEl.id, type: "shape", shape: detected.type,
+                color: finalEl.color, width: finalEl.width, opacity: finalEl.opacity,
+                x1: detected.x1, y1: detected.y1, x2: detected.x2, y2: detected.y2,
+                ...(detected.cx != null ? { cx: detected.cx, cy: detected.cy, r: detected.r } : {}),
+              };
         }
       }
       commitElement(finalEl);
@@ -6222,7 +6276,7 @@ function Whiteboard({ board, onClose, onSave }) {
                     style={{ overflow: "visible" }}
                   >
                     {editingTextId === el.id && (
-                      <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }}>
+                      <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
                         <button type="button" title={handwritingId === el.id ? "Voltar pro teclado" : "Escrever à mão e converter"}
                           className={handwritingId === el.id ? "active" : ""}
                           onClick={() => {
@@ -6417,6 +6471,11 @@ function Whiteboard({ board, onClose, onSave }) {
                   <label className="penSliderLabel">Espessura<input type="range" min="1" max="14" step="0.5" value={thickness} onChange={e => setThickness(+e.target.value)}/></label>
                   <label className="penSliderLabel">Opacidade<input type="range" min="0.2" max="1" step="0.05" value={opacity} onChange={e => setOpacity(+e.target.value)}/></label>
                   <label className="penCheckLabel"><input type="checkbox" checked={autoShape} onChange={e => setAutoShape(e.target.checked)}/> Corrigir forma automaticamente</label>
+                  <div className="penToolGroup">
+                    <button title="Linha normal" className={penLineStyle==="solid"?"active":""} onClick={()=>setPenLineStyle("solid")}><Minus size={16}/></button>
+                    <button title="Linha tracejada" className={penLineStyle==="dashed"?"active":""} onClick={()=>setPenLineStyle("dashed")}><DashedLineIcon size={16}/></button>
+                    <button title="Seta" className={penLineStyle==="arrow"?"active":""} onClick={()=>setPenLineStyle("arrow")}><ArrowUpRight size={16}/></button>
+                  </div>
                 </>)}
                 {tool === "highlighter" && (<>
                   <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>

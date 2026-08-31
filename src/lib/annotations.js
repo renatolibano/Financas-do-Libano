@@ -103,9 +103,9 @@ function distToSegment(p, a, b) {
 }
 
 // "Desenhar -> corrigir forma automaticamente": olha pro traço recém-feito e,
-// se ele parecer claramente uma linha reta ou um círculo, devolve a forma
-// perfeita equivalente (ou null se não reconhecer nada e o traço continua
-// sendo uma anotação à mão livre normal).
+// se ele parecer claramente uma linha reta, um retângulo/quadrado ou um
+// círculo, devolve a forma perfeita equivalente (ou null se não reconhecer
+// nada e o traço continua sendo uma anotação à mão livre normal).
 export function detectShapeFromPoints(points) {
   if (!points || points.length < 6) return null;
   const xs = points.map((p) => p.x);
@@ -129,14 +129,37 @@ export function detectShapeFromPoints(points) {
     }
   }
 
-  // Círculo: traço fechado com raio quase constante em torno do centro.
+  // Retângulo/quadrado x círculo: os dois são traços fechados, então
+  // testamos os dois ajustes e ficamos com o que sobrar mais fiel.
+  // Retângulo: cada ponto do traço já está dentro da própria caixa
+  // delimitadora (min/max dos pontos), então um traço que "gruda" nos 4
+  // lados fica bem perto da borda dessa caixa o tempo todo — daí medir a
+  // distância de cada ponto até o lado mais próximo (perto de 0 = colou
+  // na borda; alto = arredondado, tipo círculo, que passa longe dos
+  // lados perto dos meios das arestas).
   if (closed && w > 12 && h > 12) {
+    let rectDevSum = 0;
+    for (const p of points) rectDevSum += Math.min(p.x - minX, maxX - p.x, p.y - minY, maxY - p.y);
+    const rectErr = (rectDevSum / points.length) / Math.min(w, h);
+
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     const radii = points.map((p) => Math.hypot(p.x - cx, p.y - cy));
     const avgR = radii.reduce((s, r) => s + r, 0) / radii.length;
-    const variance = radii.reduce((s, r) => s + Math.abs(r - avgR), 0) / radii.length;
+    const circVariance = radii.reduce((s, r) => s + Math.abs(r - avgR), 0) / radii.length;
+    const circErr = avgR > 0 ? circVariance / avgR : 1;
     const aspect = Math.max(w, h) / Math.min(w, h);
-    if (avgR > 0 && variance / avgR < 0.22 && aspect < 1.35) {
+
+    const rectOk = rectErr < 0.12;
+    const circOk = avgR > 0 && circErr < 0.22 && aspect < 1.35;
+
+    // Quando os dois "passam", vence quem colou melhor no traço — assim um
+    // quadrado (que também teria variância de raio dentro do limite do
+    // círculo) não é sempre engolido pela checagem de círculo, que vem
+    // depois no código mas não deve ganhar por padrão.
+    if (rectOk && (!circOk || rectErr <= circErr)) {
+      return { type: "rect", x1: minX, y1: minY, x2: maxX, y2: maxY };
+    }
+    if (circOk) {
       return { type: "circle", cx, cy, r: avgR, x1: cx - avgR, y1: cy - avgR, x2: cx + avgR, y2: cy + avgR };
     }
   }
@@ -529,9 +552,11 @@ export async function drawAnnotationOnCanvas(ctx, ann) {
     ctx.lineCap = "round";
     if (ann.shape === "line" || ann.shape === "arrow") {
       ctx.beginPath();
+      if (ann.dashed) ctx.setLineDash([(ann.width || 2) * 2.2, (ann.width || 2) * 1.8]);
       ctx.moveTo(ann.x1, ann.y1);
       ctx.lineTo(ann.x2, ann.y2);
       ctx.stroke();
+      if (ann.dashed) ctx.setLineDash([]);
       if (ann.shape === "arrow") {
         const angle = Math.atan2(ann.y2 - ann.y1, ann.x2 - ann.x1);
         const headLen = Math.max(8, (ann.width || 2) * 3);
