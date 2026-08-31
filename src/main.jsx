@@ -18,7 +18,7 @@ import {
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
-  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -65,6 +65,27 @@ import { uploadGameItemImage, deleteGameItemImage, uploadGameGroupCover, deleteG
 import { uploadWorkoutFolderCover, deleteWorkoutFolderCover } from "./lib/workoutImages";
 import { uploadBookGroupCover, deleteBookGroupCover } from "./lib/bookGroupImages";
 import { uploadStudyPdfGroupCover, deleteStudyPdfGroupCover } from "./lib/studyPdfGroupImages";
+
+// ---------------------------------------------------------------------
+// Modo economia de egress: quando ligado (Configurações), o app evita
+// carregar imagens que vêm de um bucket público do Supabase Storage
+// (capas de pastas, fotos de flashcard/compras/mídia/jogos, gifs de
+// treino) — cada uma delas é uma requisição de rede paga em egress toda
+// vez que a tela é aberta. Não afeta a capa de livros/PDFs de estudo
+// (cover_thumb), que já vem embutida como base64 na própria linha do
+// banco e não custa uma requisição extra; só evita o fallback que baixa
+// o PDF inteiro pra gerar essa capa quando ela ainda não existe.
+const EgressSaverContext = React.createContext(false);
+
+// Substitui os pares "{src ? <img src={src}/> : <Fallback/>}" espalhados
+// pelo app: com o modo economia ligado, nunca chega a montar a tag <img>
+// (senão o navegador dispara o request de qualquer forma).
+function SaverImg({ src, alt, fallback, className, wrapClassName }) {
+  const saver = React.useContext(EgressSaverContext);
+  if (!src || saver) return fallback || null;
+  const img = <img src={src} alt={alt || ""} className={className} />;
+  return wrapClassName ? <div className={wrapClassName}>{img}</div> : img;
+}
 
 const initialTransactions = [
   {id:1, desc:"Salário", cat:"Renda", value:3000, type:"in", date:"11/08"},
@@ -200,6 +221,10 @@ function App({session,theme,setTheme}){
   // Preferências de notificações: chave-mestra liga/desliga tudo; "kinds" guarda
   // por categoria (ausente ou true = ligada, false = desligada). Persistido localmente.
   const [notifSettings, setNotifSettings] = usePersistentState("libano-notif-settings", { enabled: true, kinds: {} });
+  // Modo economia de egress: liga/desliga o carregamento de capas de pasta,
+  // fotos de flashcard/compras/mídia/jogos e gifs de treino (ver SaverImg,
+  // acima). Persistido localmente, não sincroniza entre aparelhos.
+  const [egressSaver, setEgressSaver] = usePersistentState("libano-egress-saver", false);
   const setNotifKind = (kind, on) => setNotifSettings(s => ({ ...s, kinds: { ...s.kinds, [kind]: on } }));
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
   const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
@@ -424,7 +449,8 @@ function App({session,theme,setTheme}){
     setOpenGroups(g=>({...g, [key]:!g[key]}));
   };
 
-  return <div className="app">
+  return <EgressSaverContext.Provider value={egressSaver}>
+  <div className="app">
     <aside
       className={"sidebar "+(mobileOpen?"expanded":"")}
       onMouseEnter={()=>{ if(canHover()) setMobileOpen(true); }}
@@ -560,6 +586,18 @@ function App({session,theme,setTheme}){
             </div>
           )}
         </div>
+        <div className="notifSettingsBlock">
+          <label className="notifToggleRow">
+            <span><ImageOff size={15}/> Economizar dados</span>
+            <span className={"switchPill"+(egressSaver?" on":"")}>
+              <input type="checkbox" checked={egressSaver} onChange={e=>setEgressSaver(e.target.checked)}/>
+              <span className="switchKnob"/>
+            </span>
+          </label>
+          <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
+            Oculta capas de pastas, fotos (compras, mídia, jogos), gifs de exercício e imagens de flashcard pra economizar dados. Livros e PDFs continuam mostrando a capa salva — só param de baixar o arquivo inteiro pra gerar uma nova.
+          </small>
+        </div>
         <div className="cloud">
           {cloudConfigured && session ? <Cloud size={20}/> : <CloudOff size={20}/>}
           <div>
@@ -581,6 +619,7 @@ function App({session,theme,setTheme}){
       </div></div>}
     </main>
   </div>
+  </EgressSaverContext.Provider>
 }
 
 function MobileMenuOverlay({navTree,page,goTo,onClose}){
@@ -1311,10 +1350,15 @@ const coverCache = new Map();
 // a capa e pede pra "onCoverGenerated" persistir no banco — depois disso,
 // nunca mais baixa o arquivo de novo, nem nesse nem em outro aparelho.
 function BookCoverThumb({ book, onCoverGenerated }) {
+  const saver = React.useContext(EgressSaverContext);
   const [src, setSrc] = useState(book.cover_thumb || coverCache.get(book.file_path) || null);
   useEffect(() => {
     let active = true;
     if (book.cover_thumb) { setSrc(book.cover_thumb); return; }
+    // Modo economia: não baixa o PDF inteiro só pra gerar uma capa que
+    // ainda não existe — mostra o placeholder até a pessoa desligar o modo
+    // ou abrir o livro (o que gera e salva a capa por outro caminho).
+    if (saver) return;
     if (!book.file_path || coverCache.has(book.file_path)) return;
     (async () => {
       try {
@@ -1330,7 +1374,7 @@ function BookCoverThumb({ book, onCoverGenerated }) {
       }
     })();
     return () => { active = false; };
-  }, [book.file_path, book.cover_thumb]);
+  }, [book.file_path, book.cover_thumb, saver]);
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
@@ -2591,10 +2635,12 @@ function LibraryDashboard({ entity, setPage, readingStats }) {
 const studyPdfCoverCache = new Map();
 
 function StudyPdfCoverThumb({ pdfDoc, onCoverGenerated }) {
+  const saver = React.useContext(EgressSaverContext);
   const [src, setSrc] = useState(pdfDoc.cover_thumb || studyPdfCoverCache.get(pdfDoc.file_path) || null);
   useEffect(() => {
     let active = true;
     if (pdfDoc.cover_thumb) { setSrc(pdfDoc.cover_thumb); return; }
+    if (saver) return;
     if (!pdfDoc.file_path || studyPdfCoverCache.has(pdfDoc.file_path)) return;
     (async () => {
       try {
@@ -2610,7 +2656,7 @@ function StudyPdfCoverThumb({ pdfDoc, onCoverGenerated }) {
       }
     })();
     return () => { active = false; };
-  }, [pdfDoc.file_path, pdfDoc.cover_thumb]);
+  }, [pdfDoc.file_path, pdfDoc.cover_thumb, saver]);
   return <div className="bookCoverImg">{src ? <img src={src} alt={pdfDoc.title}/> : <div className="bookCoverPlaceholder"><FileText size={28}/></div>}</div>;
 }
 
@@ -2662,9 +2708,7 @@ function StudyPdfGroupTile({ group, count, unitLabel="PDF", menuOpen, onToggleMe
       onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); onDropZone?.(); }}
     >
       <div className="bookCoverWrap groupCover">
-        {group.cover_image
-          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
-          : <Folder size={34}/>}
+        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Folder size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -6655,9 +6699,7 @@ function ShoppingItemTile({ item, menuOpen, onToggleMenu, onEdit, onDelete }) {
   return (
     <div className="bookTile" onClick={(e) => e.stopPropagation()}>
       <div className="bookCoverWrap shoppingCover" onClick={onEdit}>
-        {item.photo
-          ? <div className="bookCoverImg"><img src={item.photo} alt={item.name}/></div>
-          : <ShoppingCart size={30}/>}
+        <SaverImg src={item.photo} alt={item.name} wrapClassName="bookCoverImg" fallback={<ShoppingCart size={30}/>}/>
       </div>
       <button className="bookMenuBtn" onClick={onToggleMenu}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
@@ -6942,9 +6984,7 @@ function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRe
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        {folder.cover_image
-          ? <div className="bookCoverImg"><img src={folder.cover_image} alt={folder.name}/></div>
-          : <Dumbbell size={34}/>}
+        <SaverImg src={folder.cover_image} alt={folder.name} wrapClassName="bookCoverImg" fallback={<Dumbbell size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -6984,7 +7024,7 @@ function ExerciseRow({ exercise, isFirst, isLast, menuOpen, onToggleMenu, onEdit
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
-        {exercise.gif_url ? <img src={exercise.gif_url} alt={exercise.name}/> : <Film size={22}/>}
+        <SaverImg src={exercise.gif_url} alt={exercise.name} fallback={<Film size={22}/>}/>
       </div>
       <div className="exerciseInfo">
         <b>{exercise.name}</b>
@@ -7216,7 +7256,7 @@ function WorkoutPlayer({ folder, exercises, onClose }) {
         ) : (
           <>
             <div className="exerciseGifPreview workoutPlayerGif">
-              {ex.gif_url ? <img src={ex.gif_url} alt={ex.name}/> : <Film size={40}/>}
+              <SaverImg src={ex.gif_url} alt={ex.name} fallback={<Film size={40}/>}/>
             </div>
             <h2 className="workoutPlayerName">{ex.name}</h2>
             <p className="emptyHint">{totalSets} série{totalSets === 1 ? "" : "s"} de {workoutFmtValue(ex)}{restSeconds > 0 && ` · descanso de ${workoutFmtRest(restSeconds)}`}</p>
@@ -7469,9 +7509,7 @@ function MediaGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onR
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        {group.cover_image
-          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
-          : <Clapperboard size={34}/>}
+        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Clapperboard size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -7529,7 +7567,7 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
-        {item.photo ? <img src={item.photo} alt={item.title}/> : (isSeries ? <Clapperboard size={22}/> : <Film size={22}/>)}
+        <SaverImg src={item.photo} alt={item.title} fallback={isSeries ? <Clapperboard size={22}/> : <Film size={22}/>}/>
       </div>
       <div className="exerciseInfo">
         <b>{item.title}</b>
@@ -7874,9 +7912,7 @@ function GameGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRe
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        {group.cover_image
-          ? <div className="bookCoverImg"><img src={group.cover_image} alt={group.name}/></div>
-          : <Gamepad2 size={34}/>}
+        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Gamepad2 size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -7904,7 +7940,7 @@ function GameItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusC
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
-        {item.photo ? <img src={item.photo} alt={item.title}/> : <Gamepad2 size={22}/>}
+        <SaverImg src={item.photo} alt={item.title} fallback={<Gamepad2 size={22}/>}/>
       </div>
       <div className="exerciseInfo">
         <b>{item.title}</b>
@@ -8798,7 +8834,7 @@ function FlashcardFlipMode({ cards, onComplete }) {
         <div className={"flashFlipInner"+(flipped?" flipped":"")+(noFlipAnim?" noFlipAnim":"")}>
           <div className="flashFlipFace flashFlipFront">
             <small>TERMO</small>
-            {card.image && <img className="flashFlipImage" src={card.image} alt=""/>}
+            <SaverImg src={card.image} className="flashFlipImage" fallback={null}/>
             {stripHtml(card.term).trim() ? <span dangerouslySetInnerHTML={{__html: card.term}}/> : <span>(sem termo)</span>}
           </div>
           <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small>{stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}</div>
@@ -8966,7 +9002,7 @@ function FlashcardLearnMode({ cards, onComplete }) {
     <div className="flashStudyArea">
       <div className="flashLearnQuestion">
         <small>TERMO</small>
-        {card.image && <img className="flashLearnImage" src={card.image} alt=""/>}
+        <SaverImg src={card.image} className="flashLearnImage" fallback={null}/>
         <h3 dangerouslySetInnerHTML={{__html: card.term}}/>
       </div>
       <div className="flashLearnOptions">
@@ -9039,7 +9075,7 @@ function FlashcardMatchMode({ cards, onComplete }) {
             else if (wrongFlash.includes(t.key)) cls += " wrong";
             return (
               <button key={t.key} className={cls} disabled={isMatched} onClick={()=>onTap(t)}>
-                {t.image && <img className="flashMatchImage" src={t.image} alt=""/>}
+                <SaverImg src={t.image} className="flashMatchImage" fallback={null}/>
                 <span dangerouslySetInnerHTML={{__html: t.text}}/>
               </button>
             );
