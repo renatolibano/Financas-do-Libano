@@ -5498,6 +5498,7 @@ function Whiteboard({ board, onClose, onSave }) {
   const [autoShape, setAutoShape] = useState(true);
   const [color, setColor] = useState("#f5f5f5");
   const [favPenColors, setFavPenColors] = usePersistentState("quadroFavPenColors", ["#f5f5f5", "#e11d48", "#5b9dff", "#4ade80"]);
+  const [showFavColorBar, setShowFavColorBar] = usePersistentState("quadroShowFavColorBar", false);
   const [thickness, setThickness] = useState(3);
   const [opacity, setOpacity] = useState(1);
   const [hlColor, setHlColor] = useState("#ffd54a");
@@ -6481,6 +6482,7 @@ function Whiteboard({ board, onClose, onSave }) {
                     <button title="Linha tracejada" className={penLineStyle==="dashed"?"active":""} onClick={()=>setPenLineStyle("dashed")}><DashedLineIcon size={16}/></button>
                     <button title="Seta" className={penLineStyle==="arrow"?"active":""} onClick={()=>setPenLineStyle("arrow")}><ArrowUpRight size={16}/></button>
                   </div>
+                  <label className="penCheckLabel"><input type="checkbox" checked={showFavColorBar} onChange={e=>setShowFavColorBar(e.target.checked)}/> Barra de cores favoritas sempre visível</label>
                 </>)}
                 {tool === "highlighter" && (<>
                   <PenSwatches colors={favHlColors} onColorsChange={setFavHlColors} value={hlColor} onPick={setHlColor}/>
@@ -6512,6 +6514,16 @@ function Whiteboard({ board, onClose, onSave }) {
                 {tool === "text" && (
                   <PenSwatches colors={favPenColors} onColorsChange={setFavPenColors} value={color} onPick={setColor}/>
                 )}
+              </div>
+            )}
+
+            {showFavColorBar && (
+              <div className="whiteboardFavColorBar">
+                {favPenColors.map(hex => (
+                  <button key={hex} type="button" title={hex} style={{ background: hex }}
+                    className={color === hex ? "active" : ""}
+                    onClick={() => setColor(hex)}/>
+                ))}
               </div>
             )}
 
