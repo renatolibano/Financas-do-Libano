@@ -250,6 +250,14 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .lockScreenPinInput{width:100%;text-align:center;font-size:22px;letter-spacing:10px;padding:12px}
 .lockScreenPinInput.lockScreenError{border-color:#ff5c5c}
 .lockScreenErrorMsg{color:#ff5c5c;margin-top:-6px}
+.settingsDangerZone{margin-top:4px;padding:12px;border:1px solid var(--border-danger, #5c2626);border-radius:12px;background:rgba(255,92,92,0.06);display:grid;gap:4px}
+.settingsDangerZone .settingsDangerTitle{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#ff9d9d;font-weight:600;margin:0 0 4px}
+.settingsDangerZone .resetData{color:#ff9d9d}
+.settingsDangerZone .resetData:hover{background:rgba(255,92,92,0.14);color:#ff6b6b}
+.settingsAbout{margin-top:8px;padding-top:12px;border-top:1px solid var(--border);text-align:center;display:grid;gap:2px;color:var(--text-2)}
+.settingsAbout b{color:var(--text-1);font-size:13px}
+.settingsAbout span{font-size:11px;opacity:.7}
+.settingsAbout small{font-size:11px}
 .modalHead{display:flex;justify-content:space-between;align-items:center;position:sticky;top:-22px;margin:-22px -22px 0;padding:22px 22px 12px;background:var(--bg-modal);z-index:1}
 .modal h2{margin:0;font-size:18px}
 .modal label{font-size:12px;color:var(--text-2);display:grid;gap:6px}

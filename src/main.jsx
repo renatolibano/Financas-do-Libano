@@ -18,7 +18,7 @@ import {
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
-  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -27,6 +27,7 @@ import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partner
 import { useEntity } from "./lib/useEntity";
 import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
 import { hashPin } from "./lib/lock";
+import pkg from "../package.json";
 import { idbGet, idbSet } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
@@ -169,7 +170,40 @@ function Root(){
   const {session, checking, recovery} = useSession();
   const [theme,setTheme] = useTheme();
   const [pinHash, setPinHash] = usePersistentState("libano-app-pin-hash", null);
+  // Autotrava por inatividade: 0 = "Nunca" (só o padrão, PIN pedido ao abrir/
+  // recarregar). Só a Configurações mexe nesse valor, só faz efeito se
+  // também houver um PIN definido.
+  const [autoLockMinutes, setAutoLockMinutes] = usePersistentState("libano-auto-lock-minutes", 0);
   const [unlocked, setUnlocked] = useState(false);
+
+  // Cronômetro de inatividade: reseta em qualquer interação enquanto a tela
+  // está visível. Ao sair do app (troca de aba/app, tela apagada) marca o
+  // instante da saída em vez de resetar — assim o tempo fora conta como
+  // inatividade, e ao voltar (visibilitychange) já confere de uma vez, já
+  // que um setTimeout sozinho pode ficar pausado em segundo plano.
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => {
+    if (!pinHash || !autoLockMinutes || !unlocked) return;
+    const thresholdMs = autoLockMinutes * 60000;
+    const markActivity = () => { lastActivityRef.current = Date.now(); };
+    const checkIdle = () => {
+      if (Date.now() - lastActivityRef.current >= thresholdMs) setUnlocked(false);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") checkIdle();
+      else markActivity();
+    };
+    markActivity();
+    const events = ["mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach(ev => window.addEventListener(ev, markActivity, { passive: true }));
+    document.addEventListener("visibilitychange", onVisibility);
+    const interval = setInterval(checkIdle, 15000);
+    return () => {
+      events.forEach(ev => window.removeEventListener(ev, markActivity));
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearInterval(interval);
+    };
+  }, [pinHash, autoLockMinutes, unlocked]);
 
   if(cloudConfigured && checking){
     return <div className="bootScreen">Carregando…</div>;
@@ -188,7 +222,7 @@ function Root(){
   if(pinHash && !unlocked){
     return <LockScreen pinHash={pinHash} onUnlock={()=>setUnlocked(true)}/>;
   }
-  return <App session={session} theme={theme} setTheme={setTheme} pinHash={pinHash} setPinHash={setPinHash}/>;
+  return <App session={session} theme={theme} setTheme={setTheme} pinHash={pinHash} setPinHash={setPinHash} autoLockMinutes={autoLockMinutes} setAutoLockMinutes={setAutoLockMinutes}/>;
 }
 
 function LockScreen({ pinHash, onUnlock }) {
@@ -238,7 +272,7 @@ function LockScreen({ pinHash, onUnlock }) {
   );
 }
 
-function App({session,theme,setTheme,pinHash,setPinHash}){
+function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoLockMinutes}){
   // Tela inicial (Configurações): a página com que o app abre. Só lê o valor
   // salvo uma vez, na montagem — depois disso "page" navega normalmente e
   // não volta a seguir esse valor até o app ser reaberto/recarregado.
@@ -770,6 +804,17 @@ function App({session,theme,setTheme,pinHash,setPinHash}){
               : "Peça um PIN de 4 a 8 números pra abrir o app neste aparelho. Útil se o celular fica destravado por perto."}
           </small>
           {pinHash && <button className="resetData" onClick={()=>location.reload()}><Lock size={14}/> Trancar agora</button>}
+          {pinHash && (
+            <label style={{marginTop:6}}>Trancar sozinho após
+              <select value={autoLockMinutes} onChange={e=>setAutoLockMinutes(Number(e.target.value))}>
+                <option value={0}>Nunca (só ao abrir/recarregar)</option>
+                <option value={1}>1 minuto parado</option>
+                <option value={5}>5 minutos parado</option>
+                <option value={15}>15 minutos parado</option>
+                <option value={30}>30 minutos parado</option>
+              </select>
+            </label>
+          )}
         </div>
         <div className="cloud">
           {cloudConfigured && session ? <Cloud size={20}/> : <CloudOff size={20}/>}
@@ -782,7 +827,6 @@ function App({session,theme,setTheme,pinHash,setPinHash}){
         <small className="boardSettingsHint" style={{display:"block", marginTop:-6, marginBottom:8}}>
           Gera um arquivo .json com tudo que está carregado agora (finanças, lembretes, notas, livros, estudos, treino, listas, filmes/séries e jogos). Anotações e desenhos de itens que você não abriu nesta sessão podem não vir completos.
         </small>
-        {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
         {storageUsage != null && (
           <p className="emptyHint" style={{margin:"-4px 0 0"}}>Ocupando {formatBytes(storageUsage)} neste aparelho (PDFs em cache, imagens e dados locais).</p>
         )}
@@ -791,12 +835,21 @@ function App({session,theme,setTheme,pinHash,setPinHash}){
           refreshStorageUsage();
           alert("Cache de PDFs limpo. Eles serão baixados de novo na próxima leitura.");
         }}><FileText size={14}/> Limpar cache de PDFs</button>
-        <button className="resetData" onClick={()=>{
-          if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo. Continuar?")){
-            clearLocal();
-            location.reload();
-          }
-        }}><Trash2 size={14}/> Limpar dados locais</button>
+
+        <div className="settingsDangerZone">
+          <b className="settingsDangerTitle"><AlertTriangle size={12}/> Zona de risco</b>
+          {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
+          <button className="resetData" onClick={()=>{
+            if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo, sem volta — considere baixar o backup antes. Continuar?")){
+              clearLocal();
+              location.reload();
+            }
+          }}><Trash2 size={14}/> Limpar dados locais</button>
+        </div>
+        <div className="settingsAbout">
+          <b>{pkg.name === "libano" ? "Líbano" : pkg.name}</b> <span>v{pkg.version}</span>
+          <small>{pkg.description}</small>
+        </div>
       </div></div>}
     </main>
   </div>
