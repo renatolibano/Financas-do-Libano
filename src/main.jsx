@@ -30,6 +30,7 @@ import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
 import { idbGet, idbSet } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
+import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
@@ -84,8 +85,9 @@ const EgressSaverContext = React.createContext(false);
 // (senão o navegador dispara o request de qualquer forma).
 function SaverImg({ src, alt, fallback, className, wrapClassName }) {
   const saver = React.useContext(EgressSaverContext);
-  if (!src || saver) return fallback || null;
-  const img = <img src={src} alt={alt || ""} className={className} />;
+  const cachedSrc = useCachedImageUrl(saver ? null : src);
+  if (!src || saver || !cachedSrc) return fallback || null;
+  const img = <img src={cachedSrc} alt={alt || ""} className={className} />;
   return wrapClassName ? <div className={wrapClassName}>{img}</div> : img;
 }
 
@@ -267,6 +269,68 @@ function LockScreen({ pinHash, onUnlock }) {
         {error && <small className="lockScreenErrorMsg">PIN incorreto.</small>}
         <button className="primary" type="submit" disabled={pin.length < 4 || checking}>Entrar</button>
         <button type="button" className="ghost" onClick={forgotPin}>Esqueci meu PIN</button>
+      </form>
+    </div>
+  );
+}
+
+// Confirmação por senha da conta antes de ações da zona de risco (sair da
+// conta / limpar dados locais). Reautentica com signInWithPassword só pra
+// validar — não navega nem altera a sessão além do necessário.
+function AccountPasswordConfirmModal({ email, title, message, confirmLabel, onClose, onConfirmed }) {
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      onConfirmed();
+    } catch (err) {
+      setError("Senha incorreta. Tente de novo.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <form className="modal" onSubmit={submit} onClick={e=>e.stopPropagation()}>
+        <div className="modalHead"><h2><AlertTriangle size={16}/> {title}</h2><button type="button" onClick={onClose}><X/></button></div>
+        <p className="boardSettingsHint" style={{marginTop:-4}}>{message}</p>
+        <label>Senha da conta ({email})
+          <div style={{position:"relative"}}>
+            <input
+              autoFocus
+              type={showPassword ? "text" : "password"}
+              required
+              value={password}
+              onChange={e=>{ setPassword(e.target.value); setError(null); }}
+              placeholder="Digite sua senha"
+              style={{paddingRight:34}}
+            />
+            <button
+              type="button"
+              className="ghost"
+              onClick={()=>setShowPassword(s=>!s)}
+              title={showPassword ? "Ocultar senha" : "Mostrar senha"}
+              style={{position:"absolute", right:2, top:2, padding:4}}
+            >
+              {showPassword ? <EyeOff size={14}/> : <Eye size={14}/>}
+            </button>
+          </div>
+        </label>
+        {error && <div className="authMessage">{error}</div>}
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="submit" className="danger" disabled={busy || !password}>{busy ? "Verificando..." : confirmLabel}</button>
+        </div>
       </form>
     </div>
   );
@@ -497,6 +561,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // básicos; anotações/desenhos/conteúdo completo só vêm se o item já tiver
   // sido aberto nesta sessão (o que preenche esses campos via fetchFull).
   const [exportingData, setExportingData] = useState(false);
+  // Zona de risco (Configurações): "Sair da conta" e "Limpar dados locais"
+  // pedem a senha da conta antes de executar, pra evitar apagar tudo ou sair
+  // sem querer ao esbarrar no botão. null = fechado; "signout" | "clearlocal".
+  const [dangerConfirm, setDangerConfirm] = useState(null);
   const exportAllData = () => {
     setExportingData(true);
     try {
@@ -733,6 +801,25 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         onClose={()=>setShowOverviewEdit(false)}
       />}
 
+      {dangerConfirm && <AccountPasswordConfirmModal
+        email={session?.user?.email}
+        title={dangerConfirm==="signout" ? "Sair da conta" : "Limpar dados locais"}
+        message={dangerConfirm==="signout"
+          ? "Digite a senha da sua conta para confirmar a saída."
+          : "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Digite a senha da sua conta para confirmar."}
+        confirmLabel={dangerConfirm==="signout" ? "Sair da conta" : "Limpar dados locais"}
+        onClose={()=>setDangerConfirm(null)}
+        onConfirmed={()=>{
+          if(dangerConfirm==="signout"){
+            supabase.auth.signOut();
+          } else {
+            clearLocal();
+            location.reload();
+          }
+          setDangerConfirm(null);
+        }}
+      />}
+
       {showSettings && <div className="modalBack" onClick={()=>setShowSettings(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modalHead"><h2>Configurações</h2><button type="button" onClick={()=>setShowSettings(false)}><X/></button></div>
         <label>Tema
@@ -835,12 +922,19 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           refreshStorageUsage();
           alert("Cache de PDFs limpo. Eles serão baixados de novo na próxima leitura.");
         }}><FileText size={14}/> Limpar cache de PDFs</button>
+        <button className="resetData" onClick={async ()=>{
+          await clearAllImageCache();
+          refreshStorageUsage();
+          alert("Cache de imagens limpo. Elas serão baixadas de novo na próxima exibição.");
+        }}><ImagePlus size={14}/> Limpar cache de imagens</button>
 
         <div className="settingsDangerZone">
           <b className="settingsDangerTitle"><AlertTriangle size={12}/> Zona de risco</b>
-          {cloudConfigured && session && <button className="resetData" onClick={()=>supabase.auth.signOut()}><LogOut size={14}/> Sair da conta</button>}
+          {cloudConfigured && session && <button className="resetData" onClick={()=>setDangerConfirm("signout")}><LogOut size={14}/> Sair da conta</button>}
           <button className="resetData" onClick={()=>{
-            if(confirm(cloudConfigured && session ? "Isso limpa o cache local deste dispositivo (seus dados na nuvem continuam salvos). Continuar?" : "Isso vai apagar todos os dados salvos neste dispositivo, sem volta — considere baixar o backup antes. Continuar?")){
+            if(cloudConfigured && session){
+              setDangerConfirm("clearlocal");
+            } else if(confirm("Isso vai apagar todos os dados salvos neste dispositivo, sem volta — considere baixar o backup antes. Continuar?")){
               clearLocal();
               location.reload();
             }
@@ -3581,12 +3675,29 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // Ao zerar o tempo o cronômetro sempre reaparece sozinho.
   const [timerHidden, setTimerHidden] = useState(savedTimer?.hidden ?? false);
   const timerIntervalRef = useRef(null);
+  // Horário (epoch ms) em que o cronômetro deve zerar, calculado a partir do
+  // relógio real ao começar/retomar. É a partir dele que o tempo restante é
+  // recalculado a cada tick — nunca por contagem de ticks do setInterval,
+  // que atrasa quando a aba fica em segundo plano (o navegador limita a
+  // frequência dos timers pra economizar bateria). Assim, mesmo que o
+  // intervalo dispare bem menos vezes que o esperado enquanto a página está
+  // escondida, o tempo restante mostrado ao voltar continua correto.
+  const timerEndAtRef = useRef(null);
   const alarmIntervalRef = useRef(null);
   const audioCtxRef = useRef(null);
   // Marca quais "horas passadas" e se o aviso dos 30 min finais já apitaram
   // nesta sessão do cronômetro, pra cada um apitar só uma vez.
   const hourBeepsFiredRef = useRef(new Set());
   const finalStretchBeepFiredRef = useRef(false);
+  // Aviso visual que acompanha o apito de hora passada / 30 min finais: some
+  // sozinho depois de alguns segundos, não precisa de nenhuma ação da pessoa.
+  const [timerToast, setTimerToast] = useState(null);
+  const timerToastTimeoutRef = useRef(null);
+  const showTimerToast = (msg) => {
+    clearTimeout(timerToastTimeoutRef.current);
+    setTimerToast(msg);
+    timerToastTimeoutRef.current = setTimeout(() => setTimerToast(null), 5000);
+  };
   // Cursor customizado: uma bolinha da cor/espessura da ferramenta atual,
   // que segue o ponteiro (mouse/caneta) e some enquanto o traço está sendo feito.
   const [showPenCursor, setShowPenCursor] = useState(false);
@@ -4500,23 +4611,55 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     } catch (err) { console.log("[timer] não foi possível tocar o alarme", err); }
   };
 
-  // Contagem regressiva: decrementa 1s por vez enquanto timerRunning.
+  // Limpa o timeout do aviso visual se o leitor fechar antes dele sumir sozinho.
+  useEffect(() => () => clearTimeout(timerToastTimeoutRef.current), []);
+
+  // Contagem regressiva: a cada tick, recalcula quanto falta a partir do
+  // horário real de término (timerEndAtRef), em vez de simplesmente
+  // decrementar 1s por tick. Isso evita o cronômetro "atrasar" quando a aba
+  // fica em segundo plano e o navegador reduz a frequência do setInterval.
   useEffect(() => {
     clearInterval(timerIntervalRef.current);
     if (timerRunning) {
-      timerIntervalRef.current = setInterval(() => {
-        setTimerLeft(s => {
-          if (s <= 1) {
-            clearInterval(timerIntervalRef.current);
-            setTimerRunning(false);
-            setTimerDone(true);
-            return 0;
-          }
-          return s - 1;
-        });
-      }, 1000);
+      const tick = () => {
+        const remaining = Math.max(0, Math.round((timerEndAtRef.current - Date.now()) / 1000));
+        setTimerLeft(remaining);
+        if (remaining <= 0) {
+          clearInterval(timerIntervalRef.current);
+          setTimerRunning(false);
+          setTimerDone(true);
+        }
+      };
+      tick(); // corrige na hora, sem esperar o primeiro disparo do intervalo
+      timerIntervalRef.current = setInterval(tick, 1000);
     }
     return () => clearInterval(timerIntervalRef.current);
+  }, [timerRunning]);
+
+  // Ao voltar pra aba/app (troca de aba, app minimizado, tela bloqueada),
+  // recalcula o tempo restante imediatamente com base no relógio real, em vez
+  // de esperar o próximo tick do intervalo (que pode ter ficado atrasado
+  // durante o tempo em segundo plano).
+  useEffect(() => {
+    const recomputeNow = () => {
+      if (!timerRunning || timerEndAtRef.current == null) return;
+      const remaining = Math.max(0, Math.round((timerEndAtRef.current - Date.now()) / 1000));
+      setTimerLeft(remaining);
+      if (remaining <= 0) {
+        clearInterval(timerIntervalRef.current);
+        setTimerRunning(false);
+        setTimerDone(true);
+      }
+    };
+    const onVisibility = () => { if (document.visibilityState === "visible") recomputeNow(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", recomputeNow);
+    window.addEventListener("pageshow", recomputeNow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", recomputeNow);
+      window.removeEventListener("pageshow", recomputeNow);
+    };
   }, [timerRunning]);
 
   // Salva o estado do cronômetro no localStorage a cada mudança, pra ele
@@ -4524,6 +4667,23 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // ele sempre reabre pausado, ver comentário na declaração do state acima).
   useEffect(() => {
     saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone, hidden: timerHidden });
+  }, [timerH, timerM, timerS, timerLeft, timerDone, timerHidden]);
+
+  // Salva também na hora H de sair do app (aba escondida, PWA minimizado ou
+  // fechado no celular) — o efeito acima já salva a cada segundo, mas isso
+  // garante que o último instante não se perca se o navegador matar a aba
+  // antes do próximo tick do intervalo.
+  useEffect(() => {
+    const saveNow = () => {
+      saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone, hidden: timerHidden });
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") saveNow(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", saveNow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", saveNow);
+    };
   }, [timerH, timerM, timerS, timerLeft, timerDone, timerHidden]);
 
   // Enquanto o tempo tiver zerado (timerDone), repete o bipe até a pessoa zerar.
@@ -4547,10 +4707,13 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     if (elapsed > 0 && elapsed % 3600 === 0 && !hourBeepsFiredRef.current.has(elapsed)) {
       hourBeepsFiredRef.current.add(elapsed);
       playTimerBeep();
+      const hoursPassed = elapsed / 3600;
+      showTimerToast(hoursPassed === 1 ? "Passou-se 1 hora" : `Passaram-se ${hoursPassed} horas`);
     }
     if (timerLeft === 1800 && timerTotalInput > 1800 && !finalStretchBeepFiredRef.current) {
       finalStretchBeepFiredRef.current = true;
       playTimerBeep();
+      showTimerToast("Faltam 30 minutos");
     }
   }, [timerLeft, timerRunning]);
 
@@ -4561,13 +4724,22 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     finalStretchBeepFiredRef.current = false;
     setTimerDone(false);
     setTimerLeft(timerTotalInput);
+    timerEndAtRef.current = Date.now() + timerTotalInput * 1000;
     setTimerRunning(true);
   };
   const pauseTimer = () => setTimerRunning(false);
-  const resumeTimer = () => { if (timerLeft > 0) setTimerRunning(true); };
+  const resumeTimer = () => {
+    if (timerLeft > 0) {
+      timerEndAtRef.current = Date.now() + timerLeft * 1000;
+      setTimerRunning(true);
+    }
+  };
   const resetTimer = () => {
+    timerEndAtRef.current = null;
     clearInterval(timerIntervalRef.current);
     clearInterval(alarmIntervalRef.current);
+    clearTimeout(timerToastTimeoutRef.current);
+    setTimerToast(null);
     hourBeepsFiredRef.current = new Set();
     finalStretchBeepFiredRef.current = false;
     setTimerRunning(false);
@@ -4697,6 +4869,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   return (
     <div className="readerBack" onClick={handleClose}>
       <div ref={modalRef} className={`readerModal readerModalWide${fullscreen ? " readerModalFull" : ""}`} onClick={(e)=>e.stopPropagation()}>
+        {timerToast && <div className="pdfTimerToast">{timerToast}</div>}
         <div className="readerHead">
           <b>{pdfDoc.title}{tempFile && <span className="pdfPasteHint" style={{position:"static", marginLeft:8}}>Aberto sem salvar</span>}</b>
           <div className="readerHeadActions">
@@ -5686,6 +5859,20 @@ function resizeImageWithSnap(el, x, y, otherImages, zoom, stickRef) {
   stickRef.current = null;
   return { width: rawW, height: rawH, targetId: null };
 }
+
+// Enquanto uma imagem é só ARRASTADA (sem redimensionar), o tamanho dela não
+// muda — então aqui não tem "grudar" tamanho nenhum pra fazer. O que existe é
+// só checar se ela já bate com o tamanho de alguma outra imagem do quadro
+// (por ter sido ajustada assim antes) e, se sim, mostrar o mesmo aviso visual
+// do redimensionamento — pra ajudar a perceber que duas imagens já estão do
+// mesmo tamanho enquanto uma delas é reposicionada.
+const MOVE_SAME_SIZE_TOLERANCE = 0.75;
+function findSameSizeImage(el, otherImages) {
+  return otherImages.find(img => (
+    Math.abs(img.width - el.width) < MOVE_SAME_SIZE_TOLERANCE &&
+    Math.abs(img.height - el.height) < MOVE_SAME_SIZE_TOLERANCE
+  )) || null;
+}
 function eraseElementAtPoint(el, x, y, radius) {
   // Prints (imagens) nunca são apagados pela borracha — só à mão, selecionando
   // e excluindo. Assim escrever/rabiscar por cima de um print e apagar o
@@ -5934,6 +6121,10 @@ function Whiteboard({ board, onClose, onSave }) {
   // realmente se afasta do tamanho encontrado.
   const resizeStickRef = useRef(null);
   const [snapGuideTargetId, setSnapGuideTargetId] = useState(null);
+  // Guarda o id da imagem de ORIGEM (a que está sendo arrastada/redimensionada)
+  // quando ela bate com o tamanho de outra — assim dá pra desenhar o aviso
+  // visual nas duas imagens (origem e alvo), não só na de referência.
+  const [snapGuideSourceId, setSnapGuideSourceId] = useState(null);
   const panRef = useRef(null);
   const eraseGestureRef = useRef(false);
   const spaceDownRef = useRef(false);
@@ -6159,6 +6350,37 @@ function Whiteboard({ board, onClose, onSave }) {
     setSelectedId(null);
   };
 
+  // Botão de atalho pra deixar a imagem selecionada do mesmo tamanho da
+  // imagem mais próxima do quadro (por centro), num toque só — sem precisar
+  // arrastar a alça de redimensionar até grudar. Útil pro fluxo de colar
+  // imagem, escrever embaixo, colar outra imagem, repetir — mantendo todas
+  // no mesmo tamanho.
+  const matchImageSizeToNearest = () => {
+    const el = elements.find(a => a.id === selectedId);
+    if (!el || el.type !== "image") return;
+    const others = elements.filter(o => o.type === "image" && o.id !== el.id);
+    if (!others.length) return;
+    const elCx = el.x + el.width / 2, elCy = el.y + el.height / 2;
+    let nearest = null, bestDist = Infinity;
+    for (const img of others) {
+      const cx = img.x + img.width / 2, cy = img.y + img.height / 2;
+      const dist = Math.hypot(cx - elCx, cy - elCy);
+      if (dist < bestDist) { bestDist = dist; nearest = img; }
+    }
+    if (!nearest) return;
+    if (Math.abs(nearest.width - el.width) < 0.5 && Math.abs(nearest.height - el.height) < 0.5) {
+      toast?.("Essa imagem já está do mesmo tamanho.");
+      return;
+    }
+    pushHistory();
+    setElements(prev => prev.map(a => a.id === el.id ? { ...a, width: nearest.width, height: nearest.height } : a));
+    // Pisca o mesmo aviso visual usado ao arrastar/redimensionar, só pra
+    // confirmar visualmente qual foi a imagem usada de referência.
+    setSnapGuideSourceId(el.id);
+    setSnapGuideTargetId(nearest.id);
+    setTimeout(() => { setSnapGuideSourceId(null); setSnapGuideTargetId(null); }, 900);
+  };
+
   const handleSelectPointerDown = (x, y, pointerId) => {
     if (selectedId) {
       const sel = elements.find(a => a.id === selectedId);
@@ -6191,6 +6413,7 @@ function Whiteboard({ board, onClose, onSave }) {
         const others = elements.filter(o => o.type === "image" && o.id !== el.id);
         const { width, height, targetId } = resizeImageWithSnap(el, x, y, others, view.zoom, resizeStickRef);
         setSnapGuideTargetId(targetId);
+        setSnapGuideSourceId(targetId ? el.id : null);
         setElements(prev => prev.map(a => (a.id === el.id ? { ...a, width, height } : a)));
         return;
       }
@@ -6203,9 +6426,22 @@ function Whiteboard({ board, onClose, onSave }) {
     // drag.lastX acontecesse lá dentro, ela já pegaria o valor novo (igual a
     // "x"), zerando o delta e travando o elemento no lugar mesmo com o dedo
     // ainda deslizando — era exatamente esse o bug.
+    const el = elements.find(a => a.id === drag.id);
     const dx = x - drag.lastX, dy = y - drag.lastY;
     drag.lastX = x; drag.lastY = y;
     setElements(prev => prev.map(a => (a.id === drag.id ? translateElement(a, dx, dy) : a)));
+    // Mesmo aviso visual do redimensionamento, mas aqui pra quando a imagem
+    // arrastada JÁ tem o mesmo tamanho de outra do quadro (arrastar não muda
+    // tamanho, então é só uma checagem de igualdade, sem "grudar" nada).
+    if (el && el.type === "image") {
+      const others = elements.filter(o => o.type === "image" && o.id !== el.id);
+      const match = findSameSizeImage(el, others);
+      setSnapGuideSourceId(match ? el.id : null);
+      setSnapGuideTargetId(match ? match.id : null);
+    } else if (snapGuideSourceId || snapGuideTargetId) {
+      setSnapGuideSourceId(null);
+      setSnapGuideTargetId(null);
+    }
   };
 
   const addImageAt = (dataUrl, naturalW, naturalH, worldX, worldY) => {
@@ -6254,7 +6490,7 @@ function Whiteboard({ board, onClose, onSave }) {
       if (matchesShortcut(e, getBinding(shortcuts, "redo"))) { e.preventDefault(); redo(); }
       else if (matchesShortcut(e, getBinding(shortcuts, "undo"))) { e.preventDefault(); undo(); }
       if (matchesShortcut(e, getBinding(shortcuts, "deleteSelection"))) {
-        if (selectedId && tool === "select") deleteSelected();
+        if (selectedId) deleteSelected();
         if (tool === "lasso" && lassoSelectedIds.length) deleteLassoSelection();
       }
       if (matchesShortcut(e, getBinding(shortcuts, "toolPen"))) setTool("pen");
@@ -6518,6 +6754,7 @@ function Whiteboard({ board, onClose, onSave }) {
       dragRef.current = null;
       resizeStickRef.current = null;
       setSnapGuideTargetId(null);
+      setSnapGuideSourceId(null);
       return;
     }
     if (lassoGroupDragRef.current) { lassoGroupDragRef.current = null; return; }
@@ -6736,7 +6973,7 @@ function Whiteboard({ board, onClose, onSave }) {
                   </foreignObject>
                   );
                 })}
-                {tool === "select" && selectedId && (() => {
+                {selectedId && (() => {
                   const el = elements.find(a => a.id === selectedId);
                   if (!el) return null;
                   const b = elementBBox(el);
@@ -6759,17 +6996,22 @@ function Whiteboard({ board, onClose, onSave }) {
                     </g>
                   );
                 })()}
-                {snapGuideTargetId && (() => {
-                  const target = elements.find(a => a.id === snapGuideTargetId);
-                  if (!target) return null;
-                  const b = elementBBox(target);
+                {(snapGuideSourceId || snapGuideTargetId) && (() => {
+                  // Contorno tracejado sobre as DUAS imagens (a que está sendo
+                  // arrastada/redimensionada e a de referência) sempre que elas
+                  // estiverem do mesmo tamanho — tanto durante o redimensionamento
+                  // (que "gruda" no tamanho encontrado) quanto durante o simples
+                  // arrastar (que só mostra o aviso, sem mudar tamanho nenhum).
+                  const ids = [...new Set([snapGuideSourceId, snapGuideTargetId].filter(Boolean))];
                   const pad = 6 / view.zoom;
-                  // Contorno tracejado (em outra cor) sobre a imagem cujo tamanho
-                  // foi encontrado — só aparece enquanto o redimensionamento
-                  // estiver "grudado" nela.
-                  return (
-                    <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="#f5a524" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom} pointerEvents="none"/>
-                  );
+                  return ids.map(id => {
+                    const target = elements.find(a => a.id === id);
+                    if (!target) return null;
+                    const b = elementBBox(target);
+                    return (
+                      <rect key={id} x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="#f5a524" strokeDasharray={4 / view.zoom} strokeWidth={1.5 / view.zoom} pointerEvents="none"/>
+                    );
+                  });
                 })()}
                 {lassoPath && lassoPath.length > 1 && (
                   <path d={lassoPathD(lassoPath)} fill="rgba(91,157,255,0.15)" stroke="var(--accent)" strokeDasharray={5 / view.zoom} strokeWidth={1.5 / view.zoom}/>
@@ -6839,7 +7081,7 @@ function Whiteboard({ board, onClose, onSave }) {
                 }}
               />
             )}
-            {tool === "select" && selectedId && (() => {
+            {selectedId && (() => {
               const el = elements.find(a => a.id === selectedId);
               if (!el) return null;
               const b = elementBBox(el);
@@ -6856,6 +7098,9 @@ function Whiteboard({ board, onClose, onSave }) {
                     </div>
                     <span className="lassoToolbarDivider"/>
                   </>)}
+                  {el.type === "image" && (
+                    <button className="lassoToolbarBtn" title="Deixar do mesmo tamanho da imagem mais próxima" onClick={matchImageSizeToNearest}><Maximize2 size={15}/></button>
+                  )}
                   <button className="lassoToolbarBtn" title="Copiar (cole com Ctrl+V)" onClick={copySelection}><Copy size={15}/></button>
                   <button className="lassoToolbarBtn" title="Excluir" onClick={deleteSelected}><Trash2 size={15}/></button>
                 </div>
@@ -7076,6 +7321,7 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
   const [price, setPrice] = useState(item?.price ?? "");
   const [link, setLink] = useState(item?.link || "");
   const [photo, setPhoto] = useState(item?.photo || "");
+  const cachedPhoto = useCachedImageUrl(photo);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
@@ -7119,7 +7365,7 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
 
         <label>Foto do produto
           <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => fileRef.current?.click()}>
-            {photo ? <img src={photo} alt="Prévia"/> : <ShoppingCart size={28}/>}
+            {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : <ShoppingCart size={28}/>}
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleFile(f); }}/>
           <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>{uploading ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
@@ -7408,6 +7654,7 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
   const [restMinutes, setRestMinutes] = useState(exercise ? Math.floor((exercise.rest_seconds || 0) / 60) : 1);
   const [restSeconds, setRestSeconds] = useState(exercise ? (exercise.rest_seconds || 0) % 60 : 0);
   const [gifUrl, setGifUrl] = useState(exercise?.gif_url || "");
+  const cachedGifUrl = useCachedImageUrl(gifUrl);
   const [gifMode, setGifMode] = useState("upload"); // "upload" | "url"
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
@@ -7490,7 +7737,7 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
         <div className="exerciseFormGif">
           <small className="bookMenuLabel">GIF de referência (opcional)</small>
           <div className="exerciseGifPreview">
-            {gifUrl ? <img src={gifUrl} alt="Prévia do exercício"/> : <Film size={30}/>}
+            {gifUrl ? <img src={cachedGifUrl || gifUrl} alt="Prévia do exercício"/> : <Film size={30}/>}
           </div>
           <div className="themeToggle exerciseModeToggle">
             <button type="button" className={gifMode === "upload" ? "active" : ""} onClick={() => setGifMode("upload")}><Upload size={14}/> Enviar arquivo</button>
@@ -7958,6 +8205,7 @@ function MediaItemForm({ item, kind, session, onCancel, onSave }) {
   const [link, setLink] = useState(item?.link || "");
   const [status, setStatus] = useState(item?.status || "quero_ver");
   const [photo, setPhoto] = useState(item?.photo || "");
+  const cachedPhoto = useCachedImageUrl(photo);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoInputRef = useRef(null);
   const [hasSeasons, setHasSeasons] = useState(item?.has_seasons || false);
@@ -8035,7 +8283,7 @@ function MediaItemForm({ item, kind, session, onCancel, onSave }) {
       <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
         <label>Foto (opcional)
           <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
-            {photo ? <img src={photo} alt="Prévia"/> : (isSeries ? <Clapperboard size={28}/> : <Film size={28}/>)}
+            {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : (isSeries ? <Clapperboard size={28}/> : <Film size={28}/>)}
           </div>
           <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
           <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
@@ -8325,6 +8573,7 @@ function GameItemForm({ item, session, onCancel, onSave }) {
   const [link, setLink] = useState(item?.link || "");
   const [status, setStatus] = useState(item?.status || "quero_jogar");
   const [photo, setPhoto] = useState(item?.photo || "");
+  const cachedPhoto = useCachedImageUrl(photo);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoInputRef = useRef(null);
 
@@ -8373,7 +8622,7 @@ function GameItemForm({ item, session, onCancel, onSave }) {
       <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
         <label>Foto (opcional)
           <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
-            {photo ? <img src={photo} alt="Prévia"/> : <Gamepad2 size={28}/>}
+            {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : <Gamepad2 size={28}/>}
           </div>
           <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
           <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
@@ -8827,6 +9076,7 @@ const FLASH_HIGHLIGHT_COLOR = "#997700";
 function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage, onRemoveImage, termLang, defLang }) {
   const termRef = useRef(null);
   const defRef = useRef(null);
+  const cachedRowImage = useCachedImageUrl(row.image);
 
   useEffect(() => {
     if (termRef.current) termRef.current.innerHTML = row.term || "";
@@ -8937,7 +9187,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
             {uploading ? (
               <span>Enviando...</span>
             ) : row.image ? (
-              <img src={row.image} alt="Imagem do cartão"/>
+              <img src={cachedRowImage || row.image} alt="Imagem do cartão"/>
             ) : (
               <><ImagePlus size={16}/><span>Imagem</span></>
             )}
@@ -8951,8 +9201,39 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
   );
 }
 
+const FLASHCARD_MODES = [
+  { id: "cards", label: "Cartões", hint: "Vire e revise", icon: Zap, iconClass: "flashTabIconOrange" },
+  { id: "learn", label: "Aprender", hint: "Quiz de múltipla escolha", icon: Lightbulb, iconClass: "flashTabIconPurple" },
+  { id: "match", label: "Combinar", hint: "Jogo de pares", icon: LayoutGrid, iconClass: "flashTabIconGreen" },
+];
+
+function FlashcardModeGrid({ activeTab, onPick }) {
+  return (
+    <div className="flashTabs">
+      {FLASHCARD_MODES.map(m => (
+        <div key={m.id} className={"flashTab"+(activeTab===m.id?" active":"")} onClick={()=>onPick(m.id)}>
+          <div className={"flashTabIcon "+m.iconClass}><m.icon size={18}/></div>
+          <div><b>{m.label}</b><small>{m.hint}</small></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FlashcardModeSwitchModal({ activeTab, onPick, onClose }) {
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Trocar modo</h2><button type="button" onClick={onClose}><X/></button></div>
+        <FlashcardModeGrid activeTab={activeTab} onPick={(id)=>{ onPick(id); onClose(); }}/>
+      </div>
+    </div>
+  );
+}
+
 function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
-  const [tab, setTab] = useState("cards");
+  const [tab, setTab] = useState(null);
+  const [switchingMode, setSwitchingMode] = useState(false);
   const cards = list.cards || [];
   const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
   const fullRef = useRef(null);
@@ -8963,32 +9244,25 @@ function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
       <div className="flashFormHead">
         <div><h2>{list.title || "Lista sem título"}</h2><small className="flashListMeta">{cards.length} cartão{cards.length===1?"":"s"}</small></div>
         <div className="flashHeadActions">
+          {tab && <button className="ghost" onClick={()=>setSwitchingMode(true)}><ArrowLeftRight size={15}/> Trocar modo</button>}
           <button className="ghost" title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={15}/>:<Maximize2 size={15}/>}</button>
           <button className="ghost" onClick={onEdit}><Pencil size={15}/> Editar</button>
           <button className="ghost" onClick={onBack}><ChevronLeft size={16}/> Voltar</button>
         </div>
       </div>
 
-      <div className="flashTabs">
-        <div className={"flashTab"+(tab==="cards"?" active":"")} onClick={()=>setTab("cards")}>
-          <div className="flashTabIcon flashTabIconOrange"><Zap size={18}/></div>
-          <div><b>Cartões</b><small>Vire e revise</small></div>
-        </div>
-        <div className={"flashTab"+(tab==="learn"?" active":"")} onClick={()=>setTab("learn")}>
-          <div className="flashTabIcon flashTabIconPurple"><Lightbulb size={18}/></div>
-          <div><b>Aprender</b><small>Quiz de múltipla escolha</small></div>
-        </div>
-        <div className={"flashTab"+(tab==="match"?" active":"")} onClick={()=>setTab("match")}>
-          <div className="flashTabIcon flashTabIconGreen"><LayoutGrid size={18}/></div>
-          <div><b>Combinar</b><small>Jogo de pares</small></div>
-        </div>
-      </div>
-
       {cards.length === 0 ? (
         <p className="emptyHint">Esta lista ainda não tem cartões. Clique em "Editar" para adicionar.</p>
+      ) : !tab ? (
+        <>
+          <p className="emptyHint">Escolha um modo para começar a estudar.</p>
+          <FlashcardModeGrid activeTab={tab} onPick={setTab}/>
+        </>
       ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished}/>
         : tab === "learn" ? <FlashcardLearnMode cards={cards} onComplete={notifyFinished}/>
         : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
+
+      {switchingMode && <FlashcardModeSwitchModal activeTab={tab} onPick={setTab} onClose={()=>setSwitchingMode(false)}/>}
     </div>
   );
 }

@@ -144,12 +144,17 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   const update = useCallback(
     async (id, patch) => {
       if (cloud) {
+        // Pede de volta só o "id" (não a linha inteira) — o cliente já tem
+        // os dados que acabou de enviar em `patch`, então baixar tudo de
+        // novo (capa em base64, drawings, etc.) a cada troca de página, nota
+        // digitada ou favorito marcado seria egress desperdiçado. O "id" só
+        // serve pra confirmar que a linha existe; os dados vêm do merge local.
         const { data: updated, error } = await supabase
           .from(table)
           .update(patch)
           .eq("id", id)
-          .select()
-          .single();
+          .select("id")
+          .maybeSingle();
         if (error) {
           console.error("Supabase update error:", error);
           alert("Não foi possível atualizar: " + error.message);
@@ -157,11 +162,18 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
         }
         if (!updated) {
           console.error("Supabase update returned no row for id:", id);
-          alert("Não foi possível atualizar: o PDF não foi encontrado no banco de dados.");
+          alert("Não foi possível atualizar: o item não foi encontrado no banco de dados.");
           return null;
         }
-        setCloudData((d) => d.map((x) => (x.id === id ? updated : x)));
-        return updated;
+        let merged = null;
+        setCloudData((d) =>
+          d.map((x) => {
+            if (x.id !== id) return x;
+            merged = { ...x, ...patch };
+            return merged;
+          })
+        );
+        return merged;
       } else {
         setLocalData((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
       }
