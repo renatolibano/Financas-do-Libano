@@ -8,7 +8,7 @@ import {
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, BarChart3, FileText, Settings, Sun, Moon,
-  ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw,
+  ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw, ThumbsUp, ThumbsDown,
   Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
@@ -18,7 +18,8 @@ import {
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, RefreshCw, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
-  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
+  Megaphone
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -336,6 +337,73 @@ function AccountPasswordConfirmModal({ email, title, message, confirmLabel, onCl
   );
 }
 
+// Modal "Novas atualizações!" — mostrada sozinha quando o app encontra publicações
+// mais novas que a última vista neste aparelho, e também sob demanda (sininho de
+// novidades no cabeçalho, ou "Ver atualizações anteriores" nas Configurações).
+// `updates` já vem ordenado do mais novo pro mais antigo (useEntity ..., "desc").
+function AppUpdatesModal({ updates, onClose }) {
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <div className="modalHead"><h2><Megaphone size={17}/> Novas atualizações!</h2><button type="button" onClick={onClose}><X/></button></div>
+        <div className="updatesList">
+          {updates.map(u => (
+            <div key={u.id} className="updateEntry">
+              <div className="updateEntryHead">
+                {u.version && <b>{u.version}</b>}
+                <small>{new Date(u.created_at).toLocaleDateString("pt-BR",{day:"2-digit",month:"long",year:"numeric"})}</small>
+              </div>
+              <ul>
+                {(u.items||[]).map((it,i)=><li key={i}>{it}</li>)}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <button className="add" onClick={onClose}>Entendi</button>
+      </div>
+    </div>
+  );
+}
+
+// Formulário de publicação (Configurações → "Publicar atualização"): versão
+// opcional + um item de changelog por linha. Vira uma linha em app_updates,
+// visível pra todo mundo que usa o app (ver schema.sql).
+function PublishUpdateForm({ onPublish }) {
+  const [version, setVersion] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const items = text.split("\n").map(l=>l.trim()).filter(Boolean);
+    if (items.length===0 || busy) return;
+    setBusy(true);
+    try {
+      await onPublish({ version: version.trim() || null, items });
+      setVersion(""); setText("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} style={{display:"grid", gap:8}}>
+      <label>Versão (opcional)
+        <input value={version} onChange={e=>setVersion(e.target.value)} placeholder="ex.: v1.4"/>
+      </label>
+      <label>O que mudou (um item por linha)
+        <textarea
+          rows={4}
+          value={text}
+          onChange={e=>setText(e.target.value)}
+          placeholder={"Novo botão xxx no leitor de PDF\nCorrigido o bug que fazia xxx"}
+        />
+      </label>
+      <button type="submit" className="add" disabled={busy || !text.trim()}>{busy ? "Publicando..." : "Publicar"}</button>
+    </form>
+  );
+}
+
 function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoLockMinutes}){
   // Tela inicial (Configurações): a página com que o app abre. Só lê o valor
   // salvo uma vez, na montagem — depois disso "page" navega normalmente e
@@ -387,6 +455,35 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true});
   const gameItems = useEntity("game_items", [], session, "asc", {orderable:true});
   const calendarEvents = useEntity("calendar_recurring_events", [], session);
+  // Novidades do app: qualquer conta pode publicar (ver Configurações → "Publicar
+  // atualização"), e todas as contas enxergam a mesma lista (RLS de app_updates
+  // libera leitura pra qualquer usuário autenticado — ver schema.sql). Cada
+  // aparelho guarda localmente até quando já viu (lastSeenUpdateAt) e mostra a
+  // modal "Novas atualizações!" sozinha quando encontra algo mais novo.
+  const appUpdates = useEntity("app_updates", [], session, "desc");
+  const [lastSeenUpdateAt, setLastSeenUpdateAt] = usePersistentState("libano-last-seen-update-at", null);
+  const [showUpdatesModal, setShowUpdatesModal] = useState(false);
+  const [showPublishUpdate, setShowPublishUpdate] = useState(false);
+  useEffect(() => {
+    if (appUpdates.loading || appUpdates.data.length === 0) return;
+    if (lastSeenUpdateAt === null) {
+      // Primeiro contato deste aparelho com o recurso: não bombardeia com todo
+      // o histórico, só passa a acompanhar novidades a partir de agora.
+      setLastSeenUpdateAt(appUpdates.data[0].created_at);
+      return;
+    }
+    const hasUnseen = appUpdates.data.some(u => new Date(u.created_at) > new Date(lastSeenUpdateAt));
+    if (hasUnseen) setShowUpdatesModal(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appUpdates.loading, appUpdates.data, lastSeenUpdateAt]);
+  const unseenUpdatesCount = useMemo(() => {
+    if (!lastSeenUpdateAt) return 0;
+    return appUpdates.data.filter(u => new Date(u.created_at) > new Date(lastSeenUpdateAt)).length;
+  }, [appUpdates.data, lastSeenUpdateAt]);
+  const markUpdatesSeen = () => {
+    setShowUpdatesModal(false);
+    if (appUpdates.data[0]) setLastSeenUpdateAt(appUpdates.data[0].created_at);
+  };
   const [showOverviewEdit,setShowOverviewEdit] = useState(false);
   const [showSettings,setShowSettings] = useState(false);
   // Espaço ocupado neste aparelho (Configurações → junto dos botões de
@@ -765,7 +862,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>setShowUpdatesModal(true)}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
       {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
@@ -800,6 +897,8 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         onSave={(patch)=>{ setOverview(o=>({...o, ...patch})); setShowOverviewEdit(false); }}
         onClose={()=>setShowOverviewEdit(false)}
       />}
+
+      {showUpdatesModal && <AppUpdatesModal updates={appUpdates.data} onClose={markUpdatesSeen}/>}
 
       {dangerConfirm && <AccountPasswordConfirmModal
         email={session?.user?.email}
@@ -927,6 +1026,25 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           refreshStorageUsage();
           alert("Cache de imagens limpo. Elas serão baixadas de novo na próxima exibição.");
         }}><ImagePlus size={14}/> Limpar cache de imagens</button>
+
+        {cloudConfigured && session && (
+          <div className="notifSettingsBlock">
+            <label className="notifToggleRow" style={{cursor:"pointer"}} onClick={()=>setShowPublishUpdate(s=>!s)}>
+              <span><Megaphone size={15}/> Publicar atualização</span>
+              {showPublishUpdate ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+            </label>
+            <small className="boardSettingsHint" style={{display:"block", marginTop:-4}}>
+              Manda uma notificação "Novas atualizações!" pra todo mundo que usa o app.
+            </small>
+            {showPublishUpdate && <PublishUpdateForm onPublish={async ({version, items})=>{
+              const ok = await appUpdates.add({ version, items });
+              if(ok) setShowPublishUpdate(false);
+            }}/>}
+          </div>
+        )}
+        {appUpdates.data.length>0 && (
+          <button className="resetData" onClick={()=>{ setShowSettings(false); setShowUpdatesModal(true); }}><Megaphone size={14}/> Ver atualizações anteriores</button>
+        )}
 
         <div className="settingsDangerZone">
           <b className="settingsDangerTitle"><AlertTriangle size={12}/> Zona de risco</b>
@@ -4883,7 +5001,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
               <StickyNote size={15}/> <span>Anotações</span>
             </button>
             <button className={`ghost${panel==="timer" ? " active" : ""}${timerDone ? " pdfTimerBlink" : ""}`} onClick={()=>togglePanel("timer")}>
-              <Clock3 size={15}/> <span>{timerStarted ? fmtTimer(timerLeft) : "Cronômetro"}</span>
+              <Clock3 size={15}/> <span>{timerStarted ? (timerHidden && !timerDone ? "Contando…" : fmtTimer(timerLeft)) : "Cronômetro"}</span>
             </button>
             <button className="ghost" onClick={downloadCurrentPdf}>
               <Download size={15}/> <span>Baixar PDF</span>
@@ -8708,6 +8826,7 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, sessi
   if (viewingList) {
     return <FlashcardListStudy
       list={viewingList}
+      session={session}
       onBack={() => setViewingListId(null)}
       onEdit={() => { setListForm(viewingList); setViewingListId(null); }}
       onFinish={(listId, listTitle) => markFlashcardListStudied(listsEntity, studyGoals, listId, listTitle)}
@@ -9231,9 +9350,11 @@ function FlashcardModeSwitchModal({ activeTab, onPick, onClose }) {
   );
 }
 
-function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
+function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
   const [tab, setTab] = useState(null);
   const [switchingMode, setSwitchingMode] = useState(false);
+  const [hideDefs, setHideDefs] = useState(false);
+  const [aiQuizOpen, setAiQuizOpen] = useState(false);
   const cards = list.cards || [];
   const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
   const fullRef = useRef(null);
@@ -9257,12 +9378,142 @@ function FlashcardListStudy({ list, onBack, onEdit, onFinish }) {
         <>
           <p className="emptyHint">Escolha um modo para começar a estudar.</p>
           <FlashcardModeGrid activeTab={tab} onPick={setTab}/>
+
+          <div className="flashIntroTerms">
+            <div className="flashIntroTermsHead"><b>Termos nesta lista ({cards.length})</b></div>
+            {cards.map(c => (
+              <div key={c.id} className="flashIntroTermRow">
+                <div className="flashIntroTermFront">
+                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null}/>
+                  {stripHtml(c.term).trim() ? <span dangerouslySetInnerHTML={{__html: c.term}}/> : <span className="flashIntroTermEmpty">(sem termo)</span>}
+                </div>
+                {!hideDefs && (
+                  <div className="flashIntroTermBack">
+                    {stripHtml(c.definition).trim() ? <span dangerouslySetInnerHTML={{__html: c.definition}}/> : <span className="flashIntroTermEmpty">(sem definição)</span>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flashIntroBar">
+            <button className="flashIntroBarBtn" onClick={()=>setHideDefs(h=>!h)}>
+              {hideDefs ? <Eye size={15}/> : <EyeOff size={15}/>}
+              {hideDefs ? "Mostrar definições" : "Esconder definições"}
+            </button>
+            <button className="flashAIBtn" title="Estudar com IA" onClick={()=>setAiQuizOpen(true)}><Sparkles size={17}/></button>
+          </div>
         </>
       ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished}/>
         : tab === "learn" ? <FlashcardLearnMode cards={cards} onComplete={notifyFinished}/>
         : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
 
       {switchingMode && <FlashcardModeSwitchModal activeTab={tab} onPick={setTab} onClose={()=>setSwitchingMode(false)}/>}
+      {aiQuizOpen && <FlashcardAIQuiz cards={cards} session={session} onClose={()=>setAiQuizOpen(false)}/>}
+    </div>
+  );
+}
+
+function FlashcardAIQuiz({ cards, session, onClose }) {
+  const aiAvailable = cloudConfigured && !!session;
+  const [messages, setMessages] = useState([]); // [{role:"user"|"model", text}]
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const startedRef = useRef(false);
+  const bodyRef = useRef(null);
+
+  const cardsPayload = useMemo(() => cards.map(c => ({
+    term: stripHtml(c.term || "").trim(),
+    definition: stripHtml(c.definition || "").trim(),
+  })).filter(c => c.term || c.definition), [cards]);
+
+  const sendTurn = async (history) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fnError } = await supabase.functions.invoke("flashcard-quiz", {
+        body: { cards: cardsPayload, history },
+      });
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      setMessages([...history, { role: "model", text: data.reply }]);
+    } catch (err) {
+      setError(err.message || "Não foi possível consultar a IA agora.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (startedRef.current || !aiAvailable || cardsPayload.length === 0) return;
+    startedRef.current = true;
+    sendTurn([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiAvailable]);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [messages, loading]);
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput("");
+    sendTurn([...messages, { role: "user", text }]);
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="flashAIQuizPanel" onClick={e => e.stopPropagation()}>
+        <div className="flashAIQuizHead">
+          <div className="flashAIQuizHeadIcon"><Sparkles size={18}/></div>
+          <div><b>Estudar com IA</b><small>Quiz interativo sobre esta lista</small></div>
+          <button className="flashAIQuizClose" onClick={onClose}><X size={18}/></button>
+        </div>
+
+        {!aiAvailable ? (
+          <p className="emptyHint" style={{padding:"0 20px 20px"}}>Para usar a IA, configure a sincronização (Supabase) e entre com sua conta — veja o README.</p>
+        ) : cardsPayload.length === 0 ? (
+          <p className="emptyHint" style={{padding:"0 20px 20px"}}>Esta lista não tem termos suficientes para gerar um quiz.</p>
+        ) : (
+          <>
+            <div className="flashAIQuizBody" ref={bodyRef}>
+              {messages.map((m, i) => (
+                <div key={i} className={"flashAIQuizMsg "+m.role}>
+                  <div className="flashAIQuizBubble">{m.text}</div>
+                  {m.role === "model" && (
+                    <div className="flashAIQuizFeedbackRow">
+                      <button title="Boa resposta"><ThumbsUp size={13}/></button>
+                      <button title="Não ajudou"><ThumbsDown size={13}/></button>
+                      <button title="Reportar"><Flag size={13}/></button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {loading && (
+                <div className="flashAIQuizMsg model">
+                  <div className="flashAIQuizBubble flashAIQuizTyping"><span></span><span></span><span></span></div>
+                </div>
+              )}
+              {error && <p className="aiErrorMsg">{error}</p>}
+            </div>
+
+            <div className="flashAIQuizInputBar">
+              <button className="flashAIQuizPlus" type="button" tabIndex={-1}><Plus size={16}/></button>
+              <input
+                className="flashAIQuizInput"
+                placeholder="Responda aqui"
+                value={input}
+                disabled={loading}
+                onChange={e=>setInput(e.target.value)}
+                onKeyDown={e=>{ if (e.key === "Enter") handleSend(); }}
+              />
+              <button className="flashAIQuizSend" disabled={!input.trim() || loading} onClick={handleSend}><ArrowUp size={16}/></button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

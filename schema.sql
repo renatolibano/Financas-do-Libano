@@ -927,3 +927,25 @@ as $$
     )
   order by coalesce(sort_order, 2147483647), created_at asc;
 $$;
+
+-- Atualização: histórico de novidades do app. Cada linha publicada aqui vira
+-- a notificação "Novas atualizações!" pra todo mundo que usa o app (não é
+-- por usuário como as outras tabelas — select libera pra qualquer conta
+-- autenticada, só insert/delete ficam restritos a quem publicou).
+create table if not exists app_updates (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  version text,
+  items text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+alter table app_updates enable row level security;
+drop policy if exists "select_all_app_updates" on app_updates;
+drop policy if exists "insert_own_app_updates" on app_updates;
+drop policy if exists "delete_own_app_updates" on app_updates;
+create policy "select_all_app_updates" on app_updates for select
+  using (auth.uid() is not null);
+create policy "insert_own_app_updates" on app_updates for insert
+  with check (auth.uid() = user_id);
+create policy "delete_own_app_updates" on app_updates for delete
+  using (auth.uid() = user_id);

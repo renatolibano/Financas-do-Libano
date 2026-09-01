@@ -261,7 +261,15 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .modalHead{display:flex;justify-content:space-between;align-items:center;position:sticky;top:-22px;margin:-22px -22px 0;padding:22px 22px 12px;background:var(--bg-modal);z-index:1}
 .modal h2{margin:0;font-size:18px}
 .modal label{font-size:12px;color:var(--text-2);display:grid;gap:6px}
-.modal input,.modal select{background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);padding:11px;border-radius:9px;outline:none}
+.modal input,.modal select,.modal textarea{background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);padding:11px;border-radius:9px;outline:none;font:inherit}
+.modal textarea{resize:vertical}
+.updatesList{display:grid;gap:14px;max-height:55vh;overflow-y:auto}
+.updateEntry{padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-surface)}
+.updateEntryHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.updateEntryHead b{font-size:13px;color:var(--text-1)}
+.updateEntryHead small{color:var(--text-3);font-size:11px}
+.updateEntry ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.updateEntry li{font-size:13px;color:var(--text-2);line-height:1.4}
 .notifSettingsBlock{display:flex;flex-direction:column;gap:10px}
 .modal label.notifToggleRow{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;font-size:13px;color:var(--text-1)}
 .notifToggleRow span:first-child{display:flex;align-items:center;gap:8px}
@@ -846,6 +854,50 @@ h1{font-size:23px}
 .flashTabIconPurple{background:#a06bff22;color:#a06bff}
 .flashTabIconGreen{background:#3ecf6a22;color:#3ecf6a}
 @media (max-width:720px){.flashTabs{grid-template-columns:1fr}}
+
+.flashIntroTerms{margin-top:22px;border:1px solid var(--border);background:var(--bg-surface);border-radius:16px;overflow:hidden}
+.flashIntroTermsHead{padding:14px 18px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-2)}
+.flashIntroTermRow{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:16px 18px;border-bottom:1px solid var(--border-soft)}
+.flashIntroTermRow:last-child{border-bottom:0}
+.flashIntroTermFront,.flashIntroTermBack{font-size:14px;color:var(--text-1);display:flex;align-items:center;gap:10px;overflow-wrap:break-word}
+.flashIntroTermBack{color:var(--text-2)}
+.flashIntroTermEmpty{color:var(--text-3);font-style:italic}
+.flashIntroTermImg{width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0}
+@media (max-width:640px){.flashIntroTermRow{grid-template-columns:1fr}}
+
+.flashIntroBar{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px;padding:8px;background:var(--bg-surface);border:1px solid var(--border);border-radius:999px;width:fit-content;margin-left:auto;margin-right:auto}
+.flashIntroBarBtn{display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:600;color:var(--text-1)}
+.flashIntroBarBtn:hover{background:var(--bg-hover-2)}
+.flashAIBtn{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7b5bff,#ff5bd6);color:#fff;display:grid;place-items:center;flex-shrink:0}
+.flashAIBtn:hover{filter:brightness(1.1)}
+
+.flashAIQuizPanel{width:min(520px,100%);max-height:min(680px,calc(100vh - 40px));display:flex;flex-direction:column;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;box-shadow:0 20px 80px #000;overflow:hidden}
+.flashAIQuizHead{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.flashAIQuizHeadIcon{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#7b5bff,#ff5bd6);color:#fff;display:grid;place-items:center;flex-shrink:0}
+.flashAIQuizHead b{display:block;font-size:14px}
+.flashAIQuizHead small{color:var(--text-2);font-size:12px}
+.flashAIQuizClose{margin-left:auto;color:var(--text-2);flex-shrink:0}
+.flashAIQuizBody{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px;min-height:280px}
+.flashAIQuizMsg{display:flex;flex-direction:column;gap:6px;max-width:85%}
+.flashAIQuizMsg.model{align-self:flex-start;align-items:flex-start}
+.flashAIQuizMsg.user{align-self:flex-end;align-items:flex-end}
+.flashAIQuizBubble{padding:11px 14px;border-radius:14px;font-size:13.5px;line-height:1.55;white-space:pre-wrap}
+.flashAIQuizMsg.model .flashAIQuizBubble{background:var(--bg-surface-3);color:var(--text-1);border-bottom-left-radius:4px}
+.flashAIQuizMsg.user .flashAIQuizBubble{background:var(--accent-text-on,#fff);color:#111;border-bottom-right-radius:4px}
+.flashAIQuizFeedbackRow{display:flex;gap:4px}
+.flashAIQuizFeedbackRow button{width:24px;height:24px;border-radius:7px;color:var(--text-3);display:grid;place-items:center}
+.flashAIQuizFeedbackRow button:hover{background:var(--bg-hover-2);color:var(--text-1)}
+.flashAIQuizTyping{display:flex;gap:4px;padding:13px 14px}
+.flashAIQuizTyping span{width:6px;height:6px;border-radius:50%;background:var(--text-3);animation:flashAITypingBlink 1.2s infinite ease-in-out}
+.flashAIQuizTyping span:nth-child(2){animation-delay:.2s}
+.flashAIQuizTyping span:nth-child(3){animation-delay:.4s}
+@keyframes flashAITypingBlink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.flashAIQuizInputBar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-top:1px solid var(--border)}
+.flashAIQuizPlus{width:30px;height:30px;border-radius:50%;background:var(--bg-surface-3);color:var(--text-2);display:grid;place-items:center;flex-shrink:0}
+.flashAIQuizInput{flex:1;background:var(--bg-surface-3);border:1px solid var(--border);border-radius:999px;color:var(--text-1);padding:10px 16px;font-size:13.5px;outline:none}
+.flashAIQuizInput:focus{border-color:var(--accent)}
+.flashAIQuizSend{width:32px;height:32px;border-radius:50%;background:var(--accent);color:var(--accent-text-on);display:grid;place-items:center;flex-shrink:0}
+.flashAIQuizSend:disabled{background:var(--bg-surface-3);color:var(--text-3)}
 
 .flashStudyArea{display:flex;flex-direction:column;align-items:center;gap:18px}
 .flashFlipCard{width:100%;max-width:640px;cursor:pointer;position:relative}
