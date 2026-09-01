@@ -3576,9 +3576,17 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const [timerLeft, setTimerLeft] = useState(savedTimer?.left ?? 0); // segundos restantes, só existe depois de "Começar"
   const [timerRunning, setTimerRunning] = useState(false); // sempre reabre pausado, mesmo se estava rodando ao sair
   const [timerDone, setTimerDone] = useState(savedTimer?.done ?? false); // true = tempo zerou, tocando/piscando
+  // Oculta os números do cronômetro (útil em prova, pra não ficar checando o
+  // tempo toda hora) sem pausar a contagem — ela continua rodando por trás.
+  // Ao zerar o tempo o cronômetro sempre reaparece sozinho.
+  const [timerHidden, setTimerHidden] = useState(savedTimer?.hidden ?? false);
   const timerIntervalRef = useRef(null);
   const alarmIntervalRef = useRef(null);
   const audioCtxRef = useRef(null);
+  // Marca quais "horas passadas" e se o aviso dos 30 min finais já apitaram
+  // nesta sessão do cronômetro, pra cada um apitar só uma vez.
+  const hourBeepsFiredRef = useRef(new Set());
+  const finalStretchBeepFiredRef = useRef(false);
   // Cursor customizado: uma bolinha da cor/espessura da ferramenta atual,
   // que segue o ponteiro (mouse/caneta) e some enquanto o traço está sendo feito.
   const [showPenCursor, setShowPenCursor] = useState(false);
@@ -4515,22 +4523,42 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // sobreviver ao fechar o leitor (só o "running" nunca é salvo como true —
   // ele sempre reabre pausado, ver comentário na declaração do state acima).
   useEffect(() => {
-    saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone });
-  }, [timerH, timerM, timerS, timerLeft, timerDone]);
+    saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone, hidden: timerHidden });
+  }, [timerH, timerM, timerS, timerLeft, timerDone, timerHidden]);
 
   // Enquanto o tempo tiver zerado (timerDone), repete o bipe até a pessoa zerar.
+  // Também reexibe os números automaticamente, mesmo se estava oculto.
   useEffect(() => {
     clearInterval(alarmIntervalRef.current);
     if (timerDone) {
+      setTimerHidden(false);
       playTimerBeep();
       alarmIntervalRef.current = setInterval(playTimerBeep, 900);
     }
     return () => clearInterval(alarmIntervalRef.current);
   }, [timerDone]);
 
+  // Apita uma vez a cada hora de prova que já passou, e uma vez ao entrar nos
+  // últimos 30 minutos — mesmo com o cronômetro oculto, pra dar uma noção de
+  // como o tempo está passando sem precisar olhar os números.
+  useEffect(() => {
+    if (!timerRunning || timerLeft <= 0) return;
+    const elapsed = timerTotalInput - timerLeft;
+    if (elapsed > 0 && elapsed % 3600 === 0 && !hourBeepsFiredRef.current.has(elapsed)) {
+      hourBeepsFiredRef.current.add(elapsed);
+      playTimerBeep();
+    }
+    if (timerLeft === 1800 && timerTotalInput > 1800 && !finalStretchBeepFiredRef.current) {
+      finalStretchBeepFiredRef.current = true;
+      playTimerBeep();
+    }
+  }, [timerLeft, timerRunning]);
+
   const timerTotalInput = timerH * 3600 + timerM * 60 + timerS;
   const startTimer = () => {
     if (timerTotalInput <= 0) return;
+    hourBeepsFiredRef.current = new Set();
+    finalStretchBeepFiredRef.current = false;
     setTimerDone(false);
     setTimerLeft(timerTotalInput);
     setTimerRunning(true);
@@ -4540,10 +4568,13 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const resetTimer = () => {
     clearInterval(timerIntervalRef.current);
     clearInterval(alarmIntervalRef.current);
+    hourBeepsFiredRef.current = new Set();
+    finalStretchBeepFiredRef.current = false;
     setTimerRunning(false);
     setTimerDone(false);
     setTimerLeft(0);
     setTimerH(0); setTimerM(0); setTimerS(0);
+    setTimerHidden(false);
     removeLocalKey("studyPdfTimer");
   };
   const fmtTimer = (totalSeconds) => {
@@ -5126,7 +5157,16 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   </>
                 ) : (
                   <>
-                    <div className={`pdfTimerDisplay${timerDone ? " pdfTimerBlink" : ""}`}>{fmtTimer(timerLeft)}</div>
+                    {timerHidden && !timerDone ? (
+                      <div className="pdfTimerDisplay pdfTimerHidden">Contando… ⏱</div>
+                    ) : (
+                      <div className={`pdfTimerDisplay${timerDone ? " pdfTimerBlink" : ""}`}>{fmtTimer(timerLeft)}</div>
+                    )}
+                    {!timerDone && (
+                      <button className="ghost pdfTimerHideBtn" onClick={()=>setTimerHidden(h=>!h)}>
+                        {timerHidden ? <><Eye size={15}/> Mostrar tempo</> : <><EyeOff size={15}/> Ocultar tempo</>}
+                      </button>
+                    )}
                     {timerDone ? (
                       <p className="emptyHint">Tempo esgotado! Toque em "Zerar" para parar o alarme.</p>
                     ) : (
@@ -9602,6 +9642,7 @@ function levelFmtTime(totalSeconds){
 function Nivelamento(){
   const [pattern,setPattern] = usePersistentState("nivelamento_padrao","4/5");
   const [sessions,setSessions] = usePersistentState("nivelamento_historico",[]);
+  const [draft,setDraft] = usePersistentState("nivelamento_rascunho",null); // sessão em andamento não concluída
   const [phase,setPhase] = useState("config"); // config | running | done
   const [history,setHistory] = useState([]); // array de booleans
   const [seconds,setSeconds] = useState(0);
@@ -9618,6 +9659,25 @@ function Nivelamento(){
       return ()=>clearInterval(timerRef.current);
     }
   },[phase,paused]);
+
+  // Salva o progresso do nivelamento em andamento a cada resposta/segundo, para
+  // poder ser retomado caso a página seja recarregada ou fechada antes de terminar.
+  useEffect(()=>{
+    if(phase==="running"){
+      setDraft({pattern, history, seconds});
+    }
+  },[phase, history, seconds, pattern]);
+
+  const resumeDraft = ()=>{
+    if(!draft) return;
+    setPattern(draft.pattern);
+    setHistory(draft.history||[]);
+    setSeconds(draft.seconds||0);
+    setPaused(false);
+    setLastResult(null);
+    setPhase("running");
+  };
+  const discardDraft = ()=>{ setDraft(null); };
 
   // Fecha a janela de picture-in-picture (se estiver aberta) quando a página some ou o nivelamento termina.
   useEffect(()=>{
@@ -9677,6 +9737,7 @@ function Nivelamento(){
     const result = {pattern, solved:finalHistory.length, pct, seconds, date:new Date().toISOString()};
     setLastResult(result);
     setSessions(list=>[result, ...list].slice(0,20));
+    setDraft(null);
     setPhase("done");
   };
 
@@ -9696,7 +9757,7 @@ function Nivelamento(){
     setSessions([]);
   };
   const exitRunning = ()=>{
-    if(confirm("Sair do nivelamento em andamento? O progresso desta sessão não será salvo.")){
+    if(confirm("Sair do nivelamento em andamento? Seu progresso fica salvo e você pode retomar depois.")){
       clearInterval(timerRef.current);
       setPhase("config");
     }
@@ -9712,6 +9773,16 @@ function Nivelamento(){
     </div>
 
     {phase==="config" && <>
+      {draft && draft.history && draft.history.length>0 && <div className="levelConfigCard levelDraftCard">
+        <div className="levelConfigIcon"><RotateCcw size={22}/></div>
+        <h3>Nivelamento não concluído</h3>
+        <p className="levelConfigHint">Padrão {draft.pattern} · {draft.history.length} questão(ões) respondida(s) · {levelFmtTime(draft.seconds||0)}</p>
+        <div className="levelDraftBtns">
+          <button className="add levelStartBtn" onClick={resumeDraft}><Play size={16}/> Continuar de onde parei</button>
+          <button className="ghost" onClick={discardDraft}><Trash2 size={14}/> Descartar</button>
+        </div>
+      </div>}
+
       <div className="levelConfigCard">
         <div className="levelConfigIcon"><BarChart3 size={22}/></div>
         <h3>Configuração do Nivelamento</h3>
