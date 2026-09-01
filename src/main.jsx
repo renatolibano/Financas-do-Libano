@@ -1795,7 +1795,8 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [highlightMode, setHighlightMode] = useState(false);
   const [hlColor, setHlColor] = useState(BOOK_HL_COLORS[0]);
   const [hlColorOpen, setHlColorOpen] = useState(false);
-  const [drawings, setDrawings] = useState(book.drawings || {});
+  const [drawings, setDrawings] = useState({});
+  const [drawingsLoaded, setDrawingsLoaded] = useState(false);
   const [liveHl, setLiveHl] = useState(null);
   const [selectedImgId, setSelectedImgId] = useState(null);
   const imageInputRef = useRef(null);
@@ -1803,6 +1804,35 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const pageWrapRef = useRef(null);
   const isDrawingRef = useRef(false);
   const drawSaveTimer = useRef(null);
+
+  // As anotações do marca-texto ficam só no IndexedDB local (mesma ideia do
+  // quadro infinito) — nunca mais sobem pro Supabase, porque reenviar o
+  // objeto inteiro a cada pausa de desenho gastava rede à toa. Se o livro
+  // ainda tiver um "drawings" antigo salvo na nuvem (de antes dessa
+  // mudança), migra uma única vez pro IndexedDB e limpa a coluna na nuvem.
+  const drawingsIdbKey = book.id != null ? `book_drawings:${book.id}` : null;
+  useEffect(() => {
+    if (!drawingsIdbKey) { setDrawings({}); setDrawingsLoaded(true); return; }
+    let cancelled = false;
+    (async () => {
+      const fromIdb = await idbGet(drawingsIdbKey, null);
+      if (cancelled) return;
+      if (fromIdb && Object.keys(fromIdb).length) {
+        setDrawings(fromIdb);
+        setDrawingsLoaded(true);
+        return;
+      }
+      const legacyCloud = book.drawings;
+      if (legacyCloud && Object.keys(legacyCloud).length) {
+        setDrawings(legacyCloud);
+        await idbSet(drawingsIdbKey, legacyCloud);
+        onDrawingsChange(book.id, {}); // esvazia a coluna antiga na nuvem
+      }
+      setDrawingsLoaded(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawingsIdbKey]);
 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -1997,12 +2027,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   // ---------------------------------------------------------------------
 
   const scheduleDrawingsSave = (next) => {
+    if (!drawingsIdbKey || !drawingsLoaded) return;
     clearTimeout(drawSaveTimer.current);
-    drawSaveTimer.current = setTimeout(() => onDrawingsChange(book.id, next), 500);
+    drawSaveTimer.current = setTimeout(() => idbSet(drawingsIdbKey, next), 500);
   };
   const flushDrawings = () => {
+    if (!drawingsIdbKey || !drawingsLoaded) return;
     clearTimeout(drawSaveTimer.current);
-    onDrawingsChange(book.id, drawings);
+    idbSet(drawingsIdbKey, drawings);
   };
 
   const toggleHighlightMode = () => {
@@ -3483,7 +3515,36 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // usado no fim do traço pra virar a mesma "forma" de linha que a correção
   // automática produz, em vez de continuar como um traço à mão livre.
   const straightLineUsedRef = useRef(false);
-  const [drawings, setDrawings] = useState(pdfDoc.drawings || {});
+  const [drawings, setDrawings] = useState({});
+  const [drawingsLoaded, setDrawingsLoaded] = useState(false);
+
+  // Modo Caneta agora guarda tudo só no IndexedDB local (mesmo padrão do
+  // quadro infinito) — não sobe mais pro Supabase a cada pausa de desenho.
+  // Se o PDF ainda tiver um "drawings" antigo salvo na nuvem, migra uma
+  // única vez pro IndexedDB e limpa a coluna na nuvem.
+  const drawingsIdbKey = pdfDoc.id != null ? `pdf_drawings:${pdfDoc.id}` : null;
+  useEffect(() => {
+    if (!drawingsIdbKey) { setDrawings({}); setDrawingsLoaded(true); return; }
+    let cancelled = false;
+    (async () => {
+      const fromIdb = await idbGet(drawingsIdbKey, null);
+      if (cancelled) return;
+      if (fromIdb && Object.keys(fromIdb).length) {
+        setDrawings(fromIdb);
+        setDrawingsLoaded(true);
+        return;
+      }
+      const legacyCloud = pdfDoc.drawings;
+      if (legacyCloud && Object.keys(legacyCloud).length) {
+        setDrawings(legacyCloud);
+        await idbSet(drawingsIdbKey, legacyCloud);
+        onDrawingsChange(pdfDoc.id, {}); // esvazia a coluna antiga na nuvem
+      }
+      setDrawingsLoaded(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawingsIdbKey]);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [liveAnn, setLiveAnn] = useState(null);
   const [selectedAnnId, setSelectedAnnId] = useState(null);
@@ -3505,12 +3566,16 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // --- Cronômetro (contagem regressiva) do leitor: útil pra simular tempo de
   // prova. Os campos de horas/min/seg definem o tempo; ao começar, conta
   // regressivamente até zero, toca um alarme e pisca até ser zerado.
-  const [timerH, setTimerH] = useState(0);
-  const [timerM, setTimerM] = useState(0);
-  const [timerS, setTimerS] = useState(0);
-  const [timerLeft, setTimerLeft] = useState(0); // segundos restantes, só existe depois de "Começar"
-  const [timerRunning, setTimerRunning] = useState(false);
-  const [timerDone, setTimerDone] = useState(false); // true = tempo zerou, tocando/piscando
+  // Guardado no localStorage (chave "studyPdfTimer") pra sobreviver ao fechar
+  // o leitor: ao sair, o cronômetro é pausado (nunca continua contando em
+  // segundo plano) e mantém o tempo restante até a pessoa retomar ou zerar.
+  const savedTimer = useRef(loadLocal("studyPdfTimer", null)).current;
+  const [timerH, setTimerH] = useState(savedTimer?.h ?? 0);
+  const [timerM, setTimerM] = useState(savedTimer?.m ?? 0);
+  const [timerS, setTimerS] = useState(savedTimer?.s ?? 0);
+  const [timerLeft, setTimerLeft] = useState(savedTimer?.left ?? 0); // segundos restantes, só existe depois de "Começar"
+  const [timerRunning, setTimerRunning] = useState(false); // sempre reabre pausado, mesmo se estava rodando ao sair
+  const [timerDone, setTimerDone] = useState(savedTimer?.done ?? false); // true = tempo zerou, tocando/piscando
   const timerIntervalRef = useRef(null);
   const alarmIntervalRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -3767,12 +3832,14 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // ---------------------------------------------------------------------
 
   const scheduleDrawingsSave = (next) => {
+    if (!drawingsIdbKey || !drawingsLoaded) return;
     clearTimeout(drawSaveTimer.current);
-    drawSaveTimer.current = setTimeout(() => onDrawingsChange(pdfDoc.id, next), 500);
+    drawSaveTimer.current = setTimeout(() => idbSet(drawingsIdbKey, next), 500);
   };
   const flushDrawings = () => {
+    if (!drawingsIdbKey || !drawingsLoaded) return;
     clearTimeout(drawSaveTimer.current);
-    onDrawingsChange(pdfDoc.id, drawings);
+    idbSet(drawingsIdbKey, drawings);
   };
 
   const pushHistory = () => {
@@ -4444,6 +4511,13 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     return () => clearInterval(timerIntervalRef.current);
   }, [timerRunning]);
 
+  // Salva o estado do cronômetro no localStorage a cada mudança, pra ele
+  // sobreviver ao fechar o leitor (só o "running" nunca é salvo como true —
+  // ele sempre reabre pausado, ver comentário na declaração do state acima).
+  useEffect(() => {
+    saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone });
+  }, [timerH, timerM, timerS, timerLeft, timerDone]);
+
   // Enquanto o tempo tiver zerado (timerDone), repete o bipe até a pessoa zerar.
   useEffect(() => {
     clearInterval(alarmIntervalRef.current);
@@ -4470,6 +4544,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     setTimerDone(false);
     setTimerLeft(0);
     setTimerH(0); setTimerM(0); setTimerS(0);
+    removeLocalKey("studyPdfTimer");
   };
   const fmtTimer = (totalSeconds) => {
     const h = Math.floor(totalSeconds / 3600);
@@ -4492,6 +4567,10 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     searchToken.current++;
     clearInterval(timerIntervalRef.current);
     clearInterval(alarmIntervalRef.current);
+    // Pausa (não zera) o cronômetro ao sair: o tempo restante já está salvo
+    // no localStorage pelo efeito acima, então na próxima abertura ele volta
+    // pausado com o mesmo tempo, em vez de reiniciar do zero.
+    saveLocal("studyPdfTimer", { h: timerH, m: timerM, s: timerS, left: timerLeft, done: timerDone });
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
   };
