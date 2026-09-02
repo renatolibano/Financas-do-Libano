@@ -342,11 +342,13 @@ function AccountPasswordConfirmModal({ email, title, message, confirmLabel, onCl
 // mais novas que a última vista neste aparelho, e também sob demanda (sininho de
 // novidades no cabeçalho, ou "Ver atualizações anteriores" nas Configurações).
 // `updates` já vem ordenado do mais novo pro mais antigo (useEntity ..., "desc").
-function AppUpdatesModal({ updates, onClose }) {
+function AppUpdatesModal({ updates, loading, onClose }) {
   return (
     <div className="modalBack" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modalHead"><h2><Megaphone size={17}/> Novas atualizações!</h2><button type="button" onClick={onClose}><X/></button></div>
+        {loading && updates.length===0 && <p className="emptyHint">Carregando...</p>}
+        {!loading && updates.length===0 && <p className="emptyHint">Nenhuma atualização publicada ainda.</p>}
         <div className="updatesList">
           {updates.map(u => (
             <div key={u.id} className="updateEntry">
@@ -432,15 +434,28 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true, listSelect: "id,title,tags,preview,sort_order,updated_at,deleted_at,created_at"});
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
+  // Livros e PDFs de estudo carregam cover_thumb (capa em JPEG base64) pra
+  // cada item já na listagem — então, igual Treino/Filmes/Jogos, adiamos a
+  // primeira busca até a pessoa entrar numa aba que realmente usa esses
+  // dados, em vez de baixar todas as capas toda vez que o app abre.
+  const livrosVisitado = visitedPages.has("Biblioteca") || visitedPages.has("Livros Lendo") || visitedPages.has("Livros Lidos") || visitedPages.has("Livros Para Ler") || visitedPages.has("Metas de Estudo");
+  const pdfEstudoVisitado = visitedPages.has("Leitor de PDF") || visitedPages.has("Metas de Estudo");
   // Listagem enxuta (sem notes/drawings/highlights/favorite_excerpts — texto
   // e JSON que só importam quando o item é aberto no leitor). Ver
   // useEntity/fetchFull, que completa a linha inteira nesse momento.
-  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,group_id,sort_order,created_at"});
-  const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true});
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,group_id,sort_order,created_at", enabled: livrosVisitado});
+  const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true, enabled: livrosVisitado});
   const readingStats = useReadingStats(session);
-  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at"});
-  const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true});
-  const studyFlashcards = useEntity("study_flashcards", [], session);
+  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at", enabled: pdfEstudoVisitado});
+  const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
+  // Flashcards soltos (criados a partir de um trecho selecionado no Leitor
+  // de PDF, fora de uma lista) só são exibidos dentro da própria aba
+  // Flashcards — então adiamos a primeira busca até ela ser visitada nesta
+  // sessão, em vez de baixar todos eles toda vez que o app abre. O botão
+  // "Criar flashcard" do Leitor de PDF continua funcionando normalmente:
+  // ele só grava (flashcards.add), não depende de flashcards.data.
+  const flashcardsVisitado = visitedPages.has("Flashcards");
+  const studyFlashcards = useEntity("study_flashcards", [], session, "asc", {enabled: flashcardsVisitado});
   const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {
     orderable: true,
     // A listagem (grade de listas) só precisa desses campos pra mostrar o
@@ -464,7 +479,15 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const jogosVisitado = visitedPages.has("Jogos");
   const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true, enabled: treinoVisitado});
-  const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
+  // Lista de compras: usada na própria aba e também no preview "Quadro
+  // possível" do Dashboard (Visão Geral) — por isso a busca é adiada até
+  // uma dessas duas telas ser visitada nesta sessão, em vez de sempre na
+  // abertura do app. Como a Visão Geral costuma ser a tela inicial padrão,
+  // isso não muda o comportamento pra quem abre o app nela; só evita a
+  // busca de quem definiu outra tela como inicial e não passa por nenhuma
+  // das duas.
+  const shoppingItemsVisitado = visitedPages.has("Lista de Compras") || visitedPages.has("Visão Geral");
+  const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true, enabled: shoppingItemsVisitado});
   const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true, enabled: filmesVisitado});
   // Obs.: "seasons" (progresso por temporada) fica de fora do listSelect só
   // não dá pra fazer aqui como em livros/PDFs — a própria linha da prateleira
@@ -924,7 +947,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>setShowUpdatesModal(true)}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
       {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
@@ -960,7 +983,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         onClose={()=>setShowOverviewEdit(false)}
       />}
 
-      {showUpdatesModal && <AppUpdatesModal updates={appUpdates.data} onClose={markUpdatesSeen}/>}
+      {showUpdatesModal && <AppUpdatesModal updates={appUpdates.data} loading={appUpdates.loading} onClose={markUpdatesSeen}/>}
 
       {dangerConfirm && <AccountPasswordConfirmModal
         email={session?.user?.email}
@@ -1104,9 +1127,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
             }}/>}
           </div>
         )}
-        {appUpdates.data.length>0 && (
-          <button className="resetData" onClick={()=>{ setShowSettings(false); setShowUpdatesModal(true); }}><Megaphone size={14}/> Ver atualizações anteriores</button>
-        )}
+        <button className="resetData" onClick={()=>{ setShowSettings(false); setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={14}/> Ver atualizações anteriores</button>
 
         <div className="settingsDangerZone">
           <b className="settingsDangerTitle"><AlertTriangle size={12}/> Zona de risco</b>
