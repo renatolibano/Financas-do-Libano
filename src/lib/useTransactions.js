@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
 import { useIdbPersistentState } from "./idbStorage";
+import { loadLocal, saveLocal } from "./storage";
 
 // "transactions" é a única tabela que cresce sem limite (é o extrato
 // financeiro completo, ano após ano) — por isso tem um hook próprio, em vez
@@ -15,6 +16,15 @@ import { useIdbPersistentState } from "./idbStorage";
 // ano, de antes da correção que passou a gravar o ano) — que só dá pra
 // filtrar pelo mês mesmo, ignorando o ano (mesma regra que o app já usava
 // no cliente antes dessa mudança).
+//
+// Cache local (localStorage) por mês, igual ao useEntity: sem isso, o mês
+// selecionado na Visão Geral (que carrega sozinho ao abrir o app) era
+// rebaixado do Supabase toda vez que o PWA era reaberto — mesmo poucos
+// segundos depois de já ter sido carregado. TTL curto (5 min, menor que os
+// 15 min do useEntity) porque transações mudam com mais frequência ao longo
+// do dia (novo gasto lançado, importação do banco).
+const MONTH_CACHE_TTL_MS = 5 * 60 * 1000;
+const monthCacheKey = (userId, ym) => `transactions-month:${userId}:${ym}`;
 
 const monthOf = (ym) => ym.slice(5, 7);
 const monthStartDate = (ym) => `${ym}-01`;
@@ -60,12 +70,25 @@ export function useTransactions(session, initialData) {
     (ym, force = false) => {
       if (!cloud) return Promise.resolve();
       if (!force && loadedRef.current.has(ym)) return Promise.resolve();
+      // Cache local com TTL: se esse mês já foi buscado recentemente (numa
+      // sessão anterior do app, ex.: reabriu o PWA há pouco), usa direto do
+      // localStorage e não gasta egress nenhum nessa abertura.
+      if (!force) {
+        const cached = loadLocal(monthCacheKey(userId, ym), null);
+        if (cached && Date.now() - cached.ts < MONTH_CACHE_TTL_MS) {
+          loadedRef.current.add(ym);
+          setMonthsData((d) => ({ ...d, [ym]: cached.rows }));
+          setLoadedMonths((s) => new Set(s).add(ym));
+          return Promise.resolve();
+        }
+      }
       loadedRef.current.add(ym);
       setLoadingCount((n) => n + 1);
       return fetchMonthRows(ym)
         .then((rows) => {
           setMonthsData((d) => ({ ...d, [ym]: rows }));
           setLoadedMonths((s) => new Set(s).add(ym));
+          saveLocal(monthCacheKey(userId, ym), { rows, ts: Date.now() });
         })
         .catch((e) => {
           console.error(e);
@@ -74,7 +97,7 @@ export function useTransactions(session, initialData) {
         })
         .finally(() => setLoadingCount((n) => n - 1));
     },
-    [cloud]
+    [cloud, userId]
   );
 
   const cloudData = Object.keys(monthsData)
@@ -99,7 +122,11 @@ export function useTransactions(session, initialData) {
         }
         const ym = String(inserted.date || "").slice(0, 7);
         loadedRef.current.add(ym);
-        setMonthsData((d) => ({ ...d, [ym]: [inserted, ...(d[ym] || [])] }));
+        setMonthsData((d) => {
+          const rows = [inserted, ...(d[ym] || [])];
+          saveLocal(monthCacheKey(userId, ym), { rows, ts: Date.now() });
+          return { ...d, [ym]: rows };
+        });
         setLoadedMonths((s) => new Set(s).add(ym));
         return inserted;
       } else {
@@ -121,14 +148,17 @@ export function useTransactions(session, initialData) {
         }
         setMonthsData((d) => {
           const next = {};
-          for (const ym in d) next[ym] = d[ym].filter((x) => x.id !== id);
+          for (const ym in d) {
+            next[ym] = d[ym].filter((x) => x.id !== id);
+            saveLocal(monthCacheKey(userId, ym), { rows: next[ym], ts: Date.now() });
+          }
           return next;
         });
       } else {
         setLocalData((d) => d.filter((x) => x.id !== id));
       }
     },
-    [cloud, setLocalData]
+    [cloud, userId, setLocalData]
   );
 
   // Recarrega (forçado) todos os meses já vistos — usado depois de importar

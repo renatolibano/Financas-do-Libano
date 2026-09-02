@@ -8896,7 +8896,14 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, sessi
   const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
   const visibleLists = lists.filter(l => (l.folder_id || null) === openFolderId);
 
+  // `cards` só entra na lista depois que fetchFullList busca a linha inteira
+  // uma vez (a listagem inicial vem enxuta, sem esse campo — ver listSelect
+  // em useEntity). Se já tiver sido buscado nesta sessão, reabrir a mesma
+  // lista pra estudar/editar não precisa gastar egress de novo — os dados já
+  // estão em memória (cloudData) e refletem qualquer edição feita aqui no app.
   const openListToStudy = async (id) => {
+    const cached = lists.find(l => l.id === id);
+    if (cached?.cards) { setViewingListId(id); return; }
     setOpeningListId(id);
     try {
       await fetchFullList(id);
@@ -8908,6 +8915,7 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, sessi
 
   const openListToEdit = async (l) => {
     setOpenMenuId(null);
+    if (l.cards) { setListForm(l); return; }
     setOpeningListId(l.id);
     try {
       const full = await fetchFullList(l.id);
@@ -9512,35 +9520,67 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
         : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
 
       {switchingMode && <FlashcardModeSwitchModal activeTab={tab} onPick={setTab} onClose={()=>setSwitchingMode(false)}/>}
-      {aiQuizOpen && <FlashcardAIQuiz cards={cards} session={session} onClose={()=>setAiQuizOpen(false)}/>}
+      {aiQuizOpen && <FlashcardAIQuiz listId={list.id} cards={cards} session={session} onClose={()=>setAiQuizOpen(false)}/>}
     </div>
   );
 }
 
-function FlashcardAIQuiz({ cards, session, onClose }) {
+function FlashcardAIQuiz({ listId, cards, session, onClose }) {
   const aiAvailable = cloudConfigured && !!session;
-  const [messages, setMessages] = useState([]); // [{role:"user"|"model", text}]
+  const [messages, setMessages] = useState([]); // [{role:"user"|"model", text}] — só para exibir o chat, nunca reenviado ao servidor
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const startedRef = useRef(false);
   const bodyRef = useRef(null);
 
+  // Estado resumido da sessão de quiz, mantido só no cliente (troca de texto
+  // por dados). Em vez de reenviar o histórico bruto da conversa a cada
+  // pergunta — o que faz o payload crescer a cada turno (O(n²) na sessão
+  // inteira) — mandamos pro servidor só isto, que cresce no máximo com o
+  // número de termos da lista, não com o número de perguntas já feitas:
+  //   progress: [{ term, correct }] — termos já cobertos e se acertou
+  //   pendingQuestion/pendingTerm — a última pergunta feita pela IA, para
+  //     poder reenviá-la (só ela, não o resto da conversa) junto da resposta
+  //     atual do usuário, e o servidor conseguir avaliar contra o termo certo.
+  const progressRef = useRef([]); // [{term, correct}]
+  const pendingRef = useRef({ question: null, term: null });
+
+  // Usado só pra saber se a lista tem termo suficiente pra liberar o quiz —
+  // os cartões em si não são mais mandados pro servidor a cada mensagem (ver
+  // sendTurn): a edge function busca eles direto no banco pelo listId, uma
+  // vez, em vez de o cliente reenviar a lista inteira em toda mensagem do chat.
   const cardsPayload = useMemo(() => cards.map(c => ({
     term: stripHtml(c.term || "").trim(),
     definition: stripHtml(c.definition || "").trim(),
   })).filter(c => c.term || c.definition), [cards]);
 
-  const sendTurn = async (history) => {
+  const sendTurn = async (nextMessages, answerText) => {
     setLoading(true);
     setError(null);
     try {
       const { data, error: fnError } = await supabase.functions.invoke("flashcard-quiz", {
-        body: { cards: cardsPayload, history },
+        body: {
+          listId,
+          progress: progressRef.current,
+          pendingQuestion: pendingRef.current.question,
+          answer: answerText ?? null,
+        },
       });
       if (fnError) throw fnError;
       if (data?.error) throw new Error(data.error);
-      setMessages([...history, { role: "model", text: data.reply }]);
+
+      // Se essa chamada respondeu a uma pergunta pendente, registra o
+      // resultado no resumo de progresso antes de seguir pra próxima.
+      if (pendingRef.current.term && typeof data.previousAnswerCorrect === "boolean") {
+        progressRef.current = [
+          ...progressRef.current,
+          { term: pendingRef.current.term, correct: data.previousAnswerCorrect },
+        ];
+      }
+      pendingRef.current = { question: data.reply, term: data.nextTerm || null };
+
+      setMessages([...nextMessages, { role: "model", text: data.reply }]);
     } catch (err) {
       setError(err.message || "Não foi possível consultar a IA agora.");
     } finally {
@@ -9551,7 +9591,7 @@ function FlashcardAIQuiz({ cards, session, onClose }) {
   useEffect(() => {
     if (startedRef.current || !aiAvailable || cardsPayload.length === 0) return;
     startedRef.current = true;
-    sendTurn([]);
+    sendTurn([], null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiAvailable]);
 
@@ -9563,7 +9603,7 @@ function FlashcardAIQuiz({ cards, session, onClose }) {
     const text = input.trim();
     if (!text || loading) return;
     setInput("");
-    sendTurn([...messages, { role: "user", text }]);
+    sendTurn([...messages, { role: "user", text }], text);
   };
 
   return (

@@ -91,8 +91,8 @@ Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Br
             },
           ],
           generationConfig: {
-            maxOutputTokens: 1024,
-            thinkingConfig: { thinkingLevel: "low" },
+            maxOutputTokens: 4096,
+            thinkingConfig: { thinkingLevel: "minimal" },
           },
         }),
       }
@@ -108,11 +108,18 @@ Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Br
     }
 
     const aiData = await aiRes.json();
-    const text = (aiData.candidates?.[0]?.content?.parts || [])
+    const candidate = aiData.candidates?.[0];
+    const text = (candidate?.content?.parts || [])
       .filter((p) => typeof p.text === "string")
       .map((p) => p.text)
       .join("\n")
       .trim();
+
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      // O modelo ficou sem espaço (pensamento + resposta) antes de terminar.
+      // Isso normalmente aparece pro usuário como um texto cortado no meio.
+      console.error("Gemini cortou a resposta por MAX_TOKENS:", JSON.stringify(aiData.usageMetadata || {}));
+    }
 
     if (!text) {
       console.error("Gemini retornou sem texto:", JSON.stringify(aiData));
