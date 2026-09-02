@@ -10373,6 +10373,9 @@ function Nivelamento(){
   const inWindowCorrect = windowSlice.filter(Boolean).length;
   const progressPct = parsed && parsed.need>0 ? Math.min(100, Math.round((inWindowCorrect/parsed.need)*100)) : 0;
 
+  const dotsStartIdx = parsed ? Math.max(0, history.length-parsed.win) : 0;
+  const visibleDots = parsed ? history.slice(dotsStartIdx) : history;
+
   return <div className="content levelWrap">
     <div className="studyGoalsHead">
       <div><h2>Nivelamento</h2><p>Treine questões e descubra se você já está nivelado no padrão desejado.</p></div>
@@ -10435,7 +10438,7 @@ function Nivelamento(){
         <div className="levelPipContent">
           <div className="levelHistoryRow">
             {history.length===0 && <span className="emptyHint">Nenhuma resposta ainda.</span>}
-            {history.map((c,i)=><div key={i} className={"levelDot "+(c?"correct":"wrong")}>{i+1}</div>)}
+            {visibleDots.map((c,i)=><div key={dotsStartIdx+i} className={"levelDot "+(c?"correct":"wrong")}>{dotsStartIdx+i+1}</div>)}
           </div>
           <div className="levelAnswerBtns levelPipAnswerBtns">
             <button className="levelBtn correct" onClick={()=>answer(true)} disabled={paused}><CheckCircle2 size={17}/> Correta</button>
@@ -10447,7 +10450,7 @@ function Nivelamento(){
 
       <div className="levelHistoryRow">
         {history.length===0 && <span className="emptyHint">Nenhuma questão respondida ainda.</span>}
-        {history.map((c,i)=><div key={i} className={"levelDot "+(c?"correct":"wrong")}>{i+1}</div>)}
+        {visibleDots.map((c,i)=><div key={dotsStartIdx+i} className={"levelDot "+(c?"correct":"wrong")}>{dotsStartIdx+i+1}</div>)}
       </div>
 
       <div className="levelProgressBlock">
