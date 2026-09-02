@@ -19,7 +19,7 @@ import {
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
-  Megaphone
+  Megaphone, Volume2
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -62,6 +62,7 @@ import {
 import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell, HandwritingPad } from "./components/shared";
 import { LanguagePicker } from "./components/languagePicker";
 import { languageName } from "./lib/languages";
+import { speak, ttsSupported } from "./lib/tts";
 import { fetchTranslationSuggestions } from "./lib/translate";
 import { uploadFlashcardImage, deleteFlashcardImage } from "./lib/flashcardImages";
 import { uploadShoppingImage, deleteShoppingImage } from "./lib/shoppingImages";
@@ -9506,7 +9507,7 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
             <button className="flashAIBtn" title="Estudar com IA" onClick={()=>setAiQuizOpen(true)}><Sparkles size={17}/></button>
           </div>
         </>
-      ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished}/>
+      ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished} termLang={list.term_lang} defLang={list.definition_lang}/>
         : tab === "learn" ? <FlashcardLearnMode cards={cards} onComplete={notifyFinished}/>
         : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
 
@@ -9626,7 +9627,28 @@ function FlashcardAIQuiz({ cards, session, onClose }) {
 // "back" e "next" aceitam 1 cada.
 const DEFAULT_FLASHCARD_SHORTCUTS = { flip: ["w", "s"], back: ["a"], next: ["d"] };
 
-function FlashcardFlipMode({ cards, onComplete }) {
+// Botão de "ouvir" (ícone de alto-falante) usado nas faces do cartão. Lê o
+// texto em voz alta no idioma configurado pra aquele lado da lista (termo ou
+// definição). Usa a Web Speech API do navegador — sem custo de rede/IA.
+function FlashSpeakBtn({ text, lang }) {
+  const [speaking, setSpeaking] = useState(false);
+  if (!ttsSupported()) return null;
+  return (
+    <button
+      type="button"
+      className={"flashFlipSpeakBtn" + (speaking ? " speaking" : "")}
+      title="Ouvir"
+      onClick={(e) => {
+        e.stopPropagation();
+        speak(text, lang, { onStart: () => setSpeaking(true), onEnd: () => setSpeaking(false) });
+      }}
+    >
+      <Volume2 size={15}/>
+    </button>
+  );
+}
+
+function FlashcardFlipMode({ cards, onComplete, termLang, defLang }) {
   // Modo "sei / não sei" (com marcação e estatísticas) vs. modo "só passar os
   // cartões" (só virar e navegar, sem marcar nada). Fica salvo entre sessões.
   const [trackMode, setTrackMode] = usePersistentState("flashFlipTrackMode", true);
@@ -9814,10 +9836,15 @@ function FlashcardFlipMode({ cards, onComplete }) {
         <div className={"flashFlipInner"+(flipped?" flipped":"")+(noFlipAnim?" noFlipAnim":"")}>
           <div className="flashFlipFace flashFlipFront">
             <small>TERMO</small>
+            {stripHtml(card.term).trim() && <FlashSpeakBtn text={card.term} lang={termLang}/>}
             <SaverImg src={card.image} className="flashFlipImage" fallback={null}/>
             {stripHtml(card.term).trim() ? <span dangerouslySetInnerHTML={{__html: card.term}}/> : <span>(sem termo)</span>}
           </div>
-          <div className="flashFlipFace flashFlipBack"><small>DEFINIÇÃO</small>{stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}</div>
+          <div className="flashFlipFace flashFlipBack">
+            <small>DEFINIÇÃO</small>
+            {stripHtml(card.definition).trim() && <FlashSpeakBtn text={card.definition} lang={defLang}/>}
+            {stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}
+          </div>
         </div>
         {feedback && (
           <div className={"flashFlipFeedback"+(feedback==="know"?" know":" learning")}>
