@@ -26,6 +26,7 @@ import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
 import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
+import { useTransactions } from "./lib/useTransactions";
 import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
 import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
@@ -422,7 +423,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
   // o que conflitava com o botão de abrir/fechar. Só reagimos ao hover em dispositivos que de fato têm mouse.
   const canHover = () => typeof window!=="undefined" && window.matchMedia && window.matchMedia("(hover:hover) and (pointer:fine)").matches;
-  const transactions = useEntity("transactions", initialTransactions, session, "desc");
+  const transactions = useTransactions(session, initialTransactions);
   const fixed = useEntity("fixed_payments", initialFixed, session);
   const debts = useEntity("debts", initialDebts, session);
   // Listagem enxuta (sem "content", que é o HTML inteiro da nota — só
@@ -479,6 +480,21 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // aparelho guarda localmente até quando já viu (lastSeenUpdateAt) e mostra a
   // modal "Novas atualizações!" sozinha quando encontra algo mais novo.
   const appUpdates = useEntity("app_updates", [], session, "desc");
+  // app_updates só busca uma vez, na abertura do app — diferente das outras
+  // abas, nada mais dispara uma nova busca depois disso. Como o PWA fica
+  // rodando em segundo plano (trocar de app não fecha o processo), o sino
+  // nunca percebia uma publicação nova enquanto o app não fosse fechado de
+  // verdade e reaberto após o cache de 15min vencer. Aqui checamos de novo
+  // (ignorando o cache, refresh() = force) toda vez que o app volta pro
+  // primeiro plano — tabela pequena, egress desprezível.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") appUpdates.refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appUpdates.refresh]);
   const [lastSeenUpdateAt, setLastSeenUpdateAt] = usePersistentState("libano-last-seen-update-at", null);
   const [showUpdatesModal, setShowUpdatesModal] = useState(false);
   const [showPublishUpdate, setShowPublishUpdate] = useState(false);
@@ -525,6 +541,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
   const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
   const [selectedMonth,setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
+  // Busca (sob demanda) as movimentações do mês escolhido — usadas pra
+  // Entradas/Saídas da Visão Geral e pro Orçamento. Refaz sempre que o mês
+  // muda (loadMonth ignora sozinho se aquele mês já tiver sido carregado).
+  useEffect(() => { transactions.loadMonth(selectedMonth); }, [selectedMonth, transactions.loadMonth]);
 
   const monthTransactions = useMemo(()=>transactions.data.filter(x=>{
     const d=String(x.date||"");
@@ -907,7 +927,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>setShowUpdatesModal(true)}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
-      {page==="Movimentações" && <Transactions data={transactions.data} onAdd={transactions.add} onDelete={transactions.remove} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
+      {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
@@ -1311,13 +1331,31 @@ function OverviewEditModal({overview, auto, onSave, onClose}){
     <button className="primary" type="submit">Salvar</button>
   </form></div>;
 }
-function Transactions({data,onAdd,onDelete,session,bankAvailable,onImported}){
+function Transactions({entity,session,bankAvailable,onImported}){
+  const { data, add: onAdd, remove: onDelete, loadMonth, loadedMonths, loadingAny, cloud } = entity;
   const [desc,setDesc]=useState(""); const [cat,setCat]=useState(""); const [value,setValue]=useState(""); const [type,setType]=useState("out");
   const submit=()=>{
     if(!desc.trim()||!value) return;
     onAdd({desc,cat,value:Number(value),type,date:todayIsoDate()});
     setDesc("");setCat("");setValue("");setType("out");
   };
+  // O extrato busca só os meses já pedidos (o atual, mais o que a pessoa
+  // for carregando manualmente) — em vez de baixar o histórico inteiro de
+  // uma vez. "Carregar mês anterior" pede um mês a menos que o mais antigo
+  // já carregado.
+  const earliestLoaded = loadedMonths && loadedMonths.size > 0
+    ? Array.from(loadedMonths).sort()[0]
+    : new Date().toISOString().slice(0,7);
+  const loadOlder = () => {
+    const [y,m] = earliestLoaded.split("-").map(Number);
+    const prev = m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,"0")}`;
+    loadMonth(prev);
+  };
+  const olderLabel = (() => {
+    const [y,m] = earliestLoaded.split("-").map(Number);
+    const prevKey = m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,"0")}`;
+    return new Date(prevKey+"-02").toLocaleDateString("pt-BR",{month:"long",year:"numeric"});
+  })();
   return <div className="content">
     {bankAvailable && <BankConnect onImported={onImported}/>}
     <div className="panel">
@@ -1331,6 +1369,7 @@ function Transactions({data,onAdd,onDelete,session,bankAvailable,onImported}){
     </div>
     <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {formatTxDate(x.date)}{x.source==="pluggy" && " · importado do banco"}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
     {data.length===0 && <p className="emptyHint">Nenhuma movimentação por aqui ainda.</p>}
+    {cloud && <button className="ghost" style={{marginTop:10}} disabled={loadingAny} onClick={loadOlder}>{loadingAny ? "Carregando..." : `Carregar ${olderLabel}`}</button>}
     </div>
   </div>
 }
