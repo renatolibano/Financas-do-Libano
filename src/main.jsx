@@ -46,7 +46,7 @@ import {
   shape3DGeometry,
 } from "./lib/annotations";
 import Auth, { ResetPassword } from "./Auth";
-import { money, maskMoney, timeAgo, formatBytes } from "./lib/format";
+import { money, maskMoney, timeAgo, formatBytes, todayIsoDate, formatTxDate } from "./lib/format";
 import {
   WEEKDAY_LABELS, MONTH_LABELS, pad2, parseReminderDate, daysUntil, daysUntilMonthlyDay,
   daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
@@ -410,6 +410,13 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // não volta a seguir esse valor até o app ser reaberto/recarregado.
   const [homePage, setHomePage] = usePersistentState("libano-home-page", "Visão Geral");
   const [page,setPage] = useState(homePage);
+  // Abas já abertas nesta sessão do app. Usado para adiar (useEntity opts.enabled)
+  // a primeira busca das tabelas de abas "pesadas" (Filmes e Séries, Jogos, Treino)
+  // até a pessoa realmente entrar nelas, em vez de baixar tudo já na abertura do app.
+  const [visitedPages, setVisitedPages] = useState(() => new Set([homePage]));
+  useEffect(() => {
+    setVisitedPages((prev) => (prev.has(page) ? prev : new Set(prev).add(page)));
+  }, [page]);
   const [openNoteId,setOpenNoteId] = useState(null);
   const [mobileOpen,setMobileOpen] = useState(false);
   // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
@@ -447,13 +454,24 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
   const studyGoals = useEntity("study_goals", initialStudyGoals, session);
-  const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true});
-  const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true});
+  // Treino, Filmes e Séries e Jogos só são usados dentro da própria aba (o
+  // resumo pra IA lê .data, mas tudo bem se vier vazio até a aba ser aberta)
+  // — então adiamos a primeira busca até a pessoa realmente entrar em cada
+  // uma, em vez de baixar as 6 tabelas toda vez que o app abre.
+  const treinoVisitado = visitedPages.has("Treino");
+  const filmesVisitado = visitedPages.has("Filmes e Séries");
+  const jogosVisitado = visitedPages.has("Jogos");
+  const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true, enabled: treinoVisitado});
+  const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true});
-  const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true});
-  const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true});
-  const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true});
-  const gameItems = useEntity("game_items", [], session, "asc", {orderable:true});
+  const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true, enabled: filmesVisitado});
+  // Obs.: "seasons" (progresso por temporada) fica de fora do listSelect só
+  // não dá pra fazer aqui como em livros/PDFs — a própria linha da prateleira
+  // usa "seasons" pra mostrar a % assistida e pro botão "+1 episódio", então
+  // teria que estar sempre carregado mesmo na listagem.
+  const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true, enabled: filmesVisitado});
+  const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true, enabled: jogosVisitado});
+  const gameItems = useEntity("game_items", [], session, "asc", {orderable:true, enabled: jogosVisitado});
   const calendarEvents = useEntity("calendar_recurring_events", [], session);
   // Novidades do app: qualquer conta pode publicar (ver Configurações → "Publicar
   // atualização"), e todas as contas enxergam a mesma lista (RLS de app_updates
@@ -517,6 +535,30 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const income = useMemo(()=>monthTransactions.filter(x=>x.type==="in").reduce((a,b)=>a+b.value,0),[monthTransactions]);
   const expense = useMemo(()=>monthTransactions.filter(x=>x.type==="out").reduce((a,b)=>a+b.value,0),[monthTransactions]);
   const balance = useMemo(()=>transactions.data.filter(x=>x.type==="in").reduce((a,b)=>a+b.value,0)-transactions.data.filter(x=>x.type==="out").reduce((a,b)=>a+b.value,0),[transactions.data]);
+  // Saldo calculado no banco (soma feita pelo Postgres, sem depender de ter
+  // baixado TODAS as movimentações) — ver get_transactions_balance no
+  // schema.sql. Fica null até a primeira resposta (ou no modo local, sem
+  // nuvem), quando o cálculo feito no navegador acima (`balance`) é usado
+  // no lugar. Reconsultado sempre que a lista de transações muda (inclusive
+  // localmente, por add/edit/delete), pra não ficar desatualizado.
+  const [cloudBalance, setCloudBalance] = useState(null);
+  useEffect(() => {
+    let active = true;
+    if (!cloudConfigured || !session?.user?.id) {
+      setCloudBalance(null);
+      return;
+    }
+    supabase.rpc("get_transactions_balance").then(({ data, error }) => {
+      if (!active) return;
+      if (error) {
+        console.error("get_transactions_balance error:", error);
+        return;
+      }
+      setCloudBalance(data == null ? null : Number(data));
+    });
+    return () => { active = false; };
+  }, [session?.user?.id, transactions.data]);
+  const displayedBalance = cloudBalance != null ? cloudBalance : balance;
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);
   const cardBill = cardPurchases.data.reduce((a,b)=>a+b.value,0);
@@ -527,7 +569,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const [overview, setOverview] = usePersistentState("overview_overrides", {
     balance: null, income: null, expense: null, cardBill: null,
   });
-  const effectiveBalance = overview.balance ?? balance;
+  const effectiveBalance = overview.balance ?? displayedBalance;
   const effectiveIncome = overview.income ?? income;
   const effectiveExpense = overview.expense ?? expense;
   const effectiveCardBill = overview.cardBill ?? cardBill;
@@ -1273,7 +1315,7 @@ function Transactions({data,onAdd,onDelete,session,bankAvailable,onImported}){
   const [desc,setDesc]=useState(""); const [cat,setCat]=useState(""); const [value,setValue]=useState(""); const [type,setType]=useState("out");
   const submit=()=>{
     if(!desc.trim()||!value) return;
-    onAdd({desc,cat,value:Number(value),type,date:new Date().toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"})});
+    onAdd({desc,cat,value:Number(value),type,date:todayIsoDate()});
     setDesc("");setCat("");setValue("");setType("out");
   };
   return <div className="content">
@@ -1287,7 +1329,7 @@ function Transactions({data,onAdd,onDelete,session,bankAvailable,onImported}){
         <button onClick={submit}><Plus/></button>
       </div>
     </div>
-    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {x.date}{x.source==="pluggy" && " · importado do banco"}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
+    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {formatTxDate(x.date)}{x.source==="pluggy" && " · importado do banco"}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
     {data.length===0 && <p className="emptyHint">Nenhuma movimentação por aqui ainda.</p>}
     </div>
   </div>

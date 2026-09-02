@@ -1,6 +1,28 @@
 export const money = n => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 export const maskMoney = (n, hidden) => hidden ? "R$ ••••" : money(n);
 
+// Data de hoje no formato "AAAA-MM-DD", calculada a partir do horário local
+// (não usa toISOString(), que converte pra UTC e pode "voltar" um dia perto
+// da meia-noite em fusos atrás de UTC, como o do Brasil).
+export function todayIsoDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Formata a data de uma transação pra exibição: "AAAA-MM-DD" (formato usado
+// pelas movimentações importadas do banco e, a partir de agora, pelas
+// adicionadas manualmente) vira "DD/MM/AAAA". Datas antigas, salvas só como
+// "DD/MM" (sem ano — formato usado antes dessa mudança), são mostradas como
+// estão, sem tentar adivinhar o ano.
+export function formatTxDate(d) {
+  const s = String(d || "");
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const [y, m, day] = s.slice(0, 10).split("-");
+    return `${day}/${m}/${y}`;
+  }
+  return s;
+}
+
 // Formata um total de bytes como "84 MB", "1,2 GB" etc. — usado pra mostrar
 // quanto o app está ocupando no aparelho (Configurações).
 export function formatBytes(bytes) {

@@ -10,7 +10,7 @@ const uid = () => Date.now() + Math.random();
 // novo é muito comum em app instalado no celular). Se o cache ainda estiver
 // "fresco" (dentro do TTL), a tela usa ele direto e nenhuma requisição sai.
 // Passado o TTL, a próxima abertura busca do servidor de novo normalmente.
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos (era 5 — reabrir o app várias vezes ao longo do dia gerava refetch completo de novo a cada reabertura)
 const cacheKey = (table, userId) => `cache:${table}:${userId}`;
 
 // table: nome da tabela no Supabase (e também a chave usada no localStorage)
@@ -23,7 +23,13 @@ const cacheKey = (table, userId) => `cache:${table}:${userId}`;
 // são necessárias quando o item é aberto — combine com fetchFull(id) pra
 // buscar a linha inteira nesse momento, sem pesar a listagem.
 export function useEntity(table, initialData, session, order = "asc", opts = {}) {
-  const { orderable = false, listSelect = "*" } = opts;
+  const { orderable = false, listSelect = "*", enabled = true } = opts;
+  // enabled=false adia a PRIMEIRA busca na nuvem (ex.: tabela de uma aba que
+  // ainda não foi aberta nesta sessão) — nenhuma requisição sai até virar
+  // true. Note que isso não muda o modo (cloud continua cloud): inserções,
+  // remoções etc. feitas antes de "enabled" virar true (o que não deveria
+  // acontecer, já que a aba que as dispara só renderiza depois) continuam
+  // indo para o Supabase normalmente — só o fetch da listagem é adiado.
   const cloud = cloudConfigured && !!session;
   const userId = session?.user?.id || null;
   const [localData, setLocalData, localLoaded] = useIdbPersistentState(table, initialData);
@@ -34,7 +40,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
     if (!cloudConfigured || !userId) return [];
     return loadLocal(cacheKey(table, userId), null)?.data || [];
   });
-  const [cloudLoading, setCloudLoading] = useState(cloud && cloudData.length === 0);
+  const [cloudLoading, setCloudLoading] = useState(cloud && enabled && cloudData.length === 0);
   const [error, setError] = useState(null);
 
   // Toda vez que os dados em memória mudam (por fetch OU por add/update/
@@ -54,7 +60,10 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
 
   const fetchCloud = useCallback(
     async (force = false) => {
-      if (!cloud) {
+      if (!cloud || (!enabled && !force)) {
+        // Aba ainda não visitada nesta sessão: não gasta egress buscando uma
+        // lista que talvez nunca seja vista. refresh() (force=true) ainda
+        // funciona normalmente se for chamado explicitamente.
         setCloudLoading(false);
         return;
       }
@@ -82,7 +91,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       setCloudLoading(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [cloud, table, order, orderable, listSelect, userId, setCloudData]
+    [cloud, enabled, table, order, orderable, listSelect, userId, setCloudData]
   );
 
   useEffect(() => {
@@ -94,7 +103,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloud, table, userId]);
+  }, [cloud, enabled, table, userId]);
 
   const data = cloud ? cloudData : localData;
   // No modo nuvem, "carregando" é o fetch do Supabase; no modo local, é só

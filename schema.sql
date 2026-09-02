@@ -949,3 +949,21 @@ create policy "insert_own_app_updates" on app_updates for insert
   with check (auth.uid() = user_id);
 create policy "delete_own_app_updates" on app_updates for delete
   using (auth.uid() = user_id);
+
+-- Atualização: saldo calculado no banco (em vez de baixar TODAS as
+-- movimentações pro navegador só pra somar entradas − saídas). O app já
+-- filtra por mês no cliente pro extrato/gráfico (isso continua precisando
+-- da lista), mas o número do "Saldo" na Visão Geral passa a vir daqui —
+-- é o primeiro passo pra, depois, também poder paginar/filtrar por período
+-- a listagem de "Movimentações" sem perder o saldo total correto.
+-- security invoker (padrão): roda com o RLS de quem chama; o filtro por
+-- user_id abaixo é redundante de propósito, como reforço.
+create or replace function get_transactions_balance()
+returns numeric
+language sql
+stable
+as $$
+  select coalesce(sum(case when type = 'in' then value else -value end), 0)
+  from transactions
+  where user_id = auth.uid();
+$$;

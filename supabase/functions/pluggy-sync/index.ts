@@ -134,7 +134,12 @@ Deno.serve(async (req) => {
             cat: tx.category || null,
             value: Math.abs(tx.amount),
             type: isCredit ? "in" : "out",
-            date: tx.date ? new Date(tx.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : null,
+            // Guarda a data completa (AAAA-MM-DD) — a Pluggy já manda em ISO
+            // (tx.date), então é só normalizar pro formato "só a data" (sem
+            // hora). Antes isso descartava o ano (toLocaleDateString só com
+            // day/month), o que juntava transações de anos diferentes no
+            // mesmo mês em qualquer filtro por mês feito no app.
+            date: tx.date ? String(tx.date).slice(0, 10) : null,
             source: "pluggy",
             pluggy_transaction_id: tx.id,
             bank_connection_id: connection.id,
