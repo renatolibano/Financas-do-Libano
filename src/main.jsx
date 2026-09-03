@@ -459,6 +459,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // "Criar flashcard" do Leitor de PDF continua funcionando normalmente:
   // ele só grava (flashcards.add), não depende de flashcards.data.
   const flashcardsVisitado = visitedPages.has("Flashcards");
+  // Listas de flashcards também são lidas por "Metas de Estudo" (pra linkar
+  // uma meta a uma lista) — por isso o gate inclui as duas abas, igual já
+  // acontece com livrosVisitado/pdfEstudoVisitado acima. Gatear só por
+  // "Flashcards" deixaria a Metas de Estudo sem essas listas até a pessoa
+  // abrir Flashcards ao menos uma vez na sessão.
+  const flashcardsOuMetasVisitado = flashcardsVisitado || visitedPages.has("Metas de Estudo");
   const studyFlashcards = useEntity("study_flashcards", [], session, "asc", {enabled: flashcardsVisitado});
   const studyFlashcardLists = useEntity("study_flashcard_lists", [], session, "asc", {
     orderable: true,
@@ -468,20 +474,27 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     // uma lista específica. Isso evita rebaixar todas as fotos/termos de
     // todas as listas toda vez que a aba Flashcards é aberta.
     listSelect: "id,title,description,folder_id,sort_order,created_at,completed,term_lang,definition_lang,card_count",
+    enabled: flashcardsOuMetasVisitado,
   });
-  const studyFlashcardFolders = useEntity("study_flashcard_folders", [], session, "asc", {orderable:true});
+  // Só usada dentro da própria aba Flashcards (organização em pastas) e na
+  // exportação de dados — mesmo comportamento que Treino/Filmes/Jogos já têm.
+  const studyFlashcardFolders = useEntity("study_flashcard_folders", [], session, "asc", {orderable:true, enabled: flashcardsVisitado});
   const budgets = useEntity("budgets", [], session);
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
   const studyGoals = useEntity("study_goals", initialStudyGoals, session);
   // Aba "Gráfico": afazeres cadastrados pela pessoa (ex.: Livros, Inglês,
   // Matemática) e os registros de quais deles foram feitos em cada dia.
-  const activityItems = useEntity("activity_tracker_items", [], session, "asc", {orderable:true});
-  const activityLogs = useEntity("activity_tracker_logs", [], session);
+  // As três só são lidas dentro de ActivityChartPage — adiadas até a pessoa
+  // abrir a aba Gráfico nesta sessão, em vez de baixadas toda vez que o
+  // app abre (activity_tracker_logs em especial só cresce com o tempo).
+  const graficoVisitado = visitedPages.has("Gráfico");
+  const activityItems = useEntity("activity_tracker_items", [], session, "asc", {orderable:true, enabled: graficoVisitado});
+  const activityLogs = useEntity("activity_tracker_logs", [], session, "asc", {enabled: graficoVisitado});
   // Tarefas ("afazeres") de fato: texto + categoria (activity_tracker_items)
   // + status feito/pendente. É a partir delas que a aba Gráfico monta a
   // lista de pendentes/concluídos e os gráficos por categoria.
-  const activityTodos = useEntity("activity_tracker_todos", [], session, "asc");
+  const activityTodos = useEntity("activity_tracker_todos", [], session, "asc", {enabled: graficoVisitado});
   // Treino, Filmes e Séries e Jogos só são usados dentro da própria aba (o
   // resumo pra IA lê .data, mas tudo bem se vier vazio até a aba ser aberta)
   // — então adiamos a primeira busca até a pessoa realmente entrar em cada
@@ -579,7 +592,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Busca (sob demanda) as movimentações do mês escolhido — usadas pra
   // Entradas/Saídas da Visão Geral e pro Orçamento. Refaz sempre que o mês
   // muda (loadMonth ignora sozinho se aquele mês já tiver sido carregado).
-  useEffect(() => { transactions.loadMonth(selectedMonth); }, [selectedMonth, transactions.loadMonth]);
+  // Só roda nessas duas telas — abrir o app direto em "Notas", por exemplo,
+  // não deveria puxar o mês financeiro.
+  useEffect(() => {
+    if (page !== "Visão Geral" && page !== "Orçamento") return;
+    transactions.loadMonth(selectedMonth);
+  }, [page, selectedMonth, transactions.loadMonth]);
 
   const monthTransactions = useMemo(()=>transactions.data.filter(x=>{
     const d=String(x.date||"");
