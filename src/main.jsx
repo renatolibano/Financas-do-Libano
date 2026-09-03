@@ -12246,8 +12246,12 @@ function NoteEditor({ note, onClose, onSave }) {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
   const [hiliteOpen, setHiliteOpen] = useState(false);
+  const [linkBar, setLinkBar] = useState(null);
+  const [linkPopover, setLinkPopover] = useState(null);
   const saveTimer = useRef(null);
   const bodyRef = useRef(null);
+  const savedRangeRef = useRef(null);
+  const editingAnchorRef = useRef(null);
 
   useEffect(() => {
     setTitle(note.title);
@@ -12315,6 +12319,94 @@ function NoteEditor({ note, onClose, onSave }) {
     setHiliteOpen(false);
   };
 
+  // Mostra o botãozinho flutuante "Link" acima do trecho selecionado
+  // (só quando a seleção tem texto e está dentro do corpo da nota)
+  const updateLinkBar = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { setLinkBar(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!bodyRef.current || !bodyRef.current.contains(range.commonAncestorContainer)) { setLinkBar(null); return; }
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setLinkBar(null); return; }
+    setLinkBar({
+      top: rect.top - 42,
+      left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76),
+    });
+  };
+
+  // Abre a caixinha flutuante onde se digita/cola o link. Se a seleção
+  // já estiver dentro de um link existente, entra em modo de edição
+  // (preenche com a URL atual e mostra o botão de remover).
+  const openLinkPopover = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    savedRangeRef.current = range;
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const anchor = node?.closest?.("a");
+    editingAnchorRef.current = (anchor && bodyRef.current?.contains(anchor)) ? anchor : null;
+    const rect = range.getBoundingClientRect();
+    setLinkPopover({
+      top: Math.max(rect.top - 46, 8),
+      left: Math.min(Math.max(rect.left, 8), window.innerWidth - 268),
+      value: editingAnchorRef.current ? (editingAnchorRef.current.getAttribute("href") || "") : "",
+    });
+    setLinkBar(null);
+  };
+
+  const closeLinkPopover = () => {
+    setLinkPopover(null);
+    editingAnchorRef.current = null;
+    savedRangeRef.current = null;
+  };
+
+  const confirmLink = () => {
+    const raw = (linkPopover?.value || "").trim();
+    if (!raw) { closeLinkPopover(); return; }
+    const url = /^([a-z][a-z0-9+.-]*:)/i.test(raw) ? raw : `https://${raw}`;
+    bodyRef.current?.focus();
+    if (editingAnchorRef.current) {
+      editingAnchorRef.current.setAttribute("href", url);
+    } else {
+      const range = savedRangeRef.current;
+      if (range) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try {
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.className = "note-link";
+          a.appendChild(range.extractContents());
+          range.insertNode(a);
+          const r = document.createRange();
+          r.setStartAfter(a);
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+        } catch (err) {
+          // seleção cruza limites incompatíveis (ex.: entre itens de marcação) - ignora
+        }
+      }
+    }
+    closeLinkPopover();
+    handleBodyInput();
+  };
+
+  const removeLink = () => {
+    const a = editingAnchorRef.current;
+    if (a && a.parentNode) {
+      const parent = a.parentNode;
+      while (a.firstChild) parent.insertBefore(a.firstChild, a);
+      parent.removeChild(a);
+    }
+    closeLinkPopover();
+    handleBodyInput();
+  };
+
   // Cria a estrutura de um item de marcação (caixinha + texto)
   const makeChecklistItem = () => {
     const item = document.createElement("div");
@@ -12371,13 +12463,26 @@ function NoteEditor({ note, onClose, onSave }) {
     handleBodyInput();
   };
 
-  // Alterna o estado marcado/desmarcado ao clicar no quadradinho
+  // Alterna o estado marcado/desmarcado ao clicar no quadradinho, e abre
+  // links em uma nova aba do navegador ao clicar neles (sem arrastar - se
+  // o clique tiver selecionado texto, deixa a seleção em pé em vez de navegar)
   const handleBodyClick = (e) => {
     const box = e.target.closest?.(".check-box");
-    if (!box) return;
-    e.preventDefault();
-    box.closest(".checklist-item")?.classList.toggle("checked");
-    handleBodyInput();
+    if (box) {
+      e.preventDefault();
+      box.closest(".checklist-item")?.classList.toggle("checked");
+      handleBodyInput();
+      return;
+    }
+    const link = e.target.closest?.("a");
+    if (link && bodyRef.current?.contains(link)) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        e.preventDefault();
+        const href = link.getAttribute("href");
+        if (href) window.open(href, "_blank", "noopener,noreferrer");
+      }
+    }
   };
 
   // Ao apertar Enter dentro de um item de marcação, cria automaticamente o próximo
@@ -12505,9 +12610,11 @@ function NoteEditor({ note, onClose, onSave }) {
           <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
           <button title="Lista de marcação" onClick={insertChecklist}><CheckSquare size={16}/></button>
           <span className="noteToolDivider"/>
+          <button title="Transformar seleção em link" onClick={() => { if (window.getSelection()?.isCollapsed === false) openLinkPopover(); }}><Link2 size={16}/></button>
+          <span className="noteToolDivider"/>
           <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
         </div>
-        <div className="noteEditorBody" onClick={() => { setEmojiOpen(false); setColorOpen(false); setHiliteOpen(false); }}>
+        <div className="noteEditorBody" onClick={() => { setEmojiOpen(false); setColorOpen(false); setHiliteOpen(false); closeLinkPopover(); }}>
           <div
             ref={bodyRef}
             className="noteTextarea noteRichBody"
@@ -12516,8 +12623,46 @@ function NoteEditor({ note, onClose, onSave }) {
             onInput={handleBodyInput}
             onClick={handleBodyClick}
             onKeyDown={handleBodyKeyDown}
+            onMouseUp={updateLinkBar}
+            onKeyUp={updateLinkBar}
             data-placeholder="Escreva o que quiser..."
           />
+          {linkBar && !linkPopover && (
+            <button
+              className="noteLinkBarBtn"
+              style={{ position: "fixed", top: linkBar.top, left: linkBar.left }}
+              onMouseDown={keepFocus}
+              onClick={openLinkPopover}
+              title="Transformar em link"
+            >
+              <Link2 size={13}/> Link
+            </button>
+          )}
+          {linkPopover && (
+            <div
+              className="noteLinkPopover"
+              style={{ position: "fixed", top: linkPopover.top, left: linkPopover.left }}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => e.stopPropagation()}
+            >
+              <input
+                className="noteLinkInput"
+                type="text"
+                placeholder="Cole ou digite o link..."
+                value={linkPopover.value}
+                autoFocus
+                onChange={e => setLinkPopover(p => ({ ...p, value: e.target.value }))}
+                onKeyDown={e => {
+                  if (e.key === "Enter") { e.preventDefault(); confirmLink(); }
+                  if (e.key === "Escape") { e.preventDefault(); closeLinkPopover(); }
+                }}
+              />
+              <button title="Confirmar link" onClick={confirmLink}><Check size={14}/></button>
+              {editingAnchorRef.current && (
+                <button title="Remover link" onClick={removeLink}><X size={14}/></button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
