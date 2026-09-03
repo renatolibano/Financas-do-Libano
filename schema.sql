@@ -967,3 +967,34 @@ as $$
   from transactions
   where user_id = auth.uid();
 $$;
+
+-- Aba "Gráfico": afazeres cadastrados pela pessoa (ex.: Livros, Inglês,
+-- Matemática) e os registros de quais deles foram feitos em cada dia. O
+-- gráfico (barras/pizza/rosca) e a dica de equilíbrio são calculados no
+-- cliente a partir dessas duas tabelas.
+create table if not exists activity_tracker_items (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  color text not null default 'red',
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+create table if not exists activity_tracker_logs (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  item_id uuid not null references activity_tracker_items(id) on delete cascade,
+  date date not null,
+  created_at timestamptz not null default now(),
+  unique(user_id, item_id, date)
+);
+alter table activity_tracker_items enable row level security;
+alter table activity_tracker_logs enable row level security;
+do $$ declare t text; begin foreach t in array array['activity_tracker_items','activity_tracker_logs'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

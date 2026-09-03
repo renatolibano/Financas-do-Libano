@@ -19,7 +19,7 @@ import {
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
-  Megaphone, Volume2
+  Megaphone, Volume2, PieChart
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -165,7 +165,7 @@ const initialCardPurchases = [
 const HOME_PAGE_OPTIONS = [
   { group: "Finanças", pages: ["Visão Geral","Movimentações","Pagamentos Fixos","Dívidas","Cartões","Orçamento","Metas","Recorrentes",{key:"Lista de Compras", label:"Lista de compras"}] },
   { group: "Lembretes", pages: [{key:"Lembretes Comuns", label:"Lembretes comuns"},"Aniversários"] },
-  { group: "Geral", pages: ["Calendário","Notas"] },
+  { group: "Geral", pages: ["Calendário","Notas","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF"] },
   { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos"] },
@@ -471,6 +471,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const goals = useEntity("goals", [], session);
   const recurring = useEntity("recurring_payments", [], session);
   const studyGoals = useEntity("study_goals", initialStudyGoals, session);
+  // Aba "Gráfico": afazeres cadastrados pela pessoa (ex.: Livros, Inglês,
+  // Matemática) e os registros de quais deles foram feitos em cada dia.
+  const activityItems = useEntity("activity_tracker_items", [], session, "asc", {orderable:true});
+  const activityLogs = useEntity("activity_tracker_logs", [], session);
   // Treino, Filmes e Séries e Jogos só são usados dentro da própria aba (o
   // resumo pra IA lê .data, mas tudo bem se vier vazio até a aba ser aberta)
   // — então adiamos a primeira busca até a pessoa realmente entrar em cada
@@ -865,6 +869,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Filmes e Séries", icon:Clapperboard },
       { key:"Jogos", icon:Gamepad2 },
     ]},
+    { type:"single", key:"Gráfico", icon:PieChart },
   ];
   const [openGroups,setOpenGroups] = useState({});
   const goTo = (key)=>{
@@ -974,6 +979,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
+      {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs}/>}
 
       <ToastHost/>
 
@@ -10269,6 +10275,202 @@ function Goals({entity, session}){
       {inviteError && <p className="aiErrorMsg">{inviteError}</p>}
       <button className="primary" type="button" disabled={inviteBusy} onClick={submitAccept}>{inviteBusy?"Vinculando...":"Vincular contas"}</button>
     </div></div>}
+  </div>;
+}
+
+// ---------- Gráfico (registro de afazeres) ----------
+const ACTIVITY_CHART_PERIODS = [
+  { key:"semana", label:"7 dias", days:7 },
+  { key:"mes", label:"30 dias", days:30 },
+  { key:"ano", label:"365 dias", days:365 },
+];
+const ACTIVITY_CHART_TYPES = [
+  { key:"barras", label:"Barras", icon:BarChart3 },
+  { key:"pizza", label:"Pizza", icon:PieChart },
+  { key:"rosca", label:"Rosca", icon:Circle },
+];
+
+// Monta a dica de equilíbrio a partir da contagem de cada afazer no período
+// selecionado: prioriza avisar sobre o que ficou zerado, depois sobre o que
+// está dominando demais o tempo, depois sobre o que está bem abaixo da média.
+function activityTip(counts){
+  if(counts.length<2) return {text:"Cadastre mais de um afazer para comparar o quanto você dedica a cada um.", tone:"neutral"};
+  const total = counts.reduce((s,c)=>s+c.count,0);
+  if(total===0) return {text:"Ainda não há registros nesse período. Marque o que você fez em \"Registrar o dia\".", tone:"neutral"};
+  const avg = total/counts.length;
+  const sorted = [...counts].sort((a,b)=>a.count-b.count);
+  const lowest = sorted[0];
+  const highest = sorted[sorted.length-1];
+  const zeroed = counts.filter(c=>c.count===0);
+
+  if(zeroed.length===1){
+    return {text:`"${zeroed[0].item.name}" está zerado nesse período. Que tal encaixar um pouco nos próximos dias?`, tone:"warn"};
+  }
+  if(zeroed.length>1){
+    return {text:`Esses afazeres ficaram de fora nesse período: ${zeroed.map(c=>c.item.name).join(", ")}. Tente dar uma atenção a eles.`, tone:"warn"};
+  }
+  if(highest.count >= avg*2 && highest.count>=3){
+    return {text:`Você está dando muito foco a "${highest.item.name}". Tente equilibrar mais com as outras atividades.`, tone:"warn"};
+  }
+  if(lowest.count < avg*0.5){
+    return {text:`"${lowest.item.name}" está bem baixo comparado ao resto. Foque mais lá para equilibrar.`, tone:"warn"};
+  }
+  return {text:"Bom equilíbrio entre suas atividades nesse período! Continue assim.", tone:"good"};
+}
+
+function ActivityBarChart({counts}){
+  const max = Math.max(1, ...counts.map(c=>c.count));
+  const H = 190, padBottom = 32, padTop = 14;
+  const colW = 68;
+  const W = Math.max(260, counts.length*colW);
+  const barW = Math.min(40, colW-22);
+  return <div className="actChartScroll">
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="actBarSvg" preserveAspectRatio="xMinYMid meet">
+      <line x1="0" y1={H-padBottom} x2={W} y2={H-padBottom} stroke="var(--border)" strokeWidth="1"/>
+      {counts.map((c,i)=>{
+        const hex = colorHex(c.item.color);
+        const barH = c.count===0 ? 0 : Math.max(4, (c.count/max)*(H-padBottom-padTop));
+        const x = i*colW + (colW-barW)/2;
+        const y = H-padBottom-barH;
+        const label = c.item.name.length>9 ? c.item.name.slice(0,8)+"…" : c.item.name;
+        return <g key={c.item.id}>
+          {c.count>0 && <text x={x+barW/2} y={y-6} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text-1)">{c.count}</text>}
+          <rect x={x} y={y} width={barW} height={barH} rx="7" fill={hex}/>
+          <text x={x+barW/2} y={H-padBottom+15} textAnchor="middle" fontSize="10" fill="var(--text-2)">{label}</text>
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function ActivityPieChart({counts, donut}){
+  const filled = counts.filter(c=>c.count>0);
+  const total = filled.reduce((s,c)=>s+c.count,0);
+  let acc = 0;
+  const stops = filled.map(c=>{
+    const hex = colorHex(c.item.color);
+    const start = (acc/total)*360;
+    acc += c.count;
+    const end = (acc/total)*360;
+    return `${hex} ${start}deg ${end}deg`;
+  }).join(", ");
+  return <div className="actPieWrap">
+    <div className="actPieCircle" style={{background:`conic-gradient(${stops})`}}>
+      {donut && <div className="actPieHole"/>}
+    </div>
+    <div className="actLegend">
+      {filled.map(c=>{
+        const hex = colorHex(c.item.color);
+        const pct = Math.round((c.count/total)*100);
+        return <div className="actLegendItem" key={c.item.id}>
+          <span className="actLegendDot" style={{background:hex}}/>
+          <span className="actLegendName">{c.item.name}</span>
+          <span className="actLegendVal">{c.count}x · {pct}%</span>
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
+function ActivityChartPage({itemsEntity, logsEntity}){
+  const {data:items, add:addItem, remove:removeItem} = itemsEntity;
+  const {data:logs, add:addLog, remove:removeLog} = logsEntity;
+  const [newName,setNewName] = useState("");
+  const [logDate,setLogDate] = useState(todayISO());
+  const [period,setPeriod] = useState("semana");
+  const [chartType,setChartType] = useState("barras");
+
+  const addActivity = ()=>{
+    const name = newName.trim();
+    if(!name) return;
+    if(items.some(it=>it.name.toLowerCase()===name.toLowerCase())){ alert("Você já tem um afazer com esse nome."); return; }
+    const color = STUDY_COLORS[items.length % STUDY_COLORS.length].key;
+    addItem({name, color});
+    setNewName("");
+  };
+
+  const confirmRemoveActivity = (it)=>{
+    if(!confirm(`Excluir "${it.name}"? Os registros feitos dele também serão apagados.`)) return;
+    logs.filter(l=>l.item_id===it.id).forEach(l=>removeLog(l.id));
+    removeItem(it.id);
+  };
+
+  const logsForDate = logs.filter(l=>l.date===logDate);
+  const isDoneToday = (itemId)=> logsForDate.some(l=>l.item_id===itemId);
+  const toggleDone = (item)=>{
+    const existing = logsForDate.find(l=>l.item_id===item.id);
+    if(existing) removeLog(existing.id);
+    else addLog({item_id:item.id, date:logDate});
+  };
+
+  const windowDays = ACTIVITY_CHART_PERIODS.find(p=>p.key===period).days;
+  const inWindow = (dateStr)=>{
+    const diff = daysBetweenISO(dateStr, todayISO());
+    return diff>=0 && diff<windowDays;
+  };
+  const counts = items.map(it=>({
+    item: it,
+    count: logs.filter(l=>l.item_id===it.id && inWindow(l.date)).length,
+  }));
+  const total = counts.reduce((s,c)=>s+c.count,0);
+  const tip = activityTip(counts);
+
+  return <div className="content">
+    <div className="panel">
+      <div className="panelTitle"><h2>Meus afazeres</h2></div>
+      <p className="emptyHint" style={{marginTop:-8, marginBottom:12}}>Cadastre o que você costuma fazer — Livros, Inglês, Filmes e séries, Matemática, etc.</p>
+      <div className="inlineAdd">
+        <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Ex.: Inglês" onKeyDown={e=>{if(e.key==="Enter") addActivity();}}/>
+        <button onClick={addActivity}><Plus/></button>
+      </div>
+      <div className="actChipRow">
+        {items.map(it=>{
+          const hex = colorHex(it.color);
+          return <span className="actChip" key={it.id} style={{borderColor:hex+"55", color:hex, background:hex+"18"}}>
+            {it.name}
+            <button onClick={()=>confirmRemoveActivity(it)} title="Excluir"><X size={12}/></button>
+          </span>;
+        })}
+        {items.length===0 && <p className="emptyHint">Nenhum afazer cadastrado ainda.</p>}
+      </div>
+    </div>
+
+    {items.length>0 && <div className="panel">
+      <div className="panelTitle">
+        <h2>Registrar o dia</h2>
+        <input type="date" value={logDate} max={todayISO()} onChange={e=>setLogDate(e.target.value)}/>
+      </div>
+      <div className="actLogGrid">
+        {items.map(it=>{
+          const hex = colorHex(it.color);
+          const on = isDoneToday(it.id);
+          return <button key={it.id} type="button" className={"actLogItem "+(on?"on":"")} style={on?{borderColor:hex, background:hex+"1f", color:hex}:null} onClick={()=>toggleDone(it)}>
+            {on ? <CheckCircle2 size={16}/> : <Circle size={16}/>}
+            {it.name}
+          </button>;
+        })}
+      </div>
+    </div>}
+
+    {items.length>0 && <div className="panel">
+      <div className="panelTitle">
+        <h2>Visão geral</h2>
+        <div className="actTabs">
+          {ACTIVITY_CHART_PERIODS.map(p=><button key={p.key} type="button" className={period===p.key?"active":""} onClick={()=>setPeriod(p.key)}>{p.label}</button>)}
+        </div>
+      </div>
+      <div className="actTabs actChartTypeTabs">
+        {ACTIVITY_CHART_TYPES.map(c=>{ const CI=c.icon; return <button key={c.key} type="button" className={chartType===c.key?"active":""} onClick={()=>setChartType(c.key)}><CI size={14}/> {c.label}</button>; })}
+      </div>
+
+      {total===0
+        ? <p className="emptyHint">Nenhum registro nesse período ainda.</p>
+        : (chartType==="barras"
+            ? <ActivityBarChart counts={counts}/>
+            : <ActivityPieChart counts={counts} donut={chartType==="rosca"}/>)}
+
+      {total>0 && <div className={"actTip "+tip.tone}><Lightbulb size={16}/><span>{tip.text}</span></div>}
+    </div>}
   </div>;
 }
 
