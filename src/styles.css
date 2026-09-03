@@ -1387,6 +1387,13 @@ h1{font-size:23px}
 .actLogItem svg{flex:0 0 auto}
 .actLogItem.on{font-weight:700}
 
+.actDateRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.actDateInput{padding:8px 12px;border:1px solid var(--accent);border-radius:9px;background:var(--accent-soft-bg);color:var(--text-1);font-weight:700;outline:none;font:inherit}
+.actDateInput:focus{border-color:var(--accent-2);box-shadow:0 0 0 3px var(--accent-ring)}
+.actDateInput::-webkit-calendar-picker-indicator{filter:var(--calendar-filter)}
+.actIconBtn{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1)}
+.actIconBtn:hover{background:var(--bg-hover)}
+
 .actTabs{display:flex;gap:6px;flex-wrap:wrap}
 .actTabs button{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:12px;color:var(--text-2);background:var(--bg-surface-3)}
 .actTabs button.active{background:var(--accent);border-color:var(--accent);color:var(--accent-text-on);font-weight:700}
@@ -1403,6 +1410,14 @@ h1{font-size:23px}
 .actLegendDot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
 .actLegendName{flex:1;font-weight:600}
 .actLegendVal{color:var(--text-2);font-size:11.5px}
+
+.actHeatWrap{display:flex;flex-direction:column;gap:4px}
+.actHeatRow{display:flex;align-items:center;gap:8px}
+.actHeatRowLabel{flex:0 0 auto;font-size:12px;font-weight:600;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.actHeatCells{display:flex;gap:3px}
+.actHeatCell{border-radius:3px;flex:0 0 auto}
+.actHeatAxis{margin-top:2px}
+.actHeatDateLabel{flex:0 0 auto;font-size:8px;color:var(--text-2);text-align:center;transform:rotate(45deg);transform-origin:top left;white-space:nowrap;height:16px}
 
 .actTip{display:flex;align-items:flex-start;gap:10px;margin-top:18px;padding:12px 14px;border-radius:12px;font-size:13px;line-height:1.45;border:1px solid var(--border)}
 .actTip svg{flex:0 0 auto;margin-top:1px}

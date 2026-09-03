@@ -19,7 +19,7 @@ import {
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
-  Megaphone, Volume2, PieChart
+  Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -10288,6 +10288,11 @@ const ACTIVITY_CHART_TYPES = [
   { key:"barras", label:"Barras", icon:BarChart3 },
   { key:"pizza", label:"Pizza", icon:PieChart },
   { key:"rosca", label:"Rosca", icon:Circle },
+  { key:"linha", label:"Linha", icon:LineChart },
+  { key:"radar", label:"Radar", icon:Radar },
+  { key:"area", label:"Área", icon:AreaChart },
+  { key:"dispersao", label:"Dispersão", icon:ScatterChart },
+  { key:"calor", label:"Mapa de calor", icon:Grid3x3 },
 ];
 
 // Monta a dica de equilíbrio a partir da contagem de cada afazer no período
@@ -10372,11 +10377,190 @@ function ActivityPieChart({counts, donut}){
   </div>;
 }
 
+function ActivityLineChart({counts}){
+  const max = Math.max(1, ...counts.map(c=>c.count));
+  const H = 190, padBottom = 32, padTop = 22;
+  const colW = 68;
+  const W = Math.max(260, counts.length*colW);
+  const usableH = H-padBottom-padTop;
+  const pts = counts.map((c,i)=>({
+    x: i*colW + colW/2,
+    y: H-padBottom-(c.count/max)*usableH,
+    c,
+  }));
+  const path = pts.map((p,i)=>(i===0?"M":"L")+p.x+","+p.y).join(" ");
+  return <div className="actChartScroll">
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="actBarSvg" preserveAspectRatio="xMinYMid meet">
+      <line x1="0" y1={H-padBottom} x2={W} y2={H-padBottom} stroke="var(--border)" strokeWidth="1"/>
+      <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
+      {pts.map(p=>{
+        const hex = colorHex(p.c.item.color);
+        const label = p.c.item.name.length>9 ? p.c.item.name.slice(0,8)+"…" : p.c.item.name;
+        return <g key={p.c.item.id}>
+          {p.c.count>0 && <text x={p.x} y={p.y-10} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text-1)">{p.c.count}</text>}
+          <circle cx={p.x} cy={p.y} r="5" fill={hex} stroke="var(--bg-surface)" strokeWidth="2"/>
+          <text x={p.x} y={H-padBottom+15} textAnchor="middle" fontSize="10" fill="var(--text-2)">{label}</text>
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function ActivityAreaChart({counts}){
+  const max = Math.max(1, ...counts.map(c=>c.count));
+  const H = 190, padBottom = 32, padTop = 22;
+  const colW = 68;
+  const W = Math.max(260, counts.length*colW);
+  const usableH = H-padBottom-padTop;
+  const baseY = H-padBottom;
+  const pts = counts.map((c,i)=>({
+    x: i*colW + colW/2,
+    y: baseY-(c.count/max)*usableH,
+    c,
+  }));
+  const linePath = pts.map((p,i)=>(i===0?"M":"L")+p.x+","+p.y).join(" ");
+  const areaPath = pts.length ? `M${pts[0].x},${baseY} ` + pts.map(p=>`L${p.x},${p.y}`).join(" ") + ` L${pts[pts.length-1].x},${baseY} Z` : "";
+  return <div className="actChartScroll">
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="actBarSvg" preserveAspectRatio="xMinYMid meet">
+      <defs>
+        <linearGradient id="actAreaFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.45"/>
+          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.04"/>
+        </linearGradient>
+      </defs>
+      <line x1="0" y1={baseY} x2={W} y2={baseY} stroke="var(--border)" strokeWidth="1"/>
+      <path d={areaPath} fill="url(#actAreaFill)" stroke="none"/>
+      <path d={linePath} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
+      {pts.map(p=>{
+        const hex = colorHex(p.c.item.color);
+        const label = p.c.item.name.length>9 ? p.c.item.name.slice(0,8)+"…" : p.c.item.name;
+        return <g key={p.c.item.id}>
+          {p.c.count>0 && <text x={p.x} y={p.y-10} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text-1)">{p.c.count}</text>}
+          <circle cx={p.x} cy={p.y} r="5" fill={hex} stroke="var(--bg-surface)" strokeWidth="2"/>
+          <text x={p.x} y={H-padBottom+15} textAnchor="middle" fontSize="10" fill="var(--text-2)">{label}</text>
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function ActivityScatterChart({counts}){
+  const max = Math.max(1, ...counts.map(c=>c.count));
+  const H = 190, padBottom = 32, padTop = 22;
+  const colW = 68;
+  const W = Math.max(260, counts.length*colW);
+  const usableH = H-padBottom-padTop;
+  return <div className="actChartScroll">
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="actBarSvg" preserveAspectRatio="xMinYMid meet">
+      <line x1="0" y1={H-padBottom} x2={W} y2={H-padBottom} stroke="var(--border)" strokeWidth="1"/>
+      {counts.map((c,i)=>{
+        const hex = colorHex(c.item.color);
+        const x = i*colW + colW/2;
+        const y = H-padBottom-(c.count/max)*usableH;
+        const r = c.count===0 ? 5 : Math.min(16, 6+(c.count/max)*10);
+        const label = c.item.name.length>9 ? c.item.name.slice(0,8)+"…" : c.item.name;
+        return <g key={c.item.id}>
+          {c.count>0 && <text x={x} y={y-r-6} textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--text-1)">{c.count}</text>}
+          <circle cx={x} cy={y} r={r} fill={hex} fillOpacity="0.7" stroke={hex} strokeWidth="1.5"/>
+          <text x={x} y={H-padBottom+15} textAnchor="middle" fontSize="10" fill="var(--text-2)">{label}</text>
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function ActivityRadarChart({counts}){
+  const n = counts.length;
+  if(n<3){
+    return <ActivityBarChart counts={counts}/>;
+  }
+  const max = Math.max(1, ...counts.map(c=>c.count));
+  const size = 260, cx = size/2, cy = size/2, radius = 92, rings = 4;
+  const angleFor = i => (Math.PI*2*i/n) - Math.PI/2;
+  const pointFor = (i, frac) => {
+    const a = angleFor(i);
+    return [cx+Math.cos(a)*radius*frac, cy+Math.sin(a)*radius*frac];
+  };
+  const ringPolys = Array.from({length:rings}, (_,ri)=>{
+    const frac = (ri+1)/rings;
+    return Array.from({length:n}, (_,i)=>pointFor(i,frac).join(",")).join(" ");
+  });
+  const valuePoly = counts.map((c,i)=>pointFor(i, c.count/max).join(",")).join(" ");
+  return <div className="actChartScroll">
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="actBarSvg" preserveAspectRatio="xMidYMid meet">
+      {ringPolys.map((pts,ri)=><polygon key={ri} points={pts} fill="none" stroke="var(--border)" strokeWidth="1"/>)}
+      {counts.map((c,i)=>{
+        const [x,y] = pointFor(i,1);
+        return <line key={c.item.id} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border)" strokeWidth="1"/>;
+      })}
+      <polygon points={valuePoly} fill="var(--accent)" fillOpacity="0.35" stroke="var(--accent)" strokeWidth="2"/>
+      {counts.map((c,i)=>{
+        const hex = colorHex(c.item.color);
+        const [x,y] = pointFor(i, c.count/max);
+        const [lx,ly] = pointFor(i, 1.2);
+        const label = c.item.name.length>10 ? c.item.name.slice(0,9)+"…" : c.item.name;
+        const anchor = Math.abs(Math.cos(angleFor(i)))<0.3 ? "middle" : (Math.cos(angleFor(i))>0 ? "start" : "end");
+        return <g key={c.item.id}>
+          <circle cx={x} cy={y} r="4.5" fill={hex} stroke="var(--bg-surface)" strokeWidth="1.5"/>
+          <text x={lx} y={ly} textAnchor={anchor} dominantBaseline="middle" fontSize="10.5" fill="var(--text-2)">{label}</text>
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function ActivityHeatmapChart({items, logs, effectiveToday, windowDays}){
+  const cell = 13, gap = 3, labelW = 92;
+  const dates = Array.from({length:windowDays}, (_,i)=>isoAddDays(effectiveToday, -(windowDays-1-i)));
+  const doneSet = new Set(logs.map(l=>l.item_id+"|"+l.date));
+  const showEveryLabel = windowDays<=31;
+  return <div className="actChartScroll">
+    <div className="actHeatWrap" style={{minWidth: labelW+dates.length*(cell+gap)+20}}>
+      {items.map(it=>{
+        const hex = colorHex(it.color);
+        return <div className="actHeatRow" key={it.id}>
+          <span className="actHeatRowLabel" style={{width:labelW}}>{it.name}</span>
+          <div className="actHeatCells">
+            {dates.map(d=>{
+              const on = doneSet.has(it.id+"|"+d);
+              return <span key={d} className="actHeatCell" title={d+(on?` · ${it.name}`:"")}
+                style={{width:cell, height:cell, background:on?hex:"var(--bg-surface-3)", opacity:on?1:0.6}}/>;
+            })}
+          </div>
+        </div>;
+      })}
+      <div className="actHeatRow actHeatAxis">
+        <span className="actHeatRowLabel" style={{width:labelW}}/>
+        <div className="actHeatCells">
+          {dates.map((d,i)=>{
+            const show = showEveryLabel ? true : (i%Math.ceil(dates.length/12)===0);
+            const dt = new Date(d+"T00:00:00");
+            return <span key={d} className="actHeatDateLabel" style={{width:cell}}>{show ? pad2(dt.getDate())+"/"+pad2(dt.getMonth()+1) : ""}</span>;
+          })}
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// Data "efetiva" de hoje pro Gráfico: se a pessoa costuma estudar/dormir
+// depois da meia-noite, os registros feitos até dayEndHour ainda contam
+// como o dia anterior (configurável em "Configurações do gráfico").
+function activityEffectiveTodayISO(dayEndHour){
+  const now = new Date();
+  if(dayEndHour>0 && now.getHours()<dayEndHour) now.setDate(now.getDate()-1);
+  return now.getFullYear()+"-"+pad2(now.getMonth()+1)+"-"+pad2(now.getDate());
+}
+const ACTIVITY_DAY_END_OPTIONS = [0,1,2,3,4,5,6];
+
 function ActivityChartPage({itemsEntity, logsEntity}){
   const {data:items, add:addItem, remove:removeItem} = itemsEntity;
   const {data:logs, add:addLog, remove:removeLog} = logsEntity;
+  const [dayEndHour,setDayEndHour] = usePersistentState("libano-activity-day-end-hour", 0);
+  const [showDaySettings,setShowDaySettings] = useState(false);
+  const effectiveToday = activityEffectiveTodayISO(dayEndHour);
   const [newName,setNewName] = useState("");
-  const [logDate,setLogDate] = useState(todayISO());
+  const [logDate,setLogDate] = useState(effectiveToday);
   const [period,setPeriod] = useState("semana");
   const [chartType,setChartType] = useState("barras");
 
@@ -10405,7 +10589,7 @@ function ActivityChartPage({itemsEntity, logsEntity}){
 
   const windowDays = ACTIVITY_CHART_PERIODS.find(p=>p.key===period).days;
   const inWindow = (dateStr)=>{
-    const diff = daysBetweenISO(dateStr, todayISO());
+    const diff = daysBetweenISO(dateStr, effectiveToday);
     return diff>=0 && diff<windowDays;
   };
   const counts = items.map(it=>({
@@ -10438,7 +10622,11 @@ function ActivityChartPage({itemsEntity, logsEntity}){
     {items.length>0 && <div className="panel">
       <div className="panelTitle">
         <h2>Registrar o dia</h2>
-        <input type="date" value={logDate} max={todayISO()} onChange={e=>setLogDate(e.target.value)}/>
+        <div className="actDateRow">
+          {logDate!==effectiveToday && <button type="button" className="ghost" onClick={()=>setLogDate(effectiveToday)}>Hoje</button>}
+          <input type="date" className="actDateInput" value={logDate} max={effectiveToday} onChange={e=>setLogDate(e.target.value)}/>
+          <button type="button" className="actIconBtn" title="Configurações do gráfico" onClick={()=>setShowDaySettings(true)}><Settings size={16}/></button>
+        </div>
       </div>
       <div className="actLogGrid">
         {items.map(it=>{
@@ -10465,18 +10653,40 @@ function ActivityChartPage({itemsEntity, logsEntity}){
 
       {total===0
         ? <p className="emptyHint">Nenhum registro nesse período ainda.</p>
-        : (chartType==="barras"
-            ? <ActivityBarChart counts={counts}/>
-            : <ActivityPieChart counts={counts} donut={chartType==="rosca"}/>)}
+        : (chartType==="barras" ? <ActivityBarChart counts={counts}/>
+          : chartType==="pizza" || chartType==="rosca" ? <ActivityPieChart counts={counts} donut={chartType==="rosca"}/>
+          : chartType==="linha" ? <ActivityLineChart counts={counts}/>
+          : chartType==="area" ? <ActivityAreaChart counts={counts}/>
+          : chartType==="dispersao" ? <ActivityScatterChart counts={counts}/>
+          : chartType==="radar" ? <ActivityRadarChart counts={counts}/>
+          : chartType==="calor" ? <ActivityHeatmapChart items={items} logs={logs.filter(l=>inWindow(l.date))} effectiveToday={effectiveToday} windowDays={windowDays}/>
+          : null)}
 
       {total>0 && <div className={"actTip "+tip.tone}><Lightbulb size={16}/><span>{tip.text}</span></div>}
     </div>}
+
+    {showDaySettings && <div className="modalBack" onClick={()=>setShowDaySettings(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modalHead"><h2>Configurações do gráfico</h2><button type="button" onClick={()=>setShowDaySettings(false)}><X/></button></div>
+      <label>Considerar o dia até
+        <select value={dayEndHour} onChange={e=>setDayEndHour(Number(e.target.value))}>
+          {ACTIVITY_DAY_END_OPTIONS.map(h=><option key={h} value={h}>{h===0 ? "Meia-noite (padrão)" : pad2(h)+":00"}</option>)}
+        </select>
+      </label>
+      <p className="emptyHint">Se você estuda ou dorme depois da meia-noite, os registros feitos até esse horário ainda contam como o dia anterior — assim uma virada de página às 2h da manhã não some do dia certo.</p>
+      <button className="primary" type="button" onClick={()=>setShowDaySettings(false)}>Concluído</button>
+    </div></div>}
   </div>;
 }
 
 // Data de hoje em ISO (yyyy-mm-dd), mesmo formato usado por due_date/start_date.
 function todayISO(){
   const d = new Date();
+  return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+}
+// Soma (ou subtrai, com delta negativo) dias a uma data ISO (yyyy-mm-dd).
+function isoAddDays(iso, delta){
+  const d = new Date(iso+"T00:00:00");
+  d.setDate(d.getDate()+delta);
   return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
 }
 // Quantos dias inteiros existem entre duas datas ISO (yyyy-mm-dd).
