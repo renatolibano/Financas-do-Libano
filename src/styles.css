@@ -1030,6 +1030,23 @@ h1{font-size:23px}
 @keyframes pdfTimerBlink{0%,100%{opacity:1}50%{opacity:.2}}
 .pdfTimerBlink{animation:pdfTimerBlink 1s step-start infinite;color:#ff4d4f !important}
 .pdfTimerHidden{font-size:16px;font-weight:600;color:var(--text-2);letter-spacing:normal}
+
+.pdfAudioPanel{display:flex;flex-direction:column;gap:12px;padding:14px}
+.pdfAudioRecordRow{display:flex;gap:8px;flex-wrap:wrap}
+.pdfAudioRecordBtn{flex:1;justify-content:center;min-width:140px}
+.pdfAudioRecording{background:#ff4d4f !important}
+.pdfAudioImportBtn{display:flex;align-items:center;gap:7px;justify-content:center;cursor:pointer;flex:1;min-width:140px}
+.pdfAudioError{color:#ff8a80}
+.pdfAudioList{display:flex;flex-direction:column;gap:6px}
+.pdfAudioItem{display:flex;align-items:center;gap:8px;padding:8px 8px 8px 6px;border-radius:10px;border:1px solid var(--border-soft)}
+.pdfAudioItem:hover{background:var(--bg-hover-2)}
+.pdfAudioPlayBtn{flex:0 0 auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:var(--accent-text-on);display:grid;place-items:center}
+.pdfAudioItemInfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.pdfAudioItemName{font-size:12.5px;color:var(--text-1);text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.pdfAudioItemMeta{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-3)}
+.pdfAudioRenameInput{font-size:12.5px;padding:3px 6px;border-radius:6px;border:1px solid var(--accent);background:var(--bg-surface);color:var(--text-1);width:100%}
+.pdfAudioItemDelete{flex:0 0 auto;width:28px;height:28px;border-radius:8px;color:var(--text-3);display:grid;place-items:center}
+.pdfAudioItemDelete:hover{background:var(--bg-danger-soft);color:#ff9d9d}
 .pdfTimerHideBtn{font-size:12px;padding:6px 10px}
 
 @media(max-width:760px){
@@ -1404,7 +1421,7 @@ h1{font-size:23px}
 
 .actPieWrap{display:flex;align-items:center;gap:28px;flex-wrap:wrap;justify-content:center}
 .actPieCircle{position:relative;width:180px;height:180px;border-radius:50%;flex:0 0 auto}
-.actPieHole{position:absolute;inset:30px;border-radius:50%;background:var(--bg-surface)}
+.actPieHole{position:absolute;inset:30px;border-radius:50%;background:var(--bg-surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
 .actLegend{display:grid;gap:9px;min-width:160px}
 .actLegendItem{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text-1)}
 .actLegendDot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
@@ -1425,6 +1442,59 @@ h1{font-size:23px}
 .actTip.good{background:#3ecf6a18;border-color:#3ecf6a44;color:#3ecf6a}
 .actTip.warn{background:#f0b42918;border-color:#f0b42944;color:#f0b429}
 
+/* Cabeçalho da aba Gráfico: título + intervalo de datas selecionado */
+.actRangeBadge{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:10px;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);font-size:12.5px;font-weight:700;white-space:nowrap}
+
+/* Chip de categoria clicável (seleciona a categoria do novo afazer) e o
+   chip especial "+" / input inline usados para cadastrar uma categoria nova
+   sem sair do painel "Adicionar novo afazer". */
+.actChip{cursor:pointer}
+.actChip.actChipAdd{cursor:pointer;padding:7px 12px;color:var(--text-2)}
+.actChip.actChipInput{padding:5px 6px 5px 12px;cursor:default}
+.actChip.actChipInput input{background:none;border:none;outline:none;color:var(--text-1);font-size:12.5px;font-weight:600;width:110px;font:inherit}
+.actChip.actChipInput button{background:var(--accent);color:var(--accent-text-on)}
+[data-theme="light"] .actChip.actChipInput button{background:var(--accent)}
+
+/* Selo de categoria mostrado ao lado de um afazer (lista de pendentes/
+   concluídos e painel "Concluídos hoje") */
+.actCatBadge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;flex:0 0 auto}
+.actCatDot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+
+/* Lista de afazeres (pendentes/concluídos) */
+.actTodoList{display:grid;gap:8px}
+.actTodoRow{display:flex;align-items:center;gap:10px;border:1px solid var(--border);background:var(--bg-surface-3);border-radius:12px;padding:10px 12px}
+.actTodoCheck{flex:0 0 auto;display:grid;place-items:center;color:var(--text-3)}
+.actTodoCheck.on{color:inherit}
+.actTodoText{flex:1;font-size:13px;font-weight:600;color:var(--text-1);min-width:0;overflow-wrap:break-word}
+.actTodoText.strike{color:var(--text-2);text-decoration:line-through;text-decoration-color:var(--text-3);font-weight:500}
+.actTodoDelete{flex:0 0 auto;color:var(--text-3)}
+.actTodoDelete:hover{color:#ff5c5c}
+.actTodoCount{color:var(--text-2);font-size:12px;margin:12px 0 0}
+
+/* Painel "Concluídos hoje" (destaque esverdeado) */
+.actDonePanel{background:#3ecf6a12;border-color:#3ecf6a3d}
+.actDonePanel .actTodoRow{background:var(--bg-surface);border-color:#3ecf6a30}
+.actDoneCheck{flex:0 0 auto;color:#3ecf6a;display:grid;place-items:center}
+.actDoneTime{flex:0 0 auto;color:var(--text-2);font-size:11.5px;font-weight:600}
+.actDoneFooter{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid #3ecf6a2a;font-size:12px;color:var(--text-2)}
+.actDoneFooter button{color:#3ecf6a;font-weight:700}
+
+/* Cartões de gráfico (dropdown de tipo de gráfico no cabeçalho do painel) */
+.actChartCard .panelTitle{align-items:center}
+.actChartSelect{background:var(--bg-surface-3);border:1px solid var(--border);border-radius:9px;padding:7px 10px;color:var(--text-1);font-size:12px;font-weight:600;outline:none}
+.actPeriodTabs{margin-bottom:16px}
+
+/* Total no miolo do gráfico em rosca (ex.: "22 Total") */
+.actPieTotalNum{font-size:22px;font-weight:800;color:var(--text-1);line-height:1.1}
+.actPieTotalLabel{font-size:10px;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em}
+
+/* Mensagem motivacional no rodapé da aba */
+.actMotivate{display:flex;align-items:center;gap:10px;margin-top:16px;padding:14px 16px;border-radius:12px;font-size:13px;font-weight:600;line-height:1.4;border:1px solid var(--border)}
+.actMotivate svg{flex:0 0 auto}
+.actMotivate.neutral{background:var(--bg-surface-3);color:var(--text-2)}
+.actMotivate.good{background:#3ecf6a18;border-color:#3ecf6a44;color:#3ecf6a}
+
 @media(max-width:520px){
   .actPieWrap{flex-direction:column}
+  .actRangeBadge{font-size:11.5px;padding:7px 10px}
 }

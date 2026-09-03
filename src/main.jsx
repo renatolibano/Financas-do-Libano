@@ -19,7 +19,8 @@ import {
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
-  Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3
+  Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3,
+  Mic, Headphones
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -36,8 +37,10 @@ import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { jsPDF } from "jspdf";
-import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl } from "./lib/books";
-import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile } from "./lib/studyPdfs";
+import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl, optimizeExistingBookFile } from "./lib/books";
+import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile, optimizeExistingStudyPdfFile } from "./lib/studyPdfs";
+import { listPdfAudios, getPdfAudioBlob, addPdfAudio, renamePdfAudio, deletePdfAudio, optimizeAllPdfAudios } from "./lib/pdfAudios";
+import { recordingAudioBitsPerSecond } from "./lib/audioOptimize";
 import { useReadingStats, currentMonthKey } from "./lib/readingStats";
 import { createBlankPdfBlob } from "./lib/pdfPages";
 import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
@@ -475,6 +478,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Matemática) e os registros de quais deles foram feitos em cada dia.
   const activityItems = useEntity("activity_tracker_items", [], session, "asc", {orderable:true});
   const activityLogs = useEntity("activity_tracker_logs", [], session);
+  // Tarefas ("afazeres") de fato: texto + categoria (activity_tracker_items)
+  // + status feito/pendente. É a partir delas que a aba Gráfico monta a
+  // lista de pendentes/concluídos e os gráficos por categoria.
+  const activityTodos = useEntity("activity_tracker_todos", [], session, "asc");
   // Treino, Filmes e Séries e Jogos só são usados dentro da própria aba (o
   // resumo pra IA lê .data, mas tudo bem se vier vazio até a aba ser aberta)
   // — então adiamos a primeira busca até a pessoa realmente entrar em cada
@@ -748,6 +755,54 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // básicos; anotações/desenhos/conteúdo completo só vêm se o item já tiver
   // sido aberto nesta sessão (o que preenche esses campos via fetchFull).
   const [exportingData, setExportingData] = useState(false);
+  // Otimizar arquivos já enviados (Configurações): recomprime PDFs (livros
+  // + estudo) sem perda visível, e recomprime áudios gravados (bitrate
+  // menor). null = parado; "pdfs" | "audios" enquanto roda.
+  const [optimizingFiles, setOptimizingFiles] = useState(null);
+  const optimizeUploadedPdfs = async () => {
+    if (!session || optimizingFiles) return;
+    setOptimizingFiles("pdfs");
+    try {
+      const [{ data: bookRows }, { data: pdfRows }] = await Promise.all([
+        supabase.from("books").select("id,file_path").eq("user_id", session.user.id).not("file_path", "is", null),
+        supabase.from("study_pdfs").select("id,file_path").eq("user_id", session.user.id).not("file_path", "is", null),
+      ]);
+      let savedBytes = 0, changedCount = 0, total = 0;
+      for (const row of (bookRows || [])) {
+        total++;
+        const r = await optimizeExistingBookFile(session.user.id, row.id);
+        if (r.changed) { savedBytes += r.savedBytes; changedCount++; }
+      }
+      for (const row of (pdfRows || [])) {
+        total++;
+        const r = await optimizeExistingStudyPdfFile(session.user.id, row.id);
+        if (r.changed) { savedBytes += r.savedBytes; changedCount++; }
+      }
+      alert(total === 0
+        ? "Nenhum PDF enviado ainda."
+        : `Otimização concluída: ${changedCount} de ${total} PDF(s) ficaram menores, economizando ${formatBytes(savedBytes)}.`);
+    } catch (e) {
+      console.error("[optimizeUploadedPdfs]", e);
+      alert("Não deu pra otimizar os PDFs agora. Tenta de novo daqui a pouco.");
+    } finally {
+      setOptimizingFiles(null);
+    }
+  };
+  const optimizeRecordedAudios = async () => {
+    if (optimizingFiles) return;
+    setOptimizingFiles("audios");
+    try {
+      const { savedBytes, changedCount, total } = await optimizeAllPdfAudios();
+      alert(total === 0
+        ? "Nenhum áudio gravado ainda."
+        : `Otimização concluída: ${changedCount} de ${total} áudio(s) ficaram menores, economizando ${formatBytes(savedBytes)}.`);
+    } catch (e) {
+      console.error("[optimizeRecordedAudios]", e);
+      alert("Não deu pra otimizar os áudios agora. Tenta de novo daqui a pouco.");
+    } finally {
+      setOptimizingFiles(null);
+    }
+  };
   // Zona de risco (Configurações): "Sair da conta" e "Limpar dados locais"
   // pedem a senha da conta antes de executar, pra evitar apagar tudo ou sair
   // sem querer ao esbarrar no botão. null = fechado; "signout" | "clearlocal".
@@ -979,7 +1034,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
-      {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs}/>}
+      {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos}/>}
 
       <ToastHost/>
 
@@ -1118,6 +1173,18 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           refreshStorageUsage();
           alert("Cache de imagens limpo. Elas serão baixadas de novo na próxima exibição.");
         }}><ImagePlus size={14}/> Limpar cache de imagens</button>
+
+        {cloudConfigured && session && (
+          <button className="resetData" onClick={optimizeUploadedPdfs} disabled={!!optimizingFiles}>
+            <FileText size={14}/> {optimizingFiles === "pdfs" ? "Otimizando..." : "Otimizar PDFs enviados"}
+          </button>
+        )}
+        <button className="resetData" onClick={optimizeRecordedAudios} disabled={!!optimizingFiles}>
+          <Mic size={14}/> {optimizingFiles === "audios" ? "Otimizando..." : "Otimizar áudios gravados"}
+        </button>
+        <small className="boardSettingsHint" style={{display:"block", marginTop:-6, marginBottom:8}}>
+          Recomprime PDFs (livros e PDFs de estudo) sem perder qualidade visível, e regrava os áudios anexados aos PDFs num bitrate menor — bom pra voz, imperceptível ao ouvir. Só troca o arquivo se o resultado ficar mesmo menor. Otimizar PDFs baixa cada arquivo do Storage pra processar (gasta egress) — depois da primeira vez, rodar de novo só gasta egress com PDFs novos ou alterados, os já checados são pulados.
+        </small>
 
         {cloudConfigured && session && (
           <div className="notifSettingsBlock">
@@ -2085,6 +2152,218 @@ function PdfOpenChooser({ onClose, onPickTemp, onPickSave, uploading }) {
   );
 }
 
+function fmtAudioDuration(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+// Painel de "Áudios de estudo" dos leitores de PDF: grava áudio direto do
+// microfone ou importa arquivos já baixados no aparelho, e guarda tudo
+// junto daquele PDF pra tocar enquanto estuda. Usado tanto no PdfReader
+// (livros) quanto no StudyPdfReader (PDFs de estudo).
+//
+// Tudo fica só no IndexedDB local do navegador (ver lib/pdfAudios.js) —
+// nada sobe pra nuvem, então isso não gasta nenhum egress.
+function PdfAudioPanel({ pdfKind, pdfId, title }) {
+  const [clips, setClips] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const [playingId, setPlayingId] = useState(null);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [micError, setMicError] = useState(null);
+
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
+  const audioElRef = useRef(null);
+  const objectUrlRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    (async () => {
+      const list = await listPdfAudios(pdfKind, pdfId);
+      if (!cancelled) { setClips(list); setLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfKind, pdfId]);
+
+  // Para tudo (gravação e reprodução) se o painel sumir do ar (ex: trocou de aba).
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try { mediaRecorderRef.current.stop(); } catch (e) { console.log("[pdfAudio] stop no unmount falhou", e); }
+      }
+      mediaStreamRef.current?.getTracks()?.forEach(t => t.stop());
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startRecording = async () => {
+    if (pdfId == null) return;
+    setMicError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      // 32kbps é de sobra pra voz falada e evita gravar no bitrate padrão
+      // do navegador (~128kbps), que é overkill pra esse uso.
+      const mr = new MediaRecorder(stream, { audioBitsPerSecond: recordingAudioBitsPerSecond() });
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (recordTimerRef.current) { clearInterval(recordTimerRef.current); recordTimerRef.current = null; }
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        const durationSec = recordSecs;
+        setRecording(false);
+        setRecordSecs(0);
+        if (blob.size > 0) {
+          setBusy(true);
+          const meta = await addPdfAudio(pdfKind, pdfId, {
+            blob, durationSec, source: "gravado",
+            name: `Gravação ${new Date().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`,
+          });
+          if (meta) setClips(list => [meta, ...list]);
+          setBusy(false);
+        }
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+      setRecordSecs(0);
+      recordTimerRef.current = setInterval(() => setRecordSecs(s => s + 1), 1000);
+    } catch (e) {
+      console.log("[pdfAudio] getUserMedia falhou", e);
+      setMicError("Não foi possível acessar o microfone. Verifique a permissão do navegador.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || pdfId == null) return;
+    setBusy(true);
+    const tempAudio = document.createElement("audio");
+    tempAudio.preload = "metadata";
+    const url = URL.createObjectURL(file);
+    tempAudio.src = url;
+    const finish = async (durationSec) => {
+      URL.revokeObjectURL(url);
+      const meta = await addPdfAudio(pdfKind, pdfId, {
+        blob: file, durationSec, source: "importado",
+        name: file.name.replace(/\.[a-z0-9]+$/i, ""),
+      });
+      if (meta) setClips(list => [meta, ...list]);
+      setBusy(false);
+    };
+    tempAudio.onloadedmetadata = () => finish(Number.isFinite(tempAudio.duration) ? tempAudio.duration : 0);
+    tempAudio.onerror = () => finish(0);
+  };
+
+  const stopPlayback = () => {
+    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
+    if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = null; }
+    setPlayingId(null);
+  };
+
+  const togglePlay = async (clip) => {
+    if (playingId === clip.id) { stopPlayback(); return; }
+    stopPlayback();
+    const blob = await getPdfAudioBlob(pdfKind, pdfId, clip.id);
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    objectUrlRef.current = url;
+    if (!audioElRef.current) audioElRef.current = new Audio();
+    const el = audioElRef.current;
+    el.src = url;
+    el.onended = () => stopPlayback();
+    setPlayingId(clip.id);
+    try { await el.play(); } catch (e) { console.log("[pdfAudio] play falhou", e); stopPlayback(); }
+  };
+
+  const startRename = (clip) => { setRenamingId(clip.id); setRenameValue(clip.name); };
+  const commitRename = async () => {
+    if (renamingId == null) return;
+    const id = renamingId;
+    setRenamingId(null);
+    const next = await renamePdfAudio(pdfKind, pdfId, id, renameValue);
+    setClips(next);
+  };
+
+  const handleDelete = async (clip) => {
+    if (playingId === clip.id) stopPlayback();
+    const next = await deletePdfAudio(pdfKind, pdfId, clip.id);
+    setClips(next);
+  };
+
+  return (
+    <div className="pdfAudioPanel">
+      {pdfId == null ? (
+        <p className="emptyHint">Áudios só podem ser gravados/guardados em PDFs salvos na estante — esse aqui está aberto sem salvar.</p>
+      ) : (
+        <>
+          <div className="pdfAudioRecordRow">
+            {!recording ? (
+              <button className="add pdfAudioRecordBtn" onClick={startRecording} disabled={busy}>
+                <Mic size={16}/> Gravar áudio
+              </button>
+            ) : (
+              <button className="add pdfAudioRecordBtn pdfAudioRecording" onClick={stopRecording}>
+                <Square size={14}/> Parar ({fmtAudioDuration(recordSecs)})
+              </button>
+            )}
+            <label className="ghost pdfAudioImportBtn">
+              <Upload size={15}/> <span>Importar arquivo</span>
+              <input type="file" accept="audio/*" hidden onChange={handleImportFile} disabled={busy || recording}/>
+            </label>
+          </div>
+          {micError && <p className="emptyHint pdfAudioError">{micError}</p>}
+          <div className="pdfAudioList">
+            {!loaded && <p className="emptyHint">Carregando áudios...</p>}
+            {loaded && clips.length===0 && <p className="emptyHint">Nenhum áudio ainda. Grave ou importe um áudio de estudo relevante para "{title}".</p>}
+            {clips.map(clip => (
+              <div key={clip.id} className="pdfAudioItem">
+                <button className="pdfAudioPlayBtn" title={playingId===clip.id ? "Pausar" : "Tocar"} onClick={()=>togglePlay(clip)}>
+                  {playingId===clip.id ? <Pause size={15}/> : <Play size={15}/>}
+                </button>
+                <div className="pdfAudioItemInfo">
+                  {renamingId===clip.id ? (
+                    <input autoFocus className="pdfAudioRenameInput" value={renameValue}
+                      onChange={e=>setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={e=>{ if(e.key==="Enter") commitRename(); if(e.key==="Escape") setRenamingId(null); }}/>
+                  ) : (
+                    <b className="pdfAudioItemName" onClick={()=>startRename(clip)} title="Toque para renomear">{clip.name}</b>
+                  )}
+                  <span className="pdfAudioItemMeta">
+                    {clip.source==="gravado" ? <Mic size={11}/> : <Headphones size={11}/>} {fmtAudioDuration(clip.durationSec)}
+                  </span>
+                </div>
+                <button className="pdfAudioItemDelete" title="Excluir áudio" onClick={()=>handleDelete(clip)}><Trash2 size={13}/></button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
@@ -2639,6 +2918,9 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
               <StickyNote size={15}/> <span>Notas</span>
             </button>
+            <button className={`ghost${panel==="audios" ? " active" : ""}`} onClick={()=>togglePanel("audios")}>
+              <Headphones size={15}/> <span>Áudios</span>
+            </button>
             <button onClick={handleClose}><X size={18}/></button>
           </div>
         </div>
@@ -2836,6 +3118,15 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                   onBlur={flushNotes}
                   data-placeholder="Escreva suas anotações sobre este livro..."
                 />
+              </div>
+            </div>
+          )}
+
+          {panel==="audios" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Áudios de estudo</b><span>sobre "{book.title}"</span></div>
+              <div className="notesPaneBody">
+                <PdfAudioPanel pdfKind="book" pdfId={book.id} title={book.title}/>
               </div>
             </div>
           )}
@@ -5109,6 +5400,9 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
             <button className={`ghost${panel==="notas" ? " active" : ""}`} onClick={()=>togglePanel("notas")}>
               <StickyNote size={15}/> <span>Anotações</span>
             </button>
+            <button className={`ghost${panel==="audios" ? " active" : ""}`} onClick={()=>togglePanel("audios")}>
+              <Headphones size={15}/> <span>Áudios</span>
+            </button>
             <button className={`ghost${panel==="timer" ? " active" : ""}${timerDone ? " pdfTimerBlink" : ""}`} onClick={()=>togglePanel("timer")}>
               <Clock3 size={15}/> <span>{timerStarted ? (timerHidden && !timerDone ? "Contando…" : fmtTimer(timerLeft)) : "Cronômetro"}</span>
             </button>
@@ -5537,6 +5831,15 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   onBlur={flushNotes}
                   data-placeholder="Escreva suas anotações sobre este PDF..."
                 />
+              </div>
+            </div>
+          )}
+
+          {panel==="audios" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Áudios de estudo</b><span>sobre "{pdfDoc.title}"</span></div>
+              <div className="notesPaneBody">
+                <PdfAudioPanel pdfKind="study" pdfId={pdfDoc.id} title={pdfDoc.title}/>
               </div>
             </div>
           )}
@@ -10294,6 +10597,11 @@ const ACTIVITY_CHART_TYPES = [
   { key:"dispersao", label:"Dispersão", icon:ScatterChart },
   { key:"calor", label:"Mapa de calor", icon:Grid3x3 },
 ];
+// "Afazeres por categoria" mostra contagem por categoria (barras/linha/etc.);
+// "Distribuição dos afazeres" mostra proporção (pizza/rosca) — cada painel
+// oferece só os tipos de gráfico que fazem sentido pra ele.
+const ACTIVITY_COUNT_CHART_TYPES = ACTIVITY_CHART_TYPES.filter(c=>c.key!=="pizza"&&c.key!=="rosca");
+const ACTIVITY_SHARE_CHART_TYPES = ACTIVITY_CHART_TYPES.filter(c=>c.key==="pizza"||c.key==="rosca");
 
 // Monta a dica de equilíbrio a partir da contagem de cada afazer no período
 // selecionado: prioriza avisar sobre o que ficou zerado, depois sobre o que
@@ -10361,7 +10669,10 @@ function ActivityPieChart({counts, donut}){
   }).join(", ");
   return <div className="actPieWrap">
     <div className="actPieCircle" style={{background:`conic-gradient(${stops})`}}>
-      {donut && <div className="actPieHole"/>}
+      {donut && <div className="actPieHole">
+        <span className="actPieTotalNum">{total}</span>
+        <span className="actPieTotalLabel">Total</span>
+      </div>}
     </div>
     <div className="actLegend">
       {filled.map(c=>{
@@ -10553,38 +10864,87 @@ function activityEffectiveTodayISO(dayEndHour){
 }
 const ACTIVITY_DAY_END_OPTIONS = [0,1,2,3,4,5,6];
 
-function ActivityChartPage({itemsEntity, logsEntity}){
+// A partir de um timestamp ISO completo (ex.: completed_at), devolve só a
+// data local (yyyy-mm-dd) — usado pra saber em qual dia um afazer concluído
+// entra (respeitando o fuso do aparelho) e pra filtrar "concluídos hoje".
+function isoDateFromTimestamp(ts){
+  const d = new Date(ts);
+  return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+}
+// Formata só o horário (HH:MM) de um timestamp — mostrado ao lado de cada
+// afazer no painel "Concluídos hoje".
+function timeFromTimestamp(ts){
+  const d = new Date(ts);
+  return pad2(d.getHours())+":"+pad2(d.getMinutes());
+}
+
+function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
   const {data:items, add:addItem, remove:removeItem} = itemsEntity;
-  const {data:logs, add:addLog, remove:removeLog} = logsEntity;
+  const {data:todos, add:addTodo, remove:removeTodo, update:updateTodo} = todosEntity;
   const [dayEndHour,setDayEndHour] = usePersistentState("libano-activity-day-end-hour", 0);
   const [showDaySettings,setShowDaySettings] = useState(false);
   const effectiveToday = activityEffectiveTodayISO(dayEndHour);
-  const [newName,setNewName] = useState("");
-  const [logDate,setLogDate] = useState(effectiveToday);
-  const [period,setPeriod] = useState("semana");
-  const [chartType,setChartType] = useState("barras");
 
-  const addActivity = ()=>{
-    const name = newName.trim();
+  const [taskText,setTaskText] = useState("");
+  const [taskCat,setTaskCat] = useState("");
+  const [showCatInput,setShowCatInput] = useState(false);
+  const [newCatName,setNewCatName] = useState("");
+  const [todoTab,setTodoTab] = useState("pendentes");
+  const [period,setPeriod] = useState("semana");
+  const [countChartType,setCountChartType] = useState("barras");
+  const [shareChartType,setShareChartType] = useState("rosca");
+
+  // Mantém a categoria escolhida pro novo afazer sempre válida (primeira
+  // categoria cadastrada, por padrão; vazio se ainda não há nenhuma).
+  useEffect(()=>{
+    if(items.length===0){ if(taskCat) setTaskCat(""); return; }
+    if(!items.some(it=>it.id===taskCat)) setTaskCat(items[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  const addCategory = ()=>{
+    const name = newCatName.trim();
     if(!name) return;
-    if(items.some(it=>it.name.toLowerCase()===name.toLowerCase())){ alert("Você já tem um afazer com esse nome."); return; }
+    if(items.some(it=>it.name.toLowerCase()===name.toLowerCase())){ alert("Você já tem uma categoria com esse nome."); return; }
     const color = STUDY_COLORS[items.length % STUDY_COLORS.length].key;
     addItem({name, color});
-    setNewName("");
+    setNewCatName("");
+    setShowCatInput(false);
   };
 
-  const confirmRemoveActivity = (it)=>{
-    if(!confirm(`Excluir "${it.name}"? Os registros feitos dele também serão apagados.`)) return;
-    logs.filter(l=>l.item_id===it.id).forEach(l=>removeLog(l.id));
+  const confirmRemoveCategory = (it)=>{
+    if(!confirm(`Excluir a categoria "${it.name}"? Os afazeres dela também serão apagados.`)) return;
+    todos.filter(t=>t.item_id===it.id).forEach(t=>removeTodo(t.id));
     removeItem(it.id);
   };
 
-  const logsForDate = logs.filter(l=>l.date===logDate);
-  const isDoneToday = (itemId)=> logsForDate.some(l=>l.item_id===itemId);
-  const toggleDone = (item)=>{
-    const existing = logsForDate.find(l=>l.item_id===item.id);
-    if(existing) removeLog(existing.id);
-    else addLog({item_id:item.id, date:logDate});
+  const addTodoTask = ()=>{
+    const text = taskText.trim();
+    if(!text) return;
+    if(!taskCat){ alert("Cadastre uma categoria antes de adicionar um afazer."); return; }
+    addTodo({item_id:taskCat, text, done:false, completed_at:null});
+    setTaskText("");
+  };
+
+  const toggleTodo = (t)=>{
+    if(t.done) updateTodo(t.id, {done:false, completed_at:null});
+    else updateTodo(t.id, {done:true, completed_at:new Date().toISOString()});
+  };
+
+  const confirmRemoveTodo = (t)=>{
+    if(!confirm(`Excluir "${t.text}"?`)) return;
+    removeTodo(t.id);
+  };
+
+  const pendingTodos = todos.filter(t=>!t.done);
+  const doneTodosAll = todos.filter(t=>t.done).slice()
+    .sort((a,b)=> new Date(b.completed_at||b.created_at) - new Date(a.completed_at||a.created_at));
+  const doneTodayTodos = doneTodosAll.filter(t=>t.completed_at && isoDateFromTimestamp(t.completed_at)===effectiveToday);
+
+  const clearCompletedToday = ()=>{
+    if(doneTodayTodos.length===0) return;
+    if(!confirm("Limpar os afazeres concluídos hoje da lista? Essa ação não pode ser desfeita.")) return;
+    doneTodayTodos.forEach(t=>removeTodo(t.id));
   };
 
   const windowDays = ACTIVITY_CHART_PERIODS.find(p=>p.key===period).days;
@@ -10592,78 +10952,167 @@ function ActivityChartPage({itemsEntity, logsEntity}){
     const diff = daysBetweenISO(dateStr, effectiveToday);
     return diff>=0 && diff<windowDays;
   };
+  const completionsInWindow = doneTodosAll.filter(t=>t.completed_at && inWindow(isoDateFromTimestamp(t.completed_at)));
   const counts = items.map(it=>({
     item: it,
-    count: logs.filter(l=>l.item_id===it.id && inWindow(l.date)).length,
+    count: completionsInWindow.filter(t=>t.item_id===it.id).length,
   }));
   const total = counts.reduce((s,c)=>s+c.count,0);
   const tip = activityTip(counts);
+  const rangeStart = isoAddDays(effectiveToday, -(windowDays-1));
+
+  const catBadge = (itemId)=>{
+    const cat = items.find(it=>it.id===itemId);
+    if(!cat) return null;
+    const hex = colorHex(cat.color);
+    return <span className="actCatBadge" style={{color:hex, background:hex+"18"}}><span className="actCatDot" style={{background:hex}}/>{cat.name}</span>;
+  };
 
   return <div className="content">
-    <div className="panel">
-      <div className="panelTitle"><h2>Meus afazeres</h2></div>
-      <p className="emptyHint" style={{marginTop:-8, marginBottom:12}}>Cadastre o que você costuma fazer — Livros, Inglês, Filmes e séries, Matemática, etc.</p>
-      <div className="inlineAdd">
-        <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Ex.: Inglês" onKeyDown={e=>{if(e.key==="Enter") addActivity();}}/>
-        <button onClick={addActivity}><Plus/></button>
+    <div className="flashHead">
+      <div className="flashHeadInfo">
+        <div>
+          <h2 style={{fontSize:20, margin:"0 0 4px"}}>Gráficos</h2>
+          <p style={{margin:0}}>Acompanhe seu desempenho e organização de forma visual.</p>
+        </div>
       </div>
-      <div className="actChipRow">
-        {items.map(it=>{
-          const hex = colorHex(it.color);
-          return <span className="actChip" key={it.id} style={{borderColor:hex+"55", color:hex, background:hex+"18"}}>
-            {it.name}
-            <button onClick={()=>confirmRemoveActivity(it)} title="Excluir"><X size={12}/></button>
-          </span>;
-        })}
-        {items.length===0 && <p className="emptyHint">Nenhum afazer cadastrado ainda.</p>}
+      <div className="flashHeadActions">
+        <span className="actRangeBadge"><CalendarDays size={14}/> {formatTxDate(rangeStart)} - {formatTxDate(effectiveToday)}</span>
+        <button type="button" className="actIconBtn" title="Configurações do gráfico" onClick={()=>setShowDaySettings(true)}><Settings size={16}/></button>
       </div>
     </div>
 
-    {items.length>0 && <div className="panel">
-      <div className="panelTitle">
-        <h2>Registrar o dia</h2>
-        <div className="actDateRow">
-          {logDate!==effectiveToday && <button type="button" className="ghost" onClick={()=>setLogDate(effectiveToday)}>Hoje</button>}
-          <input type="date" className="actDateInput" value={logDate} max={effectiveToday} onChange={e=>setLogDate(e.target.value)}/>
-          <button type="button" className="actIconBtn" title="Configurações do gráfico" onClick={()=>setShowDaySettings(true)}><Settings size={16}/></button>
+    <div className="grid2">
+      <div>
+        <div className="panel">
+          <div className="panelTitle"><h2>Adicionar novo afazer</h2></div>
+          <div className="inlineAdd">
+            <input value={taskText} onChange={e=>setTaskText(e.target.value)} placeholder="Ex.: Estudar matemática por 1 hora" onKeyDown={e=>{if(e.key==="Enter") addTodoTask();}}/>
+            <select value={taskCat} onChange={e=>setTaskCat(e.target.value)} disabled={items.length===0}>
+              {items.length===0 && <option value="">Sem categorias</option>}
+              {items.map(it=><option key={it.id} value={it.id}>{it.name}</option>)}
+            </select>
+            <button onClick={addTodoTask} disabled={items.length===0}><Plus/></button>
+          </div>
+          <div className="actChipRow">
+            {items.map(it=>{
+              const hex = colorHex(it.color);
+              const selected = it.id===taskCat;
+              return <span className="actChip" key={it.id} onClick={()=>setTaskCat(it.id)}
+                style={{borderColor:selected?hex:hex+"55", color:hex, background:hex+(selected?"2c":"18")}}>
+                {it.name}
+                <button onClick={(e)=>{e.stopPropagation(); confirmRemoveCategory(it);}} title="Excluir categoria"><X size={12}/></button>
+              </span>;
+            })}
+            {!showCatInput && <span className="actChip actChipAdd" onClick={()=>setShowCatInput(true)} title="Nova categoria"><Plus size={13}/></span>}
+            {showCatInput && <span className="actChip actChipInput">
+              <input autoFocus value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="Nova categoria"
+                onKeyDown={e=>{ if(e.key==="Enter") addCategory(); if(e.key==="Escape"){ setShowCatInput(false); setNewCatName(""); } }}/>
+              <button onClick={addCategory} title="Salvar"><Check size={12}/></button>
+              <button onClick={()=>{setShowCatInput(false); setNewCatName("");}} title="Cancelar"><X size={12}/></button>
+            </span>}
+            {items.length===0 && !showCatInput && <p className="emptyHint">Nenhuma categoria cadastrada ainda.</p>}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panelTitle"><h2>Meus afazeres</h2></div>
+          <div className="actTabs" style={{marginBottom:14}}>
+            <button type="button" className={todoTab==="pendentes"?"active":""} onClick={()=>setTodoTab("pendentes")}>Pendentes</button>
+            <button type="button" className={todoTab==="concluidos"?"active":""} onClick={()=>setTodoTab("concluidos")}>Concluídos</button>
+          </div>
+
+          {todoTab==="pendentes" ? (
+            pendingTodos.length===0
+              ? <p className="emptyHint">Nenhum afazer pendente. Adicione um acima.</p>
+              : <div className="actTodoList">
+                  {pendingTodos.map(t=><div className="actTodoRow" key={t.id}>
+                    <button type="button" className="actTodoCheck" onClick={()=>toggleTodo(t)} title="Marcar como concluído"><Circle size={18}/></button>
+                    <span className="actTodoText">{t.text}</span>
+                    {catBadge(t.item_id)}
+                    <button type="button" className="actTodoDelete" onClick={()=>confirmRemoveTodo(t)} title="Excluir"><Trash2 size={15}/></button>
+                  </div>)}
+                </div>
+          ) : (
+            doneTodosAll.length===0
+              ? <p className="emptyHint">Nenhum afazer concluído ainda.</p>
+              : <div className="actTodoList">
+                  {doneTodosAll.map(t=>{
+                    const cat = items.find(it=>it.id===t.item_id);
+                    const hex = cat?colorHex(cat.color):"var(--text-3)";
+                    return <div className="actTodoRow done" key={t.id}>
+                      <button type="button" className="actTodoCheck on" style={{color:hex}} onClick={()=>toggleTodo(t)} title="Marcar como pendente"><CheckCircle2 size={18}/></button>
+                      <span className="actTodoText strike">{t.text}</span>
+                      {catBadge(t.item_id)}
+                      <button type="button" className="actTodoDelete" onClick={()=>confirmRemoveTodo(t)} title="Excluir"><Trash2 size={15}/></button>
+                    </div>;
+                  })}
+                </div>
+          )}
+          {todoTab==="pendentes" && pendingTodos.length>0 && <p className="actTodoCount">{pendingTodos.length} {pendingTodos.length===1?"afazer pendente":"afazeres pendentes"}</p>}
+        </div>
+
+        {doneTodayTodos.length>0 && <div className="panel actDonePanel">
+          <div className="panelTitle"><h2>Concluídos hoje</h2></div>
+          <div className="actTodoList">
+            {doneTodayTodos.map(t=><div className="actTodoRow done" key={t.id}>
+              <span className="actDoneCheck"><CheckCircle2 size={17}/></span>
+              <span className="actTodoText strike">{t.text}</span>
+              {catBadge(t.item_id)}
+              <span className="actDoneTime">{timeFromTimestamp(t.completed_at)}</span>
+            </div>)}
+          </div>
+          <div className="actDoneFooter">
+            <span>{doneTodayTodos.length} {doneTodayTodos.length===1?"afazer concluído":"afazeres concluídos"}</span>
+            <button type="button" className="ghost" onClick={clearCompletedToday}>Limpar concluídos</button>
+          </div>
+        </div>}
+
+        <div className={"actMotivate "+(doneTodayTodos.length>0?"good":"neutral")}>
+          <Trophy size={16}/>
+          <span>{doneTodayTodos.length>0 ? "Continue assim! Consistência é o que te leva longe." : "Cada afazer concluído é um passo a mais. Bora começar?"}</span>
         </div>
       </div>
-      <div className="actLogGrid">
-        {items.map(it=>{
-          const hex = colorHex(it.color);
-          const on = isDoneToday(it.id);
-          return <button key={it.id} type="button" className={"actLogItem "+(on?"on":"")} style={on?{borderColor:hex, background:hex+"1f", color:hex}:null} onClick={()=>toggleDone(it)}>
-            {on ? <CheckCircle2 size={16}/> : <Circle size={16}/>}
-            {it.name}
-          </button>;
-        })}
-      </div>
-    </div>}
 
-    {items.length>0 && <div className="panel">
-      <div className="panelTitle">
-        <h2>Visão geral</h2>
-        <div className="actTabs">
-          {ACTIVITY_CHART_PERIODS.map(p=><button key={p.key} type="button" className={period===p.key?"active":""} onClick={()=>setPeriod(p.key)}>{p.label}</button>)}
+      <div>
+        <div className="panel actChartCard">
+          <div className="panelTitle">
+            <h2>Afazeres por categoria</h2>
+            <select className="actChartSelect" value={countChartType} onChange={e=>setCountChartType(e.target.value)}>
+              {ACTIVITY_COUNT_CHART_TYPES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          <div className="actTabs actPeriodTabs">
+            {ACTIVITY_CHART_PERIODS.map(p=><button key={p.key} type="button" className={period===p.key?"active":""} onClick={()=>setPeriod(p.key)}>{p.label}</button>)}
+          </div>
+          {items.length===0
+            ? <p className="emptyHint">Cadastre uma categoria para ver o gráfico.</p>
+            : total===0
+            ? <p className="emptyHint">Nenhum afazer concluído nesse período ainda.</p>
+            : (countChartType==="barras" ? <ActivityBarChart counts={counts}/>
+              : countChartType==="linha" ? <ActivityLineChart counts={counts}/>
+              : countChartType==="area" ? <ActivityAreaChart counts={counts}/>
+              : countChartType==="dispersao" ? <ActivityScatterChart counts={counts}/>
+              : countChartType==="radar" ? <ActivityRadarChart counts={counts}/>
+              : countChartType==="calor" ? <ActivityHeatmapChart items={items} logs={completionsInWindow.map(t=>({item_id:t.item_id, date:isoDateFromTimestamp(t.completed_at)}))} effectiveToday={effectiveToday} windowDays={windowDays}/>
+              : null)}
         </div>
-      </div>
-      <div className="actTabs actChartTypeTabs">
-        {ACTIVITY_CHART_TYPES.map(c=>{ const CI=c.icon; return <button key={c.key} type="button" className={chartType===c.key?"active":""} onClick={()=>setChartType(c.key)}><CI size={14}/> {c.label}</button>; })}
-      </div>
 
-      {total===0
-        ? <p className="emptyHint">Nenhum registro nesse período ainda.</p>
-        : (chartType==="barras" ? <ActivityBarChart counts={counts}/>
-          : chartType==="pizza" || chartType==="rosca" ? <ActivityPieChart counts={counts} donut={chartType==="rosca"}/>
-          : chartType==="linha" ? <ActivityLineChart counts={counts}/>
-          : chartType==="area" ? <ActivityAreaChart counts={counts}/>
-          : chartType==="dispersao" ? <ActivityScatterChart counts={counts}/>
-          : chartType==="radar" ? <ActivityRadarChart counts={counts}/>
-          : chartType==="calor" ? <ActivityHeatmapChart items={items} logs={logs.filter(l=>inWindow(l.date))} effectiveToday={effectiveToday} windowDays={windowDays}/>
-          : null)}
+        <div className="panel actChartCard">
+          <div className="panelTitle">
+            <h2>Distribuição dos afazeres</h2>
+            <select className="actChartSelect" value={shareChartType} onChange={e=>setShareChartType(e.target.value)}>
+              {ACTIVITY_SHARE_CHART_TYPES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          {total===0
+            ? <p className="emptyHint">Nenhum afazer concluído nesse período ainda.</p>
+            : <ActivityPieChart counts={counts} donut={shareChartType==="rosca"}/>}
+        </div>
 
-      {total>0 && <div className={"actTip "+tip.tone}><Lightbulb size={16}/><span>{tip.text}</span></div>}
-    </div>}
+        {total>0 && <div className={"actTip "+tip.tone}><Lightbulb size={16}/><span>{tip.text}</span></div>}
+      </div>
+    </div>
 
     {showDaySettings && <div className="modalBack" onClick={()=>setShowDaySettings(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modalHead"><h2>Configurações do gráfico</h2><button type="button" onClick={()=>setShowDaySettings(false)}><X/></button></div>
@@ -10672,7 +11121,7 @@ function ActivityChartPage({itemsEntity, logsEntity}){
           {ACTIVITY_DAY_END_OPTIONS.map(h=><option key={h} value={h}>{h===0 ? "Meia-noite (padrão)" : pad2(h)+":00"}</option>)}
         </select>
       </label>
-      <p className="emptyHint">Se você estuda ou dorme depois da meia-noite, os registros feitos até esse horário ainda contam como o dia anterior — assim uma virada de página às 2h da manhã não some do dia certo.</p>
+      <p className="emptyHint">Se você estuda ou dorme depois da meia-noite, os afazeres concluídos até esse horário ainda contam como o dia anterior — assim uma virada de página às 2h da manhã não some do dia certo.</p>
       <button className="primary" type="button" onClick={()=>setShowDaySettings(false)}>Concluído</button>
     </div></div>}
   </div>;

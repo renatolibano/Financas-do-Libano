@@ -986,9 +986,21 @@ create table if not exists activity_tracker_logs (
   created_at timestamptz not null default now(),
   unique(user_id, item_id, date)
 );
+-- Afazeres de verdade (texto + categoria), com status feito/pendente. É a
+-- base da lista "Meus afazeres", do painel "Concluídos hoje" e dos gráficos
+-- por categoria na aba Gráfico.
+create table if not exists activity_tracker_todos (
+  id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
+  item_id uuid references activity_tracker_items(id) on delete set null,
+  text text not null,
+  done boolean not null default false,
+  completed_at timestamptz,
+  created_at timestamptz not null default now()
+);
 alter table activity_tracker_items enable row level security;
 alter table activity_tracker_logs enable row level security;
-do $$ declare t text; begin foreach t in array array['activity_tracker_items','activity_tracker_logs'] loop
+alter table activity_tracker_todos enable row level security;
+do $$ declare t text; begin foreach t in array array['activity_tracker_items','activity_tracker_logs','activity_tracker_todos'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);

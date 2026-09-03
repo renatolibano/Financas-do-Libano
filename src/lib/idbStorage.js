@@ -65,6 +65,25 @@ export async function idbSet(key, value) {
   }
 }
 
+// Lista todas as chaves que começam com um prefixo (ex: "pdf_audios:") —
+// usado por rotinas de manutenção que precisam varrer tudo que já foi
+// salvo sem conhecer os ids de antemão (ex: otimizar todos os áudios).
+export async function idbListKeysWithPrefix(prefix) {
+  try {
+    const db = await openDb();
+    const keys = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const req = tx.objectStore(STORE_NAME).getAllKeys();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+    return keys.filter(k => typeof k === "string" && k.startsWith(prefix));
+  } catch (e) {
+    console.warn("Não foi possível listar chaves (IndexedDB)", prefix, e);
+    return [];
+  }
+}
+
 export async function idbDelete(key) {
   try {
     const db = await openDb();

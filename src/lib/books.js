@@ -1,7 +1,10 @@
 import { supabase } from "./supabaseClient";
 import { downloadPdfCached, invalidatePdfCache, peekPdfCache } from "./pdfCache";
+import { optimizePdfBlob } from "./pdfOptimize";
+import { idbGet, idbSet } from "./idbStorage";
 
 const BUCKET = "books";
+const OPTIMIZE_MARK_PREFIX = "pdf_optimize_checked:books:";
 
 // Cada PDF fica guardado em uma pasta por usuário: <user_id>/<book_id>.pdf
 // As políticas do bucket (em schema.sql) garantem que só o dono acessa.
@@ -11,7 +14,8 @@ export function bookFilePath(userId, bookId) {
 
 export async function uploadBookFile(userId, bookId, file) {
   const path = bookFilePath(userId, bookId);
-  const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
+  const optimized = await optimizePdfBlob(file);
+  const { error } = await supabase.storage.from(BUCKET).upload(path, optimized || file, {
     contentType: "application/pdf",
     upsert: true,
   });
@@ -32,6 +36,39 @@ async function getBookFileMeta(path) {
   if (error || !data || !data.length) return null;
   const info = data.find(f => f.name === filename) || data[0];
   return info?.updated_at || null;
+}
+
+// Baixa um livro já enviado, tenta otimizar e reenvia se valer a pena.
+// Usado pela ação "Otimizar PDFs enviados" nas Configurações.
+//
+// `list()` (metadata, quase de graça) diz se esse arquivo já foi checado
+// antes e não mudou desde então — só nesse caso pula o download de
+// verdade, que é o que conta como egress no Supabase. Rodar essa ação de
+// novo depois só gasta egress com livros novos ou que mudaram.
+export async function optimizeExistingBookFile(userId, bookId) {
+  const path = bookFilePath(userId, bookId);
+  const markKey = OPTIMIZE_MARK_PREFIX + path;
+  const meta = await getBookFileMeta(path);
+  if (meta) {
+    const lastChecked = await idbGet(markKey, null);
+    if (lastChecked === meta) return { changed: false, savedBytes: 0, skipped: true };
+  }
+  const { data, error } = await supabase.storage.from(BUCKET).download(path);
+  if (error) throw error;
+  const optimized = await optimizePdfBlob(data);
+  if (!optimized) {
+    if (meta) await idbSet(markKey, meta);
+    return { changed: false, savedBytes: 0 };
+  }
+  const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, optimized, {
+    contentType: "application/pdf",
+    upsert: true,
+  });
+  if (upErr) throw upErr;
+  await invalidatePdfCache(BUCKET, path);
+  const newMeta = await getBookFileMeta(path);
+  if (newMeta) await idbSet(markKey, newMeta);
+  return { changed: true, savedBytes: data.size - optimized.size };
 }
 
 export async function downloadBookFile(path) {
