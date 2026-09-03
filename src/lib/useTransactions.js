@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
 import { useIdbPersistentState } from "./idbStorage";
 import { loadLocal, saveLocal } from "./storage";
@@ -100,12 +100,24 @@ export function useTransactions(session, initialData) {
     [cloud, userId]
   );
 
-  const cloudData = Object.keys(monthsData)
-    .sort()
-    .reverse()
-    .flatMap((ym) => monthsData[ym]);
+  // Memoizado: sem isso, esse array era recriado (nova referência) a cada
+  // render do componente que usa o hook, mesmo sem nenhum mês novo carregado
+  // — o que fazia o saldo (ver App, cloudBalance) ser reconsultado no banco
+  // a cada render, e não só quando as transações de fato mudavam.
+  const cloudData = useMemo(
+    () => Object.keys(monthsData).sort().reverse().flatMap((ym) => monthsData[ym]),
+    [monthsData]
+  );
   const data = cloud ? cloudData : localData;
   const loading = cloud ? loadingCount > 0 && loadedMonths.size === 0 : !localLoaded;
+
+  // Contador que só avança quando o saldo total (calculado no banco, ver
+  // get_transactions_balance) pode de fato ter mudado: uma transação foi
+  // adicionada/removida, ou uma importação do banco trouxe novas. Carregar
+  // mais um mês (loadMonth) NÃO mexe nesse contador — o saldo já veio do
+  // servidor considerando todas as transações, não só as carregadas no
+  // cliente, então não há motivo pra reconsultar o saldo só por isso.
+  const [balanceVersion, setBalanceVersion] = useState(0);
 
   const add = useCallback(
     async (row) => {
@@ -128,6 +140,7 @@ export function useTransactions(session, initialData) {
           return { ...d, [ym]: rows };
         });
         setLoadedMonths((s) => new Set(s).add(ym));
+        setBalanceVersion((v) => v + 1);
         return inserted;
       } else {
         const item = { id: Date.now() + Math.random(), ...row };
@@ -154,6 +167,7 @@ export function useTransactions(session, initialData) {
           }
           return next;
         });
+        setBalanceVersion((v) => v + 1);
       } else {
         setLocalData((d) => d.filter((x) => x.id !== id));
       }
@@ -163,10 +177,14 @@ export function useTransactions(session, initialData) {
 
   // Recarrega (forçado) todos os meses já vistos — usado depois de importar
   // movimentações do banco, pra pegar as novas sem perder o que já tava carregado.
+  // Também avança balanceVersion: uma importação pode trazer dezenas de
+  // transações novas de uma vez, então o saldo do banco precisa ser
+  // reconsultado depois dela.
   const refresh = useCallback(() => {
     if (!cloud) return;
     Array.from(loadedRef.current).forEach((ym) => loadMonth(ym, true));
+    setBalanceVersion((v) => v + 1);
   }, [cloud, loadMonth]);
 
-  return { data, add, remove, loading, error, cloud, refresh, loadMonth, loadedMonths, loadingAny: loadingCount > 0 };
+  return { data, add, remove, loading, error, cloud, refresh, loadMonth, loadedMonths, loadingAny: loadingCount > 0, balanceVersion };
 }

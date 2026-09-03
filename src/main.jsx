@@ -521,7 +521,14 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const mediaItems = useEntity("media_items", [], session, "asc", {orderable:true, enabled: filmesVisitado});
   const gameGroups = useEntity("game_groups", [], session, "asc", {orderable:true, enabled: jogosVisitado});
   const gameItems = useEntity("game_items", [], session, "asc", {orderable:true, enabled: jogosVisitado});
-  const calendarEvents = useEntity("calendar_recurring_events", [], session);
+  // Não dá pra adiar por página como Treino/Filmes/Jogos: o sino de
+  // notificações lê calendarEvents.data em qualquer aba (ver useMemo de
+  // notifItems mais abaixo), então gatear por "Calendário visitado"
+  // deixaria os avisos de evento recorrente sumidos até a pessoa abrir o
+  // Calendário. A tabela também não tem coluna pesada pra cortar via
+  // listSelect. TTL mais longo em vez disso: evento recorrente muda raramente,
+  // então não faz sentido reconsultar a cada 15min como dado financeiro.
+  const calendarEvents = useEntity("calendar_recurring_events", [], session, "asc", { ttlMs: 6 * 60 * 60 * 1000 });
   // Novidades do app: qualquer conta pode publicar (ver Configurações → "Publicar
   // atualização"), e todas as contas enxergam a mesma lista (RLS de app_updates
   // libera leitura pra qualquer usuário autenticado — ver schema.sql). Cada
@@ -612,8 +619,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // baixado TODAS as movimentações) — ver get_transactions_balance no
   // schema.sql. Fica null até a primeira resposta (ou no modo local, sem
   // nuvem), quando o cálculo feito no navegador acima (`balance`) é usado
-  // no lugar. Reconsultado sempre que a lista de transações muda (inclusive
-  // localmente, por add/edit/delete), pra não ficar desatualizado.
+  // no lugar. Reconsultado no login e sempre que balanceVersion avança
+  // (transação adicionada/removida, ou importação do banco) — não a cada
+  // vez que mais um mês é carregado, já que o saldo do banco já considera
+  // todas as transações da conta, não só as que o cliente baixou.
   const [cloudBalance, setCloudBalance] = useState(null);
   useEffect(() => {
     let active = true;
@@ -630,7 +639,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       setCloudBalance(data == null ? null : Number(data));
     });
     return () => { active = false; };
-  }, [session?.user?.id, transactions.data]);
+  }, [session?.user?.id, transactions.balanceVersion]);
   const displayedBalance = cloudBalance != null ? cloudBalance : balance;
   const fixedTotal = fixed.data.reduce((a,b)=>a+b.value,0);
   const debtRemaining = debts.data.reduce((a,b)=>a+(b.total-b.paid),0);

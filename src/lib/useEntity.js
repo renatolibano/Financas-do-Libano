@@ -23,7 +23,7 @@ const cacheKey = (table, userId) => `cache:${table}:${userId}`;
 // são necessárias quando o item é aberto — combine com fetchFull(id) pra
 // buscar a linha inteira nesse momento, sem pesar a listagem.
 export function useEntity(table, initialData, session, order = "asc", opts = {}) {
-  const { orderable = false, listSelect = "*", enabled = true } = opts;
+  const { orderable = false, listSelect = "*", enabled = true, ttlMs = CACHE_TTL_MS } = opts;
   // enabled=false adia a PRIMEIRA busca na nuvem (ex.: tabela de uma aba que
   // ainda não foi aberta nesta sessão) — nenhuma requisição sai até virar
   // true. Note que isso não muda o modo (cloud continua cloud): inserções,
@@ -69,7 +69,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       }
       if (!force) {
         const cached = loadLocal(cacheKey(table, userId), null);
-        if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+        if (cached && Date.now() - cached.ts < ttlMs) {
           // Cache ainda fresco — usa direto, sem gastar egress nenhum.
           setCloudDataRaw(cached.data);
           setCloudLoading(false);
@@ -91,7 +91,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       setCloudLoading(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [cloud, enabled, table, order, orderable, listSelect, userId, setCloudData]
+    [cloud, enabled, table, order, orderable, listSelect, ttlMs, userId, setCloudData]
   );
 
   useEffect(() => {
