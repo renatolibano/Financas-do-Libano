@@ -2176,6 +2176,9 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [micError, setMicError] = useState(null);
+  const [currentSec, setCurrentSec] = useState(0);
+  const [durationSec, setDurationSec] = useState(0);
+  const seekingRef = useRef(false); // ref (não state) pra sempre ler o valor atual dentro do listener ontimeupdate
 
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -2276,9 +2279,18 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
   };
 
   const stopPlayback = () => {
-    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.currentTime = 0; }
+    if (audioElRef.current) {
+      audioElRef.current.pause();
+      audioElRef.current.currentTime = 0;
+      audioElRef.current.ontimeupdate = null;
+      audioElRef.current.onloadedmetadata = null;
+      audioElRef.current.ondurationchange = null;
+    }
     if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = null; }
+    seekingRef.current = false;
     setPlayingId(null);
+    setCurrentSec(0);
+    setDurationSec(0);
   };
 
   const togglePlay = async (clip) => {
@@ -2292,8 +2304,46 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
     const el = audioElRef.current;
     el.src = url;
     el.onended = () => stopPlayback();
+    // Atualiza o cronômetro e a duração real do áudio (o metadata de
+    // duração salvo no clip é só uma estimativa arredondada).
+    el.ontimeupdate = () => { if (!seekingRef.current) setCurrentSec(el.currentTime); };
+    const syncDuration = () => {
+      if (Number.isFinite(el.duration) && el.duration > 0) setDurationSec(el.duration);
+    };
+    el.onloadedmetadata = syncDuration;
+    el.ondurationchange = syncDuration;
+    setDurationSec(clip.durationSec || 0);
+    setCurrentSec(0);
     setPlayingId(clip.id);
     try { await el.play(); } catch (e) { console.log("[pdfAudio] play falhou", e); stopPlayback(); }
+  };
+
+  // Barra de progresso: arrasta pra qualquer ponto do áudio. `seeking` evita
+  // que o timeupdate do áudio "brigue" com o dedo/mouse enquanto arrasta.
+  const handleSeekChange = (e) => {
+    const val = Number(e.target.value);
+    setCurrentSec(val);
+  };
+  const commitSeek = (e) => {
+    const val = Number(e.target.value);
+    if (audioElRef.current && playingId != null) audioElRef.current.currentTime = val;
+    setCurrentSec(val);
+    seekingRef.current = false;
+  };
+
+  const handleDownload = async (clip) => {
+    const blob = await getPdfAudioBlob(pdfKind, pdfId, clip.id);
+    if (!blob) return;
+    const ext = (blob.type && blob.type.split("/")[1]) ? blob.type.split("/")[1].split(";")[0] : "webm";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${clip.name || "audio"}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoga em seguida (dar um tempinho pro navegador iniciar o download).
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const startRename = (clip) => { setRenamingId(clip.id); setRenameValue(clip.name); };
@@ -2337,24 +2387,48 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
             {!loaded && <p className="emptyHint">Carregando áudios...</p>}
             {loaded && clips.length===0 && <p className="emptyHint">Nenhum áudio ainda. Grave ou importe um áudio de estudo relevante para "{title}".</p>}
             {clips.map(clip => (
-              <div key={clip.id} className="pdfAudioItem">
-                <button className="pdfAudioPlayBtn" title={playingId===clip.id ? "Pausar" : "Tocar"} onClick={()=>togglePlay(clip)}>
-                  {playingId===clip.id ? <Pause size={15}/> : <Play size={15}/>}
-                </button>
-                <div className="pdfAudioItemInfo">
-                  {renamingId===clip.id ? (
-                    <input autoFocus className="pdfAudioRenameInput" value={renameValue}
-                      onChange={e=>setRenameValue(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={e=>{ if(e.key==="Enter") commitRename(); if(e.key==="Escape") setRenamingId(null); }}/>
-                  ) : (
-                    <b className="pdfAudioItemName" onClick={()=>startRename(clip)} title="Toque para renomear">{clip.name}</b>
+              <div key={clip.id} className={`pdfAudioItem${playingId===clip.id ? " pdfAudioItemPlaying" : ""}`}>
+                <div className="pdfAudioItemRow">
+                  <button className="pdfAudioPlayBtn" title={playingId===clip.id ? "Pausar" : "Tocar"} onClick={()=>togglePlay(clip)}>
+                    {playingId===clip.id ? <Pause size={15}/> : <Play size={15}/>}
+                  </button>
+                  <div className="pdfAudioItemInfo">
+                    {renamingId===clip.id ? (
+                      <input autoFocus className="pdfAudioRenameInput" value={renameValue}
+                        onChange={e=>setRenameValue(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={e=>{ if(e.key==="Enter") commitRename(); if(e.key==="Escape") setRenamingId(null); }}/>
+                    ) : (
+                      <b className="pdfAudioItemName" onClick={()=>startRename(clip)} title="Toque para renomear">{clip.name}</b>
+                    )}
+                    <span className="pdfAudioItemMeta">
+                      {clip.source==="gravado" ? <Mic size={11}/> : <Headphones size={11}/>}{" "}
+                      {playingId===clip.id
+                        ? `${fmtAudioDuration(currentSec)} / ${fmtAudioDuration(durationSec || clip.durationSec)}`
+                        : fmtAudioDuration(clip.durationSec)}
+                    </span>
+                  </div>
+                  {renamingId!==clip.id && (
+                    <button className="pdfAudioItemIconBtn" title="Renomear áudio" onClick={()=>startRename(clip)}><Pencil size={13}/></button>
                   )}
-                  <span className="pdfAudioItemMeta">
-                    {clip.source==="gravado" ? <Mic size={11}/> : <Headphones size={11}/>} {fmtAudioDuration(clip.durationSec)}
-                  </span>
+                  <button className="pdfAudioItemIconBtn" title="Baixar áudio" onClick={()=>handleDownload(clip)}><Download size={13}/></button>
+                  <button className="pdfAudioItemDelete" title="Excluir áudio" onClick={()=>handleDelete(clip)}><Trash2 size={13}/></button>
                 </div>
-                <button className="pdfAudioItemDelete" title="Excluir áudio" onClick={()=>handleDelete(clip)}><Trash2 size={13}/></button>
+                {playingId===clip.id && (
+                  <input
+                    type="range"
+                    className="pdfAudioSeek"
+                    min={0}
+                    max={Math.max(durationSec || clip.durationSec || 0, 0.1)}
+                    step={0.1}
+                    value={Math.min(currentSec, durationSec || clip.durationSec || 0)}
+                    onPointerDown={()=>{ seekingRef.current = true; }}
+                    onChange={handleSeekChange}
+                    onMouseUp={commitSeek}
+                    onTouchEnd={commitSeek}
+                    onKeyUp={commitSeek}
+                  />
+                )}
               </div>
             ))}
           </div>
