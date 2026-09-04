@@ -2465,6 +2465,391 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Formatação de texto rica, compartilhada por TODAS as áreas de anotação com
+// corpo editável: a nota avulsa (NoteEditor), as anotações de livros
+// (PdfReader) e as anotações de PDFs de estudo (StudyPdfReader). Manter isso
+// num único lugar garante que as três tenham sempre o mesmo conjunto de
+// ferramentas (negrito, cor, marca-texto, emoji, alinhamento, lista de
+// marcação e links) em vez de cada uma evoluir separadamente e ficar
+// desalinhada das outras.
+
+const EMOJIS = [
+  "😀","😄","😁","😂","🙂","😉","😍","🤩","🤔","😅",
+  "😎","🙃","😴","😭","😡","🥳","😇","🤗","👍","👎",
+  "👏","🙏","💪","✨","🔥","⭐","❤️","💡","✅","❌",
+  "📌","📅","⏰","🎯","📝","🚀","🎉","☕","💰","📚"
+];
+
+const NOTE_TEXT_COLORS = ["#f4f4f5", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
+const NOTE_HILITE_COLORS = ["transparent", "#ffe066", "#ffb3ab", "#a9e6a0", "#a9d4ff", "#e2b6ff"];
+
+// Cria a estrutura de um item de marcação (caixinha + texto)
+function makeChecklistItem() {
+  const item = document.createElement("div");
+  item.className = "checklist-item";
+  const box = document.createElement("span");
+  box.className = "check-box";
+  box.setAttribute("contenteditable", "false");
+  const text = document.createElement("span");
+  text.className = "check-text";
+  item.appendChild(box);
+  item.appendChild(text);
+  return { item, text };
+}
+
+// Posiciona o cursor no início do texto do item informado
+function placeCursorIn(textEl) {
+  const sel = window.getSelection();
+  const r = document.createRange();
+  r.selectNodeContents(textEl);
+  r.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+// Acha o filho direto do editor (bodyRef) que contém o nó informado.
+// É por causa disso que o item "bugava e criava do lado": ao inserir o
+// novo item exatamente na posição do cursor, se o cursor estivesse dentro
+// do texto de outro item (uma linha em "flex"), o novo item nascia DENTRO
+// daquela linha em vez de virar uma linha nova.
+function findTopLevelChild(el, node) {
+  let cur = node;
+  while (cur && cur.parentNode && cur.parentNode !== el) cur = cur.parentNode;
+  return cur && cur.parentNode === el ? cur : null;
+}
+
+// Hook com toda a lógica de formatação de um corpo editável (bodyRef).
+// onChange é chamado sempre que o conteúdo muda, pra quem estiver usando
+// agendar o autosave.
+function useNoteFormatting(bodyRef, onChange) {
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
+  const [hiliteOpen, setHiliteOpen] = useState(false);
+  const [linkBar, setLinkBar] = useState(null);
+  const [linkPopover, setLinkPopover] = useState(null);
+  const savedRangeRef = useRef(null);
+  const editingAnchorRef = useRef(null);
+
+  // Impede que o clique num botão da barra tire o foco/seleção do texto
+  const keepFocus = (e) => e.preventDefault();
+
+  const exec = (command, value = null) => {
+    bodyRef.current?.focus();
+    document.execCommand(command, false, value);
+    onChange();
+  };
+
+  const insertEmoji = (emoji) => {
+    bodyRef.current?.focus();
+    document.execCommand("insertText", false, emoji);
+    setEmojiOpen(false);
+    onChange();
+  };
+
+  const applyTextColor = (c) => {
+    exec("foreColor", c);
+    setColorOpen(false);
+  };
+
+  const applyHilite = (c) => {
+    bodyRef.current?.focus();
+    // hiliteColor é o comando padrão; backColor é o fallback usado por
+    // alguns navegadores mais antigos para o mesmo efeito.
+    const ok = document.execCommand("hiliteColor", false, c);
+    if (!ok) document.execCommand("backColor", false, c);
+    onChange();
+    setHiliteOpen(false);
+  };
+
+  const insertChecklist = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    const { item, text } = makeChecklistItem();
+
+    let anchor = null;
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      anchor = findTopLevelChild(el, sel.getRangeAt(0).endContainer);
+    }
+
+    // Sempre inseridos como linha independente: depois da linha atual
+    // (se houver uma), ou no final do editor.
+    if (anchor) anchor.after(item);
+    else el.appendChild(item);
+
+    placeCursorIn(text);
+    onChange();
+  };
+
+  // Alterna o estado marcado/desmarcado ao clicar no quadradinho, e abre
+  // links em uma nova aba do navegador ao clicar neles (sem arrastar - se
+  // o clique tiver selecionado texto, deixa a seleção em pé em vez de navegar)
+  const handleBodyClick = (e) => {
+    const box = e.target.closest?.(".check-box");
+    if (box) {
+      e.preventDefault();
+      box.closest(".checklist-item")?.classList.toggle("checked");
+      onChange();
+      return;
+    }
+    const link = e.target.closest?.("a");
+    if (link && bodyRef.current?.contains(link)) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        e.preventDefault();
+        const href = link.getAttribute("href");
+        if (href) window.open(href, "_blank", "noopener,noreferrer");
+      }
+    }
+  };
+
+  // Ao apertar Enter dentro de um item de marcação, cria automaticamente o próximo
+  // (mesmo comportamento das listas com bolinhas). Enter num item vazio sai da lista.
+  const handleBodyKeyDown = (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range0 = sel.getRangeAt(0);
+    const startNode = range0.startContainer;
+    const textEl = (startNode.nodeType === 3 ? startNode.parentElement : startNode)?.closest?.(".check-text");
+    if (!textEl) return;
+    e.preventDefault();
+    const itemEl = textEl.closest(".checklist-item");
+
+    // Se havia texto selecionado, remove antes de calcular o que sobrou
+    // (antes esse texto ficava "perdido" e a estrutura quebrava).
+    if (!range0.collapsed) range0.deleteContents();
+
+    // Pega o que ficou depois do cursor para levar para o novo item
+    let afterFrag = document.createDocumentFragment();
+    if (textEl.lastChild) {
+      const afterRange = document.createRange();
+      afterRange.setStart(range0.startContainer, range0.startOffset);
+      afterRange.setEndAfter(textEl.lastChild);
+      afterFrag = afterRange.extractContents();
+    }
+
+    const isEmpty = textEl.textContent.trim() === "" && afterFrag.textContent.trim() === "";
+
+    if (isEmpty) {
+      // Enter num item vazio: sai da lista de marcação
+      const exitLine = document.createElement("div");
+      exitLine.innerHTML = "<br>";
+      itemEl.replaceWith(exitLine);
+      const r = document.createRange();
+      r.setStart(exitLine, 0);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } else {
+      const { item: newItem, text } = makeChecklistItem();
+      text.appendChild(afterFrag);
+      itemEl.after(newItem);
+      placeCursorIn(text);
+    }
+    onChange();
+  };
+
+  // Mostra o botãozinho flutuante "Link" acima do trecho selecionado
+  // (só quando a seleção tem texto e está dentro do corpo da nota)
+  const updateLinkBar = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { setLinkBar(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!bodyRef.current || !bodyRef.current.contains(range.commonAncestorContainer)) { setLinkBar(null); return; }
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setLinkBar(null); return; }
+    setLinkBar({
+      top: rect.top - 42,
+      left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76),
+    });
+  };
+
+  // Abre a caixinha flutuante onde se digita/cola o link. Se a seleção
+  // já estiver dentro de um link existente, entra em modo de edição
+  // (preenche com a URL atual e mostra o botão de remover).
+  const openLinkPopover = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    savedRangeRef.current = range;
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const anchor = node?.closest?.("a");
+    editingAnchorRef.current = (anchor && bodyRef.current?.contains(anchor)) ? anchor : null;
+    const rect = range.getBoundingClientRect();
+    setLinkPopover({
+      top: Math.max(rect.top - 46, 8),
+      left: Math.min(Math.max(rect.left, 8), window.innerWidth - 268),
+      value: editingAnchorRef.current ? (editingAnchorRef.current.getAttribute("href") || "") : "",
+    });
+    setLinkBar(null);
+  };
+
+  const closeLinkPopover = () => {
+    setLinkPopover(null);
+    editingAnchorRef.current = null;
+    savedRangeRef.current = null;
+  };
+
+  const confirmLink = () => {
+    const raw = (linkPopover?.value || "").trim();
+    if (!raw) { closeLinkPopover(); return; }
+    const url = /^([a-z][a-z0-9+.-]*:)/i.test(raw) ? raw : `https://${raw}`;
+    bodyRef.current?.focus();
+    if (editingAnchorRef.current) {
+      editingAnchorRef.current.setAttribute("href", url);
+    } else {
+      const range = savedRangeRef.current;
+      if (range) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try {
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.className = "note-link";
+          a.appendChild(range.extractContents());
+          range.insertNode(a);
+          const r = document.createRange();
+          r.setStartAfter(a);
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+        } catch (err) {
+          // seleção cruza limites incompatíveis (ex.: entre itens de marcação) - ignora
+        }
+      }
+    }
+    closeLinkPopover();
+    onChange();
+  };
+
+  const removeLink = () => {
+    const a = editingAnchorRef.current;
+    if (a && a.parentNode) {
+      const parent = a.parentNode;
+      while (a.firstChild) parent.insertBefore(a.firstChild, a);
+      parent.removeChild(a);
+    }
+    closeLinkPopover();
+    onChange();
+  };
+
+  return {
+    emojiOpen, setEmojiOpen, colorOpen, setColorOpen, hiliteOpen, setHiliteOpen,
+    linkBar, linkPopover, setLinkPopover, editingAnchorRef,
+    keepFocus, exec, insertEmoji, applyTextColor, applyHilite, insertChecklist,
+    handleBodyClick, handleBodyKeyDown, updateLinkBar,
+    openLinkPopover, closeLinkPopover, confirmLink, removeLink,
+  };
+}
+
+// Botões de formatação em si (sem a <div> de fora, pra quem for usar poder
+// colocar botões extras próprios do lado, como o "Baixar em PDF" da nota avulsa).
+function NoteFormatButtons({ fmt }) {
+  return (
+    <>
+      <button title="Negrito" onClick={() => fmt.exec("bold")}><Bold size={16}/></button>
+      <button title="Itálico" onClick={() => fmt.exec("italic")}><Italic size={16}/></button>
+      <button title="Sublinhado" onClick={() => fmt.exec("underline")}><Underline size={16}/></button>
+      <span className="noteToolDivider"/>
+      <div className="emojiWrap">
+        <button title="Cor do texto" onClick={() => { fmt.setColorOpen(o => !o); fmt.setHiliteOpen(false); }}><Palette size={16}/></button>
+        {fmt.colorOpen && (
+          <div className="colorPopover">
+            {NOTE_TEXT_COLORS.map(c => (
+              <button key={c} className="colorSwatch" style={{background:c}} onClick={() => fmt.applyTextColor(c)}/>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="emojiWrap">
+        <button title="Marca-texto" onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={16}/></button>
+        {fmt.hiliteOpen && (
+          <div className="colorPopover">
+            {NOTE_HILITE_COLORS.map(c => (
+              <button key={c} className={"colorSwatch"+(c==="transparent"?" colorSwatchNone":"")} style={{background:c==="transparent"?undefined:c}} title={c==="transparent"?"Remover marca-texto":undefined} onClick={() => fmt.applyHilite(c)}/>
+            ))}
+          </div>
+        )}
+      </div>
+      <span className="noteToolDivider"/>
+      <div className="emojiWrap">
+        <button title="Emoji" onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={16}/></button>
+        {fmt.emojiOpen && (
+          <div className="emojiPopover">
+            {EMOJIS.map(em => (
+              <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      <span className="noteToolDivider"/>
+      <button title="Alinhar à esquerda" onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={16}/></button>
+      <button title="Centralizar texto" onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={16}/></button>
+      <button title="Alinhar à direita" onClick={() => fmt.exec("justifyRight")}><AlignRight size={16}/></button>
+      <button title="Justificar" onClick={() => fmt.exec("justifyFull")}><AlignJustify size={16}/></button>
+      <span className="noteToolDivider"/>
+      <button title="Lista com marcadores" onClick={() => fmt.exec("insertUnorderedList")}><List size={16}/></button>
+      <button title="Lista numerada (1, 2, 3)" onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={16}/></button>
+      <button title="Lista de marcação" onClick={fmt.insertChecklist}><CheckSquare size={16}/></button>
+      <span className="noteToolDivider"/>
+      <button title="Transformar seleção em link" onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); }}><Link2 size={16}/></button>
+    </>
+  );
+}
+
+// Botão flutuante "Link" + caixinha de digitar a URL. Usa position:fixed,
+// então não depende de nenhum ancestral posicionado - pode ficar em
+// qualquer container.
+function NoteLinkFloatingUI({ fmt }) {
+  return (
+    <>
+      {fmt.linkBar && !fmt.linkPopover && (
+        <button
+          className="noteLinkBarBtn"
+          style={{ position: "fixed", top: fmt.linkBar.top, left: fmt.linkBar.left }}
+          onMouseDown={fmt.keepFocus}
+          onClick={fmt.openLinkPopover}
+          title="Transformar em link"
+        >
+          <Link2 size={13}/> Link
+        </button>
+      )}
+      {fmt.linkPopover && (
+        <div
+          className="noteLinkPopover"
+          style={{ position: "fixed", top: fmt.linkPopover.top, left: fmt.linkPopover.left }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
+          <input
+            className="noteLinkInput"
+            type="text"
+            placeholder="Cole ou digite o link..."
+            value={fmt.linkPopover.value}
+            autoFocus
+            onChange={e => fmt.setLinkPopover(p => ({ ...p, value: e.target.value }))}
+            onKeyDown={e => {
+              if (e.key === "Enter") { e.preventDefault(); fmt.confirmLink(); }
+              if (e.key === "Escape") { e.preventDefault(); fmt.closeLinkPopover(); }
+            }}
+          />
+          <button title="Confirmar link" onClick={fmt.confirmLink}><Check size={14}/></button>
+          {fmt.editingAnchorRef.current && (
+            <button title="Remover link" onClick={fmt.removeLink}><X size={14}/></button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [pageNum, setPageNum] = useState(book.current_page || 1);
@@ -2962,11 +3347,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     }, 600);
   };
 
-  const execNote = (command) => {
-    notesBodyRef.current?.focus();
-    document.execCommand(command, false, null);
-    scheduleNotesSave();
-  };
+  const fmt = useNoteFormatting(notesBodyRef, scheduleNotesSave);
 
   const togglePanel = (name) => {
     setPanel(p => {
@@ -3202,14 +3583,9 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <div className="notesPane">
               <div className="notesPaneHead"><b>Minhas anotações</b><span>sobre "{book.title}"</span></div>
               <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
-                <button title="Negrito" onClick={() => execNote("bold")}><Bold size={16}/></button>
-                <button title="Itálico" onClick={() => execNote("italic")}><Italic size={16}/></button>
-                <button title="Sublinhado" onClick={() => execNote("underline")}><Underline size={16}/></button>
-                <span className="noteToolDivider"/>
-                <button title="Lista com marcadores" onClick={() => execNote("insertUnorderedList")}><List size={16}/></button>
-                <button title="Lista numerada (1, 2, 3)" onClick={() => execNote("insertOrderedList")}><ListOrdered size={16}/></button>
+                <NoteFormatButtons fmt={fmt}/>
               </div>
-              <div className="notesPaneBody">
+              <div className="notesPaneBody" style={{position:"relative"}} onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
                 <div
                   ref={notesBodyRef}
                   className="noteTextarea noteRichBody"
@@ -3217,8 +3593,13 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                   suppressContentEditableWarning
                   onInput={scheduleNotesSave}
                   onBlur={flushNotes}
+                  onClick={fmt.handleBodyClick}
+                  onKeyDown={fmt.handleBodyKeyDown}
+                  onMouseUp={fmt.updateLinkBar}
+                  onKeyUp={fmt.updateLinkBar}
                   data-placeholder="Escreva suas anotações sobre este livro..."
                 />
+                <NoteLinkFloatingUI fmt={fmt}/>
               </div>
             </div>
           )}
@@ -5204,11 +5585,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     }, 600);
   };
 
-  const execNote = (command) => {
-    notesBodyRef.current?.focus();
-    document.execCommand(command, false, null);
-    scheduleNotesSave();
-  };
+  const fmt = useNoteFormatting(notesBodyRef, scheduleNotesSave);
 
   // Toca um "bip" curto via Web Audio API (não depende de nenhum arquivo de
   // áudio externo, então funciona offline como o resto do app).
@@ -5915,14 +6292,9 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
             <div className="notesPane">
               <div className="notesPaneHead"><b>Minhas anotações</b><span>sobre "{pdfDoc.title}"</span></div>
               <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
-                <button title="Negrito" onClick={() => execNote("bold")}><Bold size={16}/></button>
-                <button title="Itálico" onClick={() => execNote("italic")}><Italic size={16}/></button>
-                <button title="Sublinhado" onClick={() => execNote("underline")}><Underline size={16}/></button>
-                <span className="noteToolDivider"/>
-                <button title="Lista com marcadores" onClick={() => execNote("insertUnorderedList")}><List size={16}/></button>
-                <button title="Lista numerada (1, 2, 3)" onClick={() => execNote("insertOrderedList")}><ListOrdered size={16}/></button>
+                <NoteFormatButtons fmt={fmt}/>
               </div>
-              <div className="notesPaneBody">
+              <div className="notesPaneBody" style={{position:"relative"}} onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
                 <div
                   ref={notesBodyRef}
                   className="noteTextarea noteRichBody"
@@ -5930,8 +6302,13 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   suppressContentEditableWarning
                   onInput={scheduleNotesSave}
                   onBlur={flushNotes}
+                  onClick={fmt.handleBodyClick}
+                  onKeyDown={fmt.handleBodyKeyDown}
+                  onMouseUp={fmt.updateLinkBar}
+                  onKeyUp={fmt.updateLinkBar}
                   data-placeholder="Escreva suas anotações sobre este PDF..."
                 />
+                <NoteLinkFloatingUI fmt={fmt}/>
               </div>
             </div>
           )}
@@ -12229,33 +12606,13 @@ function Notes({entity, openNoteId, onConsumeOpenNote}){
   );
 }
 
-const EMOJIS = [
-  "😀","😄","😁","😂","🙂","😉","😍","🤩","🤔","😅",
-  "😎","🙃","😴","😭","😡","🥳","😇","🤗","👍","👎",
-  "👏","🙏","💪","✨","🔥","⭐","❤️","💡","✅","❌",
-  "📌","📅","⏰","🎯","📝","🚀","🎉","☕","💰","📚"
-];
-
-const NOTE_TEXT_COLORS = ["#f4f4f5", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
-const NOTE_HILITE_COLORS = ["transparent", "#ffe066", "#ffb3ab", "#a9e6a0", "#a9d4ff", "#e2b6ff"];
-
 function NoteEditor({ note, onClose, onSave }) {
   const [title, setTitle] = useState(note.title);
-  const [tags, setTags] = useState(note.tags || []);
-  const [tagInput, setTagInput] = useState("");
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [colorOpen, setColorOpen] = useState(false);
-  const [hiliteOpen, setHiliteOpen] = useState(false);
-  const [linkBar, setLinkBar] = useState(null);
-  const [linkPopover, setLinkPopover] = useState(null);
   const saveTimer = useRef(null);
   const bodyRef = useRef(null);
-  const savedRangeRef = useRef(null);
-  const editingAnchorRef = useRef(null);
 
   useEffect(() => {
     setTitle(note.title);
-    setTags(note.tags || []);
     if (bodyRef.current) bodyRef.current.innerHTML = note.content || "";
   }, [note.id]);
 
@@ -12270,267 +12627,11 @@ function NoteEditor({ note, onClose, onSave }) {
     scheduleSave({ title: v });
   };
 
-  const commitTags = (next) => {
-    setTags(next);
-    scheduleSave({ tags: next });
-  };
-
-  const addTagFromInput = () => {
-    const t = tagInput.trim().toLowerCase().replace(/^#/, "");
-    setTagInput("");
-    if (!t || tags.includes(t)) return;
-    commitTags([...tags, t]);
-  };
-
-  const removeTag = (t) => commitTags(tags.filter(x => x !== t));
-
   const handleBodyInput = () => {
     scheduleSave({ content: bodyRef.current?.innerHTML || "" });
   };
 
-  // Impede que o clique num botão da barra tire o foco/seleção do texto
-  const keepFocus = (e) => e.preventDefault();
-
-  const exec = (command, value = null) => {
-    bodyRef.current?.focus();
-    document.execCommand(command, false, value);
-    handleBodyInput();
-  };
-
-  const insertEmoji = (emoji) => {
-    bodyRef.current?.focus();
-    document.execCommand("insertText", false, emoji);
-    setEmojiOpen(false);
-    handleBodyInput();
-  };
-
-  const applyTextColor = (c) => {
-    exec("foreColor", c);
-    setColorOpen(false);
-  };
-
-  const applyHilite = (c) => {
-    bodyRef.current?.focus();
-    // hiliteColor é o comando padrão; backColor é o fallback usado por
-    // alguns navegadores mais antigos para o mesmo efeito.
-    const ok = document.execCommand("hiliteColor", false, c);
-    if (!ok) document.execCommand("backColor", false, c);
-    handleBodyInput();
-    setHiliteOpen(false);
-  };
-
-  // Mostra o botãozinho flutuante "Link" acima do trecho selecionado
-  // (só quando a seleção tem texto e está dentro do corpo da nota)
-  const updateLinkBar = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { setLinkBar(null); return; }
-    const range = sel.getRangeAt(0);
-    if (!bodyRef.current || !bodyRef.current.contains(range.commonAncestorContainer)) { setLinkBar(null); return; }
-    const rect = range.getBoundingClientRect();
-    if (!rect || (rect.width === 0 && rect.height === 0)) { setLinkBar(null); return; }
-    setLinkBar({
-      top: rect.top - 42,
-      left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76),
-    });
-  };
-
-  // Abre a caixinha flutuante onde se digita/cola o link. Se a seleção
-  // já estiver dentro de um link existente, entra em modo de edição
-  // (preenche com a URL atual e mostra o botão de remover).
-  const openLinkPopover = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0).cloneRange();
-    savedRangeRef.current = range;
-    let node = range.commonAncestorContainer;
-    if (node.nodeType === 3) node = node.parentElement;
-    const anchor = node?.closest?.("a");
-    editingAnchorRef.current = (anchor && bodyRef.current?.contains(anchor)) ? anchor : null;
-    const rect = range.getBoundingClientRect();
-    setLinkPopover({
-      top: Math.max(rect.top - 46, 8),
-      left: Math.min(Math.max(rect.left, 8), window.innerWidth - 268),
-      value: editingAnchorRef.current ? (editingAnchorRef.current.getAttribute("href") || "") : "",
-    });
-    setLinkBar(null);
-  };
-
-  const closeLinkPopover = () => {
-    setLinkPopover(null);
-    editingAnchorRef.current = null;
-    savedRangeRef.current = null;
-  };
-
-  const confirmLink = () => {
-    const raw = (linkPopover?.value || "").trim();
-    if (!raw) { closeLinkPopover(); return; }
-    const url = /^([a-z][a-z0-9+.-]*:)/i.test(raw) ? raw : `https://${raw}`;
-    bodyRef.current?.focus();
-    if (editingAnchorRef.current) {
-      editingAnchorRef.current.setAttribute("href", url);
-    } else {
-      const range = savedRangeRef.current;
-      if (range) {
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-        try {
-          const a = document.createElement("a");
-          a.href = url;
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.className = "note-link";
-          a.appendChild(range.extractContents());
-          range.insertNode(a);
-          const r = document.createRange();
-          r.setStartAfter(a);
-          r.collapse(true);
-          sel.removeAllRanges();
-          sel.addRange(r);
-        } catch (err) {
-          // seleção cruza limites incompatíveis (ex.: entre itens de marcação) - ignora
-        }
-      }
-    }
-    closeLinkPopover();
-    handleBodyInput();
-  };
-
-  const removeLink = () => {
-    const a = editingAnchorRef.current;
-    if (a && a.parentNode) {
-      const parent = a.parentNode;
-      while (a.firstChild) parent.insertBefore(a.firstChild, a);
-      parent.removeChild(a);
-    }
-    closeLinkPopover();
-    handleBodyInput();
-  };
-
-  // Cria a estrutura de um item de marcação (caixinha + texto)
-  const makeChecklistItem = () => {
-    const item = document.createElement("div");
-    item.className = "checklist-item";
-    const box = document.createElement("span");
-    box.className = "check-box";
-    box.setAttribute("contenteditable", "false");
-    const text = document.createElement("span");
-    text.className = "check-text";
-    item.appendChild(box);
-    item.appendChild(text);
-    return { item, text };
-  };
-
-  // Posiciona o cursor no início do texto do item informado
-  const placeCursorIn = (textEl) => {
-    const sel = window.getSelection();
-    const r = document.createRange();
-    r.selectNodeContents(textEl);
-    r.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(r);
-  };
-
-  // Acha o filho direto do editor (bodyRef) que contém o nó informado.
-  // É por causa disso que o item "bugava e criava do lado": ao inserir
-  // o novo item exatamente na posição do cursor, se o cursor estivesse
-  // dentro do texto de outro item (uma linha em "flex"), o novo item
-  // nascia DENTRO daquela linha em vez de virar uma linha nova.
-  const findTopLevelChild = (el, node) => {
-    let cur = node;
-    while (cur && cur.parentNode && cur.parentNode !== el) cur = cur.parentNode;
-    return cur && cur.parentNode === el ? cur : null;
-  };
-
-  const insertChecklist = () => {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.focus();
-    const sel = window.getSelection();
-    const { item, text } = makeChecklistItem();
-
-    let anchor = null;
-    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
-      anchor = findTopLevelChild(el, sel.getRangeAt(0).endContainer);
-    }
-
-    // Sempre inseridos como linha independente: depois da linha atual
-    // (se houver uma), ou no final do editor.
-    if (anchor) anchor.after(item);
-    else el.appendChild(item);
-
-    placeCursorIn(text);
-    handleBodyInput();
-  };
-
-  // Alterna o estado marcado/desmarcado ao clicar no quadradinho, e abre
-  // links em uma nova aba do navegador ao clicar neles (sem arrastar - se
-  // o clique tiver selecionado texto, deixa a seleção em pé em vez de navegar)
-  const handleBodyClick = (e) => {
-    const box = e.target.closest?.(".check-box");
-    if (box) {
-      e.preventDefault();
-      box.closest(".checklist-item")?.classList.toggle("checked");
-      handleBodyInput();
-      return;
-    }
-    const link = e.target.closest?.("a");
-    if (link && bodyRef.current?.contains(link)) {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) {
-        e.preventDefault();
-        const href = link.getAttribute("href");
-        if (href) window.open(href, "_blank", "noopener,noreferrer");
-      }
-    }
-  };
-
-  // Ao apertar Enter dentro de um item de marcação, cria automaticamente o próximo
-  // (mesmo comportamento das listas com bolinhas). Enter num item vazio sai da lista.
-  const handleBodyKeyDown = (e) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range0 = sel.getRangeAt(0);
-    const startNode = range0.startContainer;
-    const textEl = (startNode.nodeType === 3 ? startNode.parentElement : startNode)?.closest?.(".check-text");
-    if (!textEl) return;
-    e.preventDefault();
-    const itemEl = textEl.closest(".checklist-item");
-
-    // Se havia texto selecionado, remove antes de calcular o que sobrou
-    // (antes esse texto ficava "perdido" e a estrutura quebrava).
-    if (!range0.collapsed) range0.deleteContents();
-
-    // Pega o que ficou depois do cursor para levar para o novo item
-    let afterFrag = document.createDocumentFragment();
-    if (textEl.lastChild) {
-      const afterRange = document.createRange();
-      afterRange.setStart(range0.startContainer, range0.startOffset);
-      afterRange.setEndAfter(textEl.lastChild);
-      afterFrag = afterRange.extractContents();
-    }
-
-    const isEmpty = textEl.textContent.trim() === "" && afterFrag.textContent.trim() === "";
-
-    if (isEmpty) {
-      // Enter num item vazio: sai da lista de marcação
-      const exitLine = document.createElement("div");
-      exitLine.innerHTML = "<br>";
-      itemEl.replaceWith(exitLine);
-      const r = document.createRange();
-      r.setStart(exitLine, 0);
-      r.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r);
-    } else {
-      const { item: newItem, text } = makeChecklistItem();
-      text.appendChild(afterFrag);
-      itemEl.after(newItem);
-      placeCursorIn(text);
-    }
-    handleBodyInput();
-  };
+  const fmt = useNoteFormatting(bodyRef, handleBodyInput);
 
   const handleClose = () => {
     clearTimeout(saveTimer.current);
@@ -12550,119 +12651,25 @@ function NoteEditor({ note, onClose, onSave }) {
           <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           <button onClick={handleClose}><X/></button>
         </div>
-        <div className="noteTagsRow">
-          <Tags size={14}/>
-          {tags.map(t => (
-            <span key={t} className="noteTagChip">#{t} <button onClick={()=>removeTag(t)}><X size={11}/></button></span>
-          ))}
-          <input
-            className="noteTagInput"
-            value={tagInput}
-            onChange={e=>setTagInput(e.target.value)}
-            onKeyDown={e=>{ if(e.key==="Enter"||e.key===","){ e.preventDefault(); addTagFromInput(); } }}
-            onBlur={addTagFromInput}
-            placeholder={tags.length?"+ tag":"Adicionar tag..."}
-          />
-        </div>
-        <div className="noteToolbar" onMouseDown={keepFocus}>
-          <button title="Negrito" onClick={() => exec("bold")}><Bold size={16}/></button>
-          <button title="Itálico" onClick={() => exec("italic")}><Italic size={16}/></button>
-          <button title="Sublinhado" onClick={() => exec("underline")}><Underline size={16}/></button>
-          <span className="noteToolDivider"/>
-          <div className="emojiWrap">
-            <button title="Cor do texto" onClick={() => { setColorOpen(o => !o); setHiliteOpen(false); }}><Palette size={16}/></button>
-            {colorOpen && (
-              <div className="colorPopover">
-                {NOTE_TEXT_COLORS.map(c => (
-                  <button key={c} className="colorSwatch" style={{background:c}} onClick={() => applyTextColor(c)}/>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="emojiWrap">
-            <button title="Marca-texto" onClick={() => { setHiliteOpen(o => !o); setColorOpen(false); }}><PaintBucket size={16}/></button>
-            {hiliteOpen && (
-              <div className="colorPopover">
-                {NOTE_HILITE_COLORS.map(c => (
-                  <button key={c} className={"colorSwatch"+(c==="transparent"?" colorSwatchNone":"")} style={{background:c==="transparent"?undefined:c}} title={c==="transparent"?"Remover marca-texto":undefined} onClick={() => applyHilite(c)}/>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="noteToolDivider"/>
-          <div className="emojiWrap">
-            <button title="Emoji" onClick={() => setEmojiOpen(o => !o)}><Smile size={16}/></button>
-            {emojiOpen && (
-              <div className="emojiPopover">
-                {EMOJIS.map(em => (
-                  <button key={em} className="emojiBtn" onClick={() => insertEmoji(em)}>{em}</button>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="noteToolDivider"/>
-          <button title="Alinhar à esquerda" onClick={() => exec("justifyLeft")}><AlignLeft size={16}/></button>
-          <button title="Centralizar texto" onClick={() => exec("justifyCenter")}><AlignCenter size={16}/></button>
-          <button title="Alinhar à direita" onClick={() => exec("justifyRight")}><AlignRight size={16}/></button>
-          <button title="Justificar" onClick={() => exec("justifyFull")}><AlignJustify size={16}/></button>
-          <span className="noteToolDivider"/>
-          <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={16}/></button>
-          <button title="Lista numerada (1, 2, 3)" onClick={() => exec("insertOrderedList")}><ListOrdered size={16}/></button>
-          <button title="Lista de marcação" onClick={insertChecklist}><CheckSquare size={16}/></button>
-          <span className="noteToolDivider"/>
-          <button title="Transformar seleção em link" onClick={() => { if (window.getSelection()?.isCollapsed === false) openLinkPopover(); }}><Link2 size={16}/></button>
+        <div className="noteToolbar" onMouseDown={fmt.keepFocus}>
+          <NoteFormatButtons fmt={fmt}/>
           <span className="noteToolDivider"/>
           <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
         </div>
-        <div className="noteEditorBody" onClick={() => { setEmojiOpen(false); setColorOpen(false); setHiliteOpen(false); closeLinkPopover(); }}>
+        <div className="noteEditorBody" onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
           <div
             ref={bodyRef}
             className="noteTextarea noteRichBody"
             contentEditable
             suppressContentEditableWarning
             onInput={handleBodyInput}
-            onClick={handleBodyClick}
-            onKeyDown={handleBodyKeyDown}
-            onMouseUp={updateLinkBar}
-            onKeyUp={updateLinkBar}
+            onClick={fmt.handleBodyClick}
+            onKeyDown={fmt.handleBodyKeyDown}
+            onMouseUp={fmt.updateLinkBar}
+            onKeyUp={fmt.updateLinkBar}
             data-placeholder="Escreva o que quiser..."
           />
-          {linkBar && !linkPopover && (
-            <button
-              className="noteLinkBarBtn"
-              style={{ position: "fixed", top: linkBar.top, left: linkBar.left }}
-              onMouseDown={keepFocus}
-              onClick={openLinkPopover}
-              title="Transformar em link"
-            >
-              <Link2 size={13}/> Link
-            </button>
-          )}
-          {linkPopover && (
-            <div
-              className="noteLinkPopover"
-              style={{ position: "fixed", top: linkPopover.top, left: linkPopover.left }}
-              onMouseDown={e => e.stopPropagation()}
-              onClick={e => e.stopPropagation()}
-            >
-              <input
-                className="noteLinkInput"
-                type="text"
-                placeholder="Cole ou digite o link..."
-                value={linkPopover.value}
-                autoFocus
-                onChange={e => setLinkPopover(p => ({ ...p, value: e.target.value }))}
-                onKeyDown={e => {
-                  if (e.key === "Enter") { e.preventDefault(); confirmLink(); }
-                  if (e.key === "Escape") { e.preventDefault(); closeLinkPopover(); }
-                }}
-              />
-              <button title="Confirmar link" onClick={confirmLink}><Check size={14}/></button>
-              {editingAnchorRef.current && (
-                <button title="Remover link" onClick={removeLink}><X size={14}/></button>
-              )}
-            </div>
-          )}
+          <NoteLinkFloatingUI fmt={fmt}/>
         </div>
       </div>
     </div>
