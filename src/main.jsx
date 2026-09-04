@@ -44,6 +44,7 @@ import { recordingAudioBitsPerSecond } from "./lib/audioOptimize";
 import { useReadingStats, currentMonthKey } from "./lib/readingStats";
 import { createBlankPdfBlob } from "./lib/pdfPages";
 import { renderCoverThumbFromDoc } from "./lib/pdfThumb";
+import { generateCoverArt } from "./lib/bookCoverArt";
 import {
   strokeOutlinePath, detectShapeFromPoints, hitTestAnnotation, findAnnotationAt, annotationBBox,
   translateAnnotation, resizeShapeAnnotation, scaleAnnotationFromAnchor, eraseAnnotationAtPoint, exportAnnotatedPdf, drawAnnotationOnCanvas,
@@ -86,12 +87,52 @@ import { uploadStudyPdfGroupCover, deleteStudyPdfGroupCover } from "./lib/studyP
 // o PDF inteiro pra gerar essa capa quando ela ainda não existe.
 const EgressSaverContext = React.createContext(false);
 
+// Modo "Capas geradas": quando ligado, livros e PDFs de estudo nunca
+// baixam nem guardam a miniatura real (cover_thumb) — mostram sempre uma
+// capa desenhada localmente a partir do título (ver bookCoverArt.js).
+// Egress de capa fica em zero: nem a listagem transfere o base64, nem o
+// fallback baixa o PDF pra gerar uma nova.
+const GeneratedCoversContext = React.createContext(false);
+
+// Capa "de mentira" desenhada 100% no cliente (SVG), sem nenhum byte de
+// rede: cor e iniciais vêm de um hash determinístico do título, então o
+// mesmo item (livro, filme, jogo, pasta...) sempre cai na mesma cor em
+// qualquer aparelho. `compact` tira a faixa de título embaixo — usado em
+// ícones pequenos (linha de filme/jogo na lista) onde não cabe texto.
+function GeneratedCoverArt({ title, compact = false }) {
+  const { bg1, bg2, fg, initials } = generateCoverArt(title);
+  const gradId = "gcg" + Math.abs([...String(title || "")].reduce((h, c) => (h * 33) ^ c.charCodeAt(0), 5381)).toString(36);
+  return (
+    <div className={"bookCoverImg generatedCover" + (compact ? " compact" : "")}>
+      <svg viewBox="0 0 100 140" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={bg1} />
+            <stop offset="100%" stopColor={bg2} />
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="100" height="140" fill={`url(#${gradId})`} />
+        {!compact && <rect x="0" y="0" width="6" height="140" fill="#00000030" />}
+        {!compact && <line x1="14" y1="18" x2="86" y2="18" stroke={fg} strokeOpacity="0.35" strokeWidth="1.5" />}
+        {!compact && <line x1="14" y1="122" x2="86" y2="122" stroke={fg} strokeOpacity="0.35" strokeWidth="1.5" />}
+        <text x="50" y="78" textAnchor="middle" fontSize="30" fontWeight="700" fill={fg} fontFamily="inherit">{initials}</text>
+      </svg>
+      {!compact && <span className="generatedCoverTitle">{title}</span>}
+    </div>
+  );
+}
+
 // Substitui os pares "{src ? <img src={src}/> : <Fallback/>}" espalhados
 // pelo app: com o modo economia ligado, nunca chega a montar a tag <img>
-// (senão o navegador dispara o request de qualquer forma).
-function SaverImg({ src, alt, fallback, className, wrapClassName }) {
+// (senão o navegador dispara o request de qualquer forma). Com o modo
+// "Capas geradas" ligado e um `title` informado, nem tenta o real: mostra
+// direto a capa desenhada localmente (egress zero, nem o placeholder pede
+// a imagem real depois).
+function SaverImg({ src, alt, fallback, className, wrapClassName, title, compact }) {
   const saver = React.useContext(EgressSaverContext);
-  const cachedSrc = useCachedImageUrl(saver ? null : src);
+  const generated = React.useContext(GeneratedCoversContext);
+  const cachedSrc = useCachedImageUrl((saver || (generated && title)) ? null : src);
+  if (generated && title) return <GeneratedCoverArt title={title} compact={compact}/>;
   if (!src || saver || !cachedSrc) return fallback || null;
   const img = <img src={cachedSrc} alt={alt || ""} className={className} />;
   return wrapClassName ? <div className={wrapClassName}>{img}</div> : img;
@@ -447,10 +488,16 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Listagem enxuta (sem notes/drawings/highlights/favorite_excerpts — texto
   // e JSON que só importam quando o item é aberto no leitor). Ver
   // useEntity/fetchFull, que completa a linha inteira nesse momento.
-  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,cover_thumb,group_id,sort_order,created_at", enabled: livrosVisitado});
+  // Modo "Capas geradas": zera o egress de capas de livro/PDF de estudo —
+  // troca a miniatura real (baixada/guardada como base64) por uma capa
+  // desenhada no cliente. Persistido localmente, não sincroniza entre
+  // aparelhos (cada um decide se quer economizar). Precisa vir antes das
+  // entidades books/studyPdfs abaixo, que usam esse valor no listSelect.
+  const [generatedCovers, setGeneratedCovers] = usePersistentState("libano-generated-covers", false);
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: livrosVisitado});
   const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true, enabled: livrosVisitado});
   const readingStats = useReadingStats(session);
-  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,cover_thumb,sort_order,created_at", enabled: pdfEstudoVisitado});
+  const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
   // Flashcards soltos (criados a partir de um trecho selecionado no Leitor
   // de PDF, fora de uma lista) só são exibidos dentro da própria aba
@@ -985,6 +1032,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   };
 
   return <EgressSaverContext.Provider value={egressSaver}>
+    <GeneratedCoversContext.Provider value={generatedCovers}>
   <div className="app">
     <aside
       className={"sidebar "+(mobileOpen?"expanded":"")}
@@ -1191,6 +1239,25 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           </small>
         </div>
         <div className="notifSettingsBlock">
+          <label className="notifToggleRow">
+            <span><ImageOff size={15}/> Capas geradas (livros e PDFs)</span>
+            <span className={"switchPill"+(generatedCovers?" on":"")}>
+              <input type="checkbox" checked={generatedCovers} onChange={e=>{
+                const on = e.target.checked;
+                setGeneratedCovers(on);
+                // Recarrega as listas já sem (ou de novo com) a coluna
+                // cover_thumb, em vez de esperar o cache de 15min vencer.
+                books.refresh(true);
+                studyPdfs.refresh(true);
+              }}/>
+              <span className="switchKnob"/>
+            </span>
+          </label>
+          <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
+            Troca a capa real dos livros e PDFs de estudo por uma capa desenhada no aparelho, a partir do título — zera o consumo de dados com capas: nada é baixado nem enviado pra gerar ou mostrar a miniatura. Livros já enviados continuam com o PDF intacto, só a capa exibida muda.
+          </small>
+        </div>
+        <div className="notifSettingsBlock">
           <label className="notifToggleRow" style={{cursor:"default"}}>
             <span><Lock size={15}/> Bloqueio por PIN</span>
             {pinHash
@@ -1288,6 +1355,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       </div></div>}
     </main>
   </div>
+  </GeneratedCoversContext.Provider>
   </EgressSaverContext.Provider>
 }
 
@@ -2039,9 +2107,14 @@ const coverCache = new Map();
 // nunca mais baixa o arquivo de novo, nem nesse nem em outro aparelho.
 function BookCoverThumb({ book, onCoverGenerated }) {
   const saver = React.useContext(EgressSaverContext);
+  const generated = React.useContext(GeneratedCoversContext);
   const [src, setSrc] = useState(book.cover_thumb || coverCache.get(book.file_path) || null);
   useEffect(() => {
     let active = true;
+    // Modo "capas geradas": nunca baixa nem lê cover_thumb — a capa
+    // desenhada localmente (ver o return abaixo) já resolve tudo com
+    // egress zero, então nem entra nesse efeito.
+    if (generated) return;
     if (book.cover_thumb) { setSrc(book.cover_thumb); return; }
     // Modo economia: não baixa o PDF inteiro só pra gerar uma capa que
     // ainda não existe — mostra o placeholder até a pessoa desligar o modo
@@ -2062,7 +2135,8 @@ function BookCoverThumb({ book, onCoverGenerated }) {
       }
     })();
     return () => { active = false; };
-  }, [book.file_path, book.cover_thumb, saver]);
+  }, [book.file_path, book.cover_thumb, saver, generated]);
+  if (generated) return <GeneratedCoverArt title={book.title}/>;
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
@@ -3663,6 +3737,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 }
 
 function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEntity }) {
+  const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const groups = groupsEntity.data;
   const filtered = data.filter(x => x.status === status);
@@ -3697,8 +3772,10 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
       const title = window.prompt("Título do livro:", defaultTitle) || defaultTitle;
       // Gera a capa a partir do PDF que já está em memória (sem custo extra de
       // rede) e guarda junto no banco — a estante nunca mais precisa baixar
-      // esse arquivo de novo só pra mostrar a miniatura.
-      const cover_thumb = await renderCoverThumbFromDoc(doc).catch(() => null);
+      // esse arquivo de novo só pra mostrar a miniatura. Pulado no modo
+      // "Capas geradas": a capa desenhada localmente já resolve, sem gastar
+      // nem os bytes desse base64 na gravação/listagem.
+      const cover_thumb = generatedCovers ? null : await renderCoverThumbFromDoc(doc).catch(() => null);
       const filePath = await uploadBookFile(session.user.id, id, file);
       await add({ id, title, status, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], group_id: currentGroupId, cover_thumb });
     } catch (err) {
@@ -3951,6 +4028,7 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
 }
 
 function LibraryDashboard({ entity, setPage, readingStats }) {
+  const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data } = entity;
   const total = data.length;
   const lendo = data.filter(b => b.status === "lendo");
@@ -4011,8 +4089,8 @@ function LibraryDashboard({ entity, setPage, readingStats }) {
             const pct = b.total_pages ? Math.min(100, Math.round((b.current_page / b.total_pages) * 100)) : 0;
             return (
               <div className="libraryReadingRow" key={b.id} onClick={()=>setPage("Livros Lendo")}>
-                <div className="bookCoverImg libraryReadingCover">
-                  {b.cover_thumb ? <img src={b.cover_thumb} alt={b.title}/> : <div className="bookCoverPlaceholder"><FileText size={20}/></div>}
+                <div className="libraryReadingCover">
+                  {(!generatedCovers && b.cover_thumb) ? <div className="bookCoverImg"><img src={b.cover_thumb} alt={b.title}/></div> : <GeneratedCoverArt title={b.title}/>}
                 </div>
                 <div className="libraryReadingInfo">
                   <b>{b.title}</b>
@@ -4035,9 +4113,11 @@ const studyPdfCoverCache = new Map();
 
 function StudyPdfCoverThumb({ pdfDoc, onCoverGenerated }) {
   const saver = React.useContext(EgressSaverContext);
+  const generated = React.useContext(GeneratedCoversContext);
   const [src, setSrc] = useState(pdfDoc.cover_thumb || studyPdfCoverCache.get(pdfDoc.file_path) || null);
   useEffect(() => {
     let active = true;
+    if (generated) return;
     if (pdfDoc.cover_thumb) { setSrc(pdfDoc.cover_thumb); return; }
     if (saver) return;
     if (!pdfDoc.file_path || studyPdfCoverCache.has(pdfDoc.file_path)) return;
@@ -4055,7 +4135,8 @@ function StudyPdfCoverThumb({ pdfDoc, onCoverGenerated }) {
       }
     })();
     return () => { active = false; };
-  }, [pdfDoc.file_path, pdfDoc.cover_thumb, saver]);
+  }, [pdfDoc.file_path, pdfDoc.cover_thumb, saver, generated]);
+  if (generated) return <GeneratedCoverArt title={pdfDoc.title}/>;
   return <div className="bookCoverImg">{src ? <img src={src} alt={pdfDoc.title}/> : <div className="bookCoverPlaceholder"><FileText size={28}/></div>}</div>;
 }
 
@@ -4096,6 +4177,7 @@ function StudyPdfTile({ pdfDoc, groups, menuOpen, opening, onToggleMenu, onOpen,
 }
 
 function StudyPdfGroupTile({ group, count, unitLabel="PDF", menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover, dropActive, onDragEnterZone, onDragLeaveZone, onDropZone }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const coverInputRef = useRef(null);
   return (
     <div
@@ -4107,7 +4189,7 @@ function StudyPdfGroupTile({ group, count, unitLabel="PDF", menuOpen, onToggleMe
       onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); onDropZone?.(); }}
     >
       <div className="bookCoverWrap groupCover">
-        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Folder size={34}/>}/>
+        <SaverImg src={group.cover_image} alt={group.name} title={group.name} wrapClassName="bookCoverImg" fallback={<Folder size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -4123,8 +4205,8 @@ function StudyPdfGroupTile({ group, count, unitLabel="PDF", menuOpen, onToggleMe
       />
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
-        <button onClick={()=>coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
-        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        {!generated && <button onClick={()=>coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>}
+        {!generated && group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
         <button onClick={onRename}><Pencil size={13}/> Renomear</button>
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir pasta</button>
       </div>}
@@ -6481,7 +6563,7 @@ function NewPdfDialog({ onClose, onCreate, creating }) {
 // ---------- Estante de PDFs de estudo ----------
 
 function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }) {
-
+  const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const groups = groupsEntity.data;
   const [currentGroupId, setCurrentGroupId] = useState(null);
@@ -6516,8 +6598,8 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
       const title = window.prompt("Título do PDF:", defaultTitle) || defaultTitle;
       // Gera a capa a partir do PDF que já está em memória (sem custo extra
       // de rede) e guarda junto no banco — ver comentário equivalente em
-      // BookShelf.handleFile.
-      const cover_thumb = await renderCoverThumbFromDoc(doc).catch(() => null);
+      // BookShelf.handleFile. Pulado no modo "Capas geradas".
+      const cover_thumb = generatedCovers ? null : await renderCoverThumbFromDoc(doc).catch(() => null);
       const filePath = await uploadStudyPdfFile(session.user.id, id, file);
       await add({ id, title, file_path: filePath, total_pages: totalPages, current_page: 1, favorite_pages: [], important_pages: [], favorite_excerpts: [], notes: "", drawings: {}, group_id: currentGroupId, cover_thumb });
     } catch (err) {
@@ -8626,11 +8708,12 @@ function WorkoutShelf({ foldersEntity, exercisesEntity, session }) {
 }
 
 function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const coverInputRef = useRef(null);
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        <SaverImg src={folder.cover_image} alt={folder.name} wrapClassName="bookCoverImg" fallback={<Dumbbell size={34}/>}/>
+        <SaverImg src={folder.cover_image} alt={folder.name} title={folder.name} wrapClassName="bookCoverImg" fallback={<Dumbbell size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -8646,8 +8729,8 @@ function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRe
       />
       <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
-        <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {folder.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
-        {folder.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        {!generated && <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {folder.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>}
+        {!generated && folder.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
         <button onClick={onRename}><Pencil size={13}/> Renomear</button>
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir treino</button>
       </div>}
@@ -9152,11 +9235,12 @@ function MediaShelf({ groupsEntity, itemsEntity, session }) {
 }
 
 function MediaGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const coverInputRef = useRef(null);
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Clapperboard size={34}/>}/>
+        <SaverImg src={group.cover_image} alt={group.name} title={group.name} wrapClassName="bookCoverImg" fallback={<Clapperboard size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -9168,8 +9252,8 @@ function MediaGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onR
       />
       <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
-        <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
-        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        {!generated && <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>}
+        {!generated && group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
         <button onClick={onRename}><Pencil size={13}/> Renomear</button>
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
@@ -9214,7 +9298,7 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
-        <SaverImg src={item.photo} alt={item.title} fallback={isSeries ? <Clapperboard size={22}/> : <Film size={22}/>}/>
+        <SaverImg src={item.photo} alt={item.title} title={item.title} compact fallback={isSeries ? <Clapperboard size={22}/> : <Film size={22}/>}/>
       </div>
       <div className="exerciseInfo">
         <b>{item.title}</b>
@@ -9246,6 +9330,7 @@ function MediaItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatus
 }
 
 function MediaItemForm({ item, kind, session, onCancel, onSave }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const isSeries = kind === "serie";
   const [itemId] = useState(() => item?.id || crypto.randomUUID());
   const [title, setTitle] = useState(item?.title || "");
@@ -9328,14 +9413,23 @@ function MediaItemForm({ item, kind, session, onCancel, onSave }) {
       </div>
 
       <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
-        <label>Foto (opcional)
-          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
-            {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : (isSeries ? <Clapperboard size={28}/> : <Film size={28}/>)}
-          </div>
-          <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
-          <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
-          {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
-        </label>
+        {generated ? (
+          <label>Capa
+            <div className="exerciseGifPreview shoppingPhotoPreview" style={{overflow:"hidden"}}>
+              <GeneratedCoverArt title={title || (isSeries ? "Nova série" : "Novo filme")} compact/>
+            </div>
+            <small className="boardSettingsHint">Capas geradas estão ativas nas Configurações — a capa é desenhada a partir do título, sem upload.</small>
+          </label>
+        ) : (
+          <label>Foto (opcional)
+            <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
+              {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : (isSeries ? <Clapperboard size={28}/> : <Film size={28}/>)}
+            </div>
+            <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
+            <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
+            {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
+          </label>
+        )}
         <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder={isSeries ? "Ex.: Breaking Bad" : "Ex.: Interestelar"}/></label>
         <label>Link para assistir (opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
         <label>Status
@@ -9556,11 +9650,12 @@ function GameShelf({ groupsEntity, itemsEntity, session }) {
 }
 
 function GameGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const coverInputRef = useRef(null);
   return (
     <div className="bookTile groupTile" onClick={onOpen}>
       <div className="bookCoverWrap groupCover">
-        <SaverImg src={group.cover_image} alt={group.name} wrapClassName="bookCoverImg" fallback={<Gamepad2 size={34}/>}/>
+        <SaverImg src={group.cover_image} alt={group.name} title={group.name} wrapClassName="bookCoverImg" fallback={<Gamepad2 size={34}/>}/>
       </div>
       <input
         ref={coverInputRef}
@@ -9572,8 +9667,8 @@ function GameGroupTile({ group, count, pct, menuOpen, onToggleMenu, onOpen, onRe
       />
       <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
-        <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
-        {group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
+        {!generated && <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {group.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>}
+        {!generated && group.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
         <button onClick={onRename}><Pencil size={13}/> Renomear</button>
         <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
       </div>}
@@ -9588,7 +9683,7 @@ function GameItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusC
   return (
     <div className="exerciseRow">
       <div className="exerciseThumb">
-        <SaverImg src={item.photo} alt={item.title} fallback={<Gamepad2 size={22}/>}/>
+        <SaverImg src={item.photo} alt={item.title} title={item.title} compact fallback={<Gamepad2 size={22}/>}/>
       </div>
       <div className="exerciseInfo">
         <b>{item.title}</b>
@@ -9615,6 +9710,7 @@ function GameItemRow({ item, menuOpen, onToggleMenu, onEdit, onDelete, onStatusC
 }
 
 function GameItemForm({ item, session, onCancel, onSave }) {
+  const generated = React.useContext(GeneratedCoversContext);
   const [itemId] = useState(() => item?.id || crypto.randomUUID());
   const [title, setTitle] = useState(item?.title || "");
   const [link, setLink] = useState(item?.link || "");
@@ -9667,14 +9763,23 @@ function GameItemForm({ item, session, onCancel, onSave }) {
       </div>
 
       <div className="exerciseFormFields" style={{ maxWidth: 520 }}>
-        <label>Foto (opcional)
-          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
-            {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : <Gamepad2 size={28}/>}
-          </div>
-          <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
-          <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
-          {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
-        </label>
+        {generated ? (
+          <label>Capa
+            <div className="exerciseGifPreview shoppingPhotoPreview" style={{overflow:"hidden"}}>
+              <GeneratedCoverArt title={title || "Novo jogo"} compact/>
+            </div>
+            <small className="boardSettingsHint">Capas geradas estão ativas nas Configurações — a capa é desenhada a partir do título, sem upload.</small>
+          </label>
+        ) : (
+          <label>Foto (opcional)
+            <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => photoInputRef.current?.click()}>
+              {photo ? <img src={cachedPhoto || photo} alt="Prévia"/> : <Gamepad2 size={28}/>}
+            </div>
+            <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handlePhotoFile(f); }}/>
+            <button type="button" className="ghost" onClick={() => photoInputRef.current?.click()}>{uploadingPhoto ? "Enviando..." : (photo ? "Trocar foto" : "Escolher foto")}</button>
+            {photo && <button type="button" className="ghost" onClick={handleRemovePhoto}><X size={13}/> Remover foto</button>}
+          </label>
+        )}
         <label>Título<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: The Legend of Zelda: Tears of the Kingdom"/></label>
         <label>Link (loja, wiki etc. — opcional)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
         <label>Status
