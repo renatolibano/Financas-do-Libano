@@ -23,7 +23,18 @@ const cacheKey = (table, userId) => `cache:${table}:${userId}`;
 // são necessárias quando o item é aberto — combine com fetchFull(id) pra
 // buscar a linha inteira nesse momento, sem pesar a listagem.
 export function useEntity(table, initialData, session, order = "asc", opts = {}) {
-  const { orderable = false, listSelect = "*", enabled = true, ttlMs = CACHE_TTL_MS } = opts;
+  const { orderable = false, listSelect = "*", enabled = true, ttlMs = CACHE_TTL_MS, gteColumn = null, gteValue = null, orFilter = null } = opts;
+  // gteColumn/gteValue e orFilter: filtro opcional de "janela" aplicado na
+  // busca da nuvem — pra tabelas de histórico que crescem sem limite (ex.:
+  // um log por dia, um registro por conclusão) mas cuja tela só mostra os
+  // últimos N dias. Sem isso, cada reabertura baixaria anos de linhas que
+  // nunca aparecem na UI. Mesmo problema que "transactions" já resolvia com
+  // paginação por mês (ver useTransactions.js) — aqui, como não há "carregar
+  // mês anterior" nessas telas, um corte fixo (gte) já resolve.
+  // gteColumn/gteValue vira "coluna >= valor" (ex.: date >= corte); orFilter
+  // é uma string de filtro OR do PostgREST já pronta (ex.: pra manter todo
+  // item pendente inteiro, mas só os concluídos dentro da janela). Use um ou
+  // outro conforme a tabela precisar — nunca os dois ao mesmo tempo aqui.
   // enabled=false adia a PRIMEIRA busca na nuvem (ex.: tabela de uma aba que
   // ainda não foi aberta nesta sessão) — nenhuma requisição sai até virar
   // true. Note que isso não muda o modo (cloud continua cloud): inserções,
@@ -78,6 +89,8 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       }
       setCloudLoading(true);
       let query = supabase.from(table).select(listSelect);
+      if (gteColumn && gteValue) query = query.gte(gteColumn, gteValue);
+      if (orFilter) query = query.or(orFilter);
       query = orderable
         ? query.order("sort_order", { ascending: true, nullsFirst: false }).order("created_at", { ascending: order === "asc" })
         : query.order("created_at", { ascending: order === "asc" });
@@ -91,7 +104,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
       setCloudLoading(false);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [cloud, enabled, table, order, orderable, listSelect, ttlMs, userId, setCloudData]
+    [cloud, enabled, table, order, orderable, listSelect, ttlMs, userId, setCloudData, gteColumn, gteValue, orFilter]
   );
 
   useEffect(() => {

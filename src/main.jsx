@@ -534,14 +534,23 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Matemática) e os registros de quais deles foram feitos em cada dia.
   // As três só são lidas dentro de ActivityChartPage — adiadas até a pessoa
   // abrir a aba Gráfico nesta sessão, em vez de baixadas toda vez que o
-  // app abre (activity_tracker_logs em especial só cresce com o tempo).
+  // app abre.
   const graficoVisitado = visitedPages.has("Gráfico");
+  // activity_tracker_logs (um registro por categoria/dia) e
+  // activity_tracker_todos (um por afazer concluído) crescem sem limite —
+  // igual "transactions" antes de ganhar paginação por mês (ver
+  // useTransactions.js). Como o maior período que a aba Gráfico mostra é
+  // 365 dias (ver ACTIVITY_CHART_PERIODS), pedimos só isso da nuvem (com
+  // alguns dias de folga pro ajuste de "hora de virada do dia"), em vez de
+  // rebaixar anos de histórico toda vez que a aba é aberta. Categorias
+  // pendentes continuam vindo inteiras (não têm data de conclusão).
+  const activityHistoryCutoff = isoAddDays(todayISO(), -370);
   const activityItems = useEntity("activity_tracker_items", [], session, "asc", {orderable:true, enabled: graficoVisitado});
-  const activityLogs = useEntity("activity_tracker_logs", [], session, "asc", {enabled: graficoVisitado});
+  const activityLogs = useEntity("activity_tracker_logs", [], session, "asc", {enabled: graficoVisitado, gteColumn: "date", gteValue: activityHistoryCutoff});
   // Tarefas ("afazeres") de fato: texto + categoria (activity_tracker_items)
   // + status feito/pendente. É a partir delas que a aba Gráfico monta a
   // lista de pendentes/concluídos e os gráficos por categoria.
-  const activityTodos = useEntity("activity_tracker_todos", [], session, "asc", {enabled: graficoVisitado});
+  const activityTodos = useEntity("activity_tracker_todos", [], session, "asc", {enabled: graficoVisitado, orFilter: `done.eq.false,completed_at.gte.${activityHistoryCutoff}`});
   // Treino, Filmes e Séries e Jogos só são usados dentro da própria aba (o
   // resumo pra IA lê .data, mas tudo bem se vier vazio até a aba ser aberta)
   // — então adiamos a primeira busca até a pessoa realmente entrar em cada
