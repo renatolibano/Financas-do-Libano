@@ -20,7 +20,7 @@ import {
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, FolderInput, ImageOff, WifiOff, Lock, AlertTriangle,
   Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3,
-  Mic, Headphones
+  Mic, Headphones, Quote
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -592,6 +592,23 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // fotos de flashcard/compras/mídia/jogos e gifs de treino (ver SaverImg,
   // acima). Persistido localmente, não sincroniza entre aparelhos.
   const [egressSaver, setEgressSaver] = usePersistentState("libano-egress-saver", false);
+  // Frases motivacionais (Configurações): lista definida pela pessoa, mostrada
+  // uma de cada vez, ao acaso, no topo da Visão Geral. Persistido localmente.
+  const [headerQuotes, setHeaderQuotes] = usePersistentState("libano-header-quotes", []);
+  const [newQuoteText, setNewQuoteText] = useState("");
+  const addHeaderQuote = () => {
+    const text = newQuoteText.trim();
+    if (!text) return;
+    setHeaderQuotes(list => [...list, text]);
+    setNewQuoteText("");
+  };
+  const removeHeaderQuote = (idx) => setHeaderQuotes(list => list.filter((_, i) => i !== idx));
+  // Escolhe uma frase ao acaso sempre que a Visão Geral é (re)aberta ou a
+  // lista de frases muda — não muda a cada clique dentro da própria aba.
+  const currentHeaderQuote = useMemo(() => {
+    if (!headerQuotes.length) return null;
+    return headerQuotes[Math.floor(Math.random() * headerQuotes.length)];
+  }, [page, headerQuotes]);
   const setNotifKind = (kind, on) => setNotifSettings(s => ({ ...s, kinds: { ...s.kinds, [kind]: on } }));
   const [mobileNavExpanded,setMobileNavExpanded] = useState(false);
   const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
@@ -1035,7 +1052,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div><div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><Quote size={14}/><span>{currentHeaderQuote}</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
       {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
@@ -1114,6 +1131,28 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
             ))}
           </select>
         </label>
+        <div className="notifSettingsBlock">
+          <label className="notifToggleRow" style={{cursor:"default"}}>
+            <span><Quote size={15}/> Frases da Visão Geral</span>
+          </label>
+          <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
+            Aparecem, uma de cada vez e ao acaso, no topo da Visão Geral.
+          </small>
+          {headerQuotes.length > 0 && (
+            <div className="notifKindsList">
+              {headerQuotes.map((q, i) => (
+                <div key={i} className="notifKindRow" style={{cursor:"default"}}>
+                  <span className="notifKindLabel" style={{flex:1, minWidth:0}}><span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block"}}>{q}</span></span>
+                  <button type="button" className="pdfExcerptDelete" title="Remover frase" onClick={()=>removeHeaderQuote(i)}><Trash2 size={13}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <form style={{display:"flex", gap:8, marginTop:8}} onSubmit={e=>{e.preventDefault(); addHeaderQuote();}}>
+            <input type="text" placeholder="Nova frase..." value={newQuoteText} onChange={e=>setNewQuoteText(e.target.value)} style={{flex:1}}/>
+            <button type="submit" className="ghost" disabled={!newQuoteText.trim()}><Plus size={14}/> Adicionar</button>
+          </form>
+        </div>
         <div className="notifSettingsBlock">
           <label className="notifToggleRow">
             <span><Bell size={15}/> Notificações</span>
