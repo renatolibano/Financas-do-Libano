@@ -1052,7 +1052,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
-      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><Quote size={14}/><span>{currentHeaderQuote}</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
+      <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><span className="headerQuoteMark headerQuoteMarkOpen">&ldquo;</span><span className="headerQuoteText">{currentHeaderQuote}</span><span className="headerQuoteMark headerQuoteMarkClose">&rdquo;</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
       {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
@@ -1078,7 +1078,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
-      {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos}/>}
+      {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos} session={session}/>}
 
       <ToastHost/>
 
@@ -11119,6 +11119,20 @@ const ACTIVITY_CHART_TYPES = [
 // oferece só os tipos de gráfico que fazem sentido pra ele.
 const ACTIVITY_COUNT_CHART_TYPES = ACTIVITY_CHART_TYPES.filter(c=>c.key!=="pizza"&&c.key!=="rosca");
 const ACTIVITY_SHARE_CHART_TYPES = ACTIVITY_CHART_TYPES.filter(c=>c.key==="pizza"||c.key==="rosca");
+// Classificação opcional de cada categoria — usada só pela dica de
+// equilíbrio entre desenvolvimento pessoal e lazer (null = sem classificação).
+const ACTIVITY_CATEGORY_KINDS = [
+  { key:"desenvolvimento", label:"Desenvolvimento", icon:GraduationCap },
+  { key:"lazer", label:"Lazer", icon:PartyPopper },
+];
+const activityKindMeta = key => ACTIVITY_CATEGORY_KINDS.find(k=>k.key===key) || null;
+// Ciclo usado pelo badge de tipo em cada categoria já cadastrada: sem tipo →
+// desenvolvimento → lazer → sem tipo de novo.
+function nextActivityKind(kind){
+  if(kind==="desenvolvimento") return "lazer";
+  if(kind==="lazer") return null;
+  return "desenvolvimento";
+}
 
 // Monta a dica de equilíbrio a partir da contagem de cada afazer no período
 // selecionado: prioriza avisar sobre o que ficou zerado, depois sobre o que
@@ -11139,6 +11153,27 @@ function activityTip(counts){
   if(zeroed.length>1){
     return {text:`Esses afazeres ficaram de fora nesse período: ${zeroed.map(c=>c.item.name).join(", ")}. Tente dar uma atenção a eles.`, tone:"warn"};
   }
+
+  // Equilíbrio entre categorias marcadas como "Desenvolvimento" e "Lazer" —
+  // só entra em jogo se a pessoa classificou pelo menos uma categoria de
+  // cada tipo e já tem registros suficientes pra dizer algo com confiança.
+  const devCounts = counts.filter(c=>c.item.kind==="desenvolvimento");
+  const lazerCounts = counts.filter(c=>c.item.kind==="lazer");
+  const devTotal = devCounts.reduce((s,c)=>s+c.count,0);
+  const lazerTotal = lazerCounts.reduce((s,c)=>s+c.count,0);
+  if(devCounts.length>0 && lazerCounts.length>0){
+    if(lazerTotal>=3 && lazerTotal >= devTotal*1.8){
+      const topLazer = [...lazerCounts].sort((a,b)=>b.count-a.count)[0];
+      return {text:`Seu registro de "${topLazer.item.name}" está muito alto. Tente realizar outras atividades de desenvolvimento.`, tone:"warn"};
+    }
+    if(devTotal>=3 && lazerTotal===0){
+      return {text:"Você tem feito bastante desenvolvimento e nenhum lazer nesse período. Que tal descansar um pouco com alguma atividade de lazer?", tone:"warn"};
+    }
+    if(devTotal>=3 && devTotal >= lazerTotal*1.8){
+      return {text:"Seu tempo de desenvolvimento está bem acima do de lazer. Vale a pena reservar um espaço pra descansar também.", tone:"warn"};
+    }
+  }
+
   if(highest.count >= avg*2 && highest.count>=3){
     return {text:`Você está dando muito foco a "${highest.item.name}". Tente equilibrar mais com as outras atividades.`, tone:"warn"};
   }
@@ -11395,8 +11430,9 @@ function timeFromTimestamp(ts){
   return pad2(d.getHours())+":"+pad2(d.getMinutes());
 }
 
-function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
-  const {data:items, add:addItem, remove:removeItem} = itemsEntity;
+function ActivityChartPage({itemsEntity, logsEntity, todosEntity, session}){
+  const {data:items, add:addItem, remove:removeItem, update:updateItem} = itemsEntity;
+  const {data:logs, add:addLog, remove:removeLog} = logsEntity;
   const {data:todos, add:addTodo, remove:removeTodo, update:updateTodo} = todosEntity;
   const [dayEndHour,setDayEndHour] = usePersistentState("libano-activity-day-end-hour", 0);
   const [showDaySettings,setShowDaySettings] = useState(false);
@@ -11406,6 +11442,7 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
   const [taskCat,setTaskCat] = useState("");
   const [showCatInput,setShowCatInput] = useState(false);
   const [newCatName,setNewCatName] = useState("");
+  const [newCatKind,setNewCatKind] = useState(null);
   const [todoTab,setTodoTab] = useState("pendentes");
   const [period,setPeriod] = useState("semana");
   const [countChartType,setCountChartType] = useState("barras");
@@ -11424,8 +11461,9 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
     if(!name) return;
     if(items.some(it=>it.name.toLowerCase()===name.toLowerCase())){ alert("Você já tem uma categoria com esse nome."); return; }
     const color = STUDY_COLORS[items.length % STUDY_COLORS.length].key;
-    addItem({name, color});
+    addItem({name, color, kind:newCatKind});
     setNewCatName("");
+    setNewCatKind(null);
     setShowCatInput(false);
   };
 
@@ -11433,6 +11471,10 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
     if(!confirm(`Excluir a categoria "${it.name}"? Os afazeres dela também serão apagados.`)) return;
     todos.filter(t=>t.item_id===it.id).forEach(t=>removeTodo(t.id));
     removeItem(it.id);
+  };
+
+  const cycleCategoryKind = (it)=>{
+    updateItem(it.id, {kind: nextActivityKind(it.kind)});
   };
 
   const addTodoTask = ()=>{
@@ -11464,15 +11506,26 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
     doneTodayTodos.forEach(t=>removeTodo(t.id));
   };
 
+  // Marcar uma categoria como "feita hoje" sem passar por um afazer
+  // específico — grava direto em activity_tracker_logs (1 registro por
+  // categoria/dia; clicar de novo desmarca).
+  const doneTodayLogs = logs.filter(l=>l.date===effectiveToday);
+  const toggleLogToday = (it)=>{
+    const existing = logs.find(l=>l.item_id===it.id && l.date===effectiveToday);
+    if(existing) removeLog(existing.id);
+    else addLog({item_id:it.id, date:effectiveToday});
+  };
+
   const windowDays = ACTIVITY_CHART_PERIODS.find(p=>p.key===period).days;
   const inWindow = (dateStr)=>{
     const diff = daysBetweenISO(dateStr, effectiveToday);
     return diff>=0 && diff<windowDays;
   };
   const completionsInWindow = doneTodosAll.filter(t=>t.completed_at && inWindow(isoDateFromTimestamp(t.completed_at)));
+  const loggedInWindow = logs.filter(l=>inWindow(l.date));
   const counts = items.map(it=>({
     item: it,
-    count: completionsInWindow.filter(t=>t.item_id===it.id).length,
+    count: completionsInWindow.filter(t=>t.item_id===it.id).length + loggedInWindow.filter(l=>l.item_id===it.id).length,
   }));
   const total = counts.reduce((s,c)=>s+c.count,0);
   const tip = activityTip(counts);
@@ -11483,6 +11536,41 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
     if(!cat) return null;
     const hex = colorHex(cat.color);
     return <span className="actCatBadge" style={{color:hex, background:hex+"18"}}><span className="actCatDot" style={{background:hex}}/>{cat.name}</span>;
+  };
+
+  // Análise por IA: só chama a Edge Function quando a pessoa clica no botão
+  // (nunca automaticamente) e manda só um resumo pequeno já calculado no
+  // cliente (contagens por categoria do período + totais) — nenhum dado bruto
+  // de todos os afazeres, pra minimizar egress e o custo da chamada.
+  const [aiInsight,setAiInsight] = useState(null);
+  const [aiLoading,setAiLoading] = useState(false);
+  const [aiError,setAiError] = useState(null);
+  const aiAvailable = cloudConfigured && !!session;
+  const askActivityAI = async ()=>{
+    if(!aiAvailable){
+      alert("Para usar a IA real, configure a sincronização (Supabase) primeiro — veja o README.");
+      return;
+    }
+    setAiLoading(true);
+    setAiError(null);
+    try{
+      const { data, error } = await supabase.functions.invoke("activity-insights", {
+        body: {
+          periodLabel: ACTIVITY_CHART_PERIODS.find(p=>p.key===period).label,
+          categories: counts.map(c=>({name:c.item.name, kind:c.item.kind||null, count:c.count})),
+          totalCompletions: total,
+          pendingCount: pendingTodos.length,
+          doneTodayCount: doneTodayTodos.length + doneTodayLogs.length,
+        },
+      });
+      if(error) throw error;
+      if(data?.error) throw new Error(data.error);
+      setAiInsight(data.insight);
+    }catch(err){
+      setAiError(err.message || "Não foi possível consultar a IA agora.");
+    }finally{
+      setAiLoading(false);
+    }
   };
 
   return <div className="content">
@@ -11515,21 +11603,54 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
             {items.map(it=>{
               const hex = colorHex(it.color);
               const selected = it.id===taskCat;
+              const kindMeta = activityKindMeta(it.kind);
+              const KindIcon = kindMeta ? kindMeta.icon : Tags;
               return <span className="actChip" key={it.id} onClick={()=>setTaskCat(it.id)}
                 style={{borderColor:selected?hex:hex+"55", color:hex, background:hex+(selected?"2c":"18")}}>
                 {it.name}
+                <button onClick={(e)=>{e.stopPropagation(); cycleCategoryKind(it);}}
+                  title={kindMeta ? `Tipo: ${kindMeta.label} (toque para mudar)` : "Definir tipo: Desenvolvimento ou Lazer"}>
+                  <KindIcon size={12}/>
+                </button>
                 <button onClick={(e)=>{e.stopPropagation(); confirmRemoveCategory(it);}} title="Excluir categoria"><X size={12}/></button>
               </span>;
             })}
             {!showCatInput && <span className="actChip actChipAdd" onClick={()=>setShowCatInput(true)} title="Nova categoria"><Plus size={13}/></span>}
             {showCatInput && <span className="actChip actChipInput">
               <input autoFocus value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="Nova categoria"
-                onKeyDown={e=>{ if(e.key==="Enter") addCategory(); if(e.key==="Escape"){ setShowCatInput(false); setNewCatName(""); } }}/>
+                onKeyDown={e=>{ if(e.key==="Enter") addCategory(); if(e.key==="Escape"){ setShowCatInput(false); setNewCatName(""); setNewCatKind(null); } }}/>
+              {ACTIVITY_CATEGORY_KINDS.map(k=>{
+                const KIcon = k.icon;
+                const active = newCatKind===k.key;
+                return <button type="button" key={k.key} className={"actKindBtn"+(active?" actKindOn":"")} title={k.label}
+                  onClick={()=>setNewCatKind(active?null:k.key)}><KIcon size={13}/></button>;
+              })}
               <button onClick={addCategory} title="Salvar"><Check size={12}/></button>
-              <button onClick={()=>{setShowCatInput(false); setNewCatName("");}} title="Cancelar"><X size={12}/></button>
+              <button onClick={()=>{setShowCatInput(false); setNewCatName(""); setNewCatKind(null);}} title="Cancelar"><X size={12}/></button>
             </span>}
             {items.length===0 && !showCatInput && <p className="emptyHint">Nenhuma categoria cadastrada ainda.</p>}
           </div>
+          <p className="emptyHint" style={{marginTop:8}}>Toque no ícone ao lado do nome de uma categoria para marcá-la como Desenvolvimento ou Lazer — isso alimenta as dicas de equilíbrio ao lado.</p>
+        </div>
+
+        <div className="panel">
+          <div className="panelTitle"><h2>Marcar feito sem afazer</h2></div>
+          <p className="emptyHint" style={{marginTop:-6}}>Registre que você fez algo hoje numa categoria, sem precisar criar um afazer específico.</p>
+          {items.length===0
+            ? <p className="emptyHint">Cadastre uma categoria para poder marcar.</p>
+            : <div className="actTodoList">
+                {items.map(it=>{
+                  const hex = colorHex(it.color);
+                  const loggedToday = doneTodayLogs.some(l=>l.item_id===it.id);
+                  return <div className="actTodoRow" key={it.id}>
+                    <button type="button" className={"actTodoCheck"+(loggedToday?" on":"")} style={loggedToday?{color:hex}:undefined}
+                      onClick={()=>toggleLogToday(it)} title={loggedToday?"Desmarcar":"Marcar como feito hoje"}>
+                      {loggedToday ? <CheckCircle2 size={18}/> : <Circle size={18}/>}
+                    </button>
+                    <span className="actTodoText">{it.name}</span>
+                  </div>;
+                })}
+              </div>}
         </div>
 
         <div className="panel">
@@ -11569,7 +11690,7 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
           {todoTab==="pendentes" && pendingTodos.length>0 && <p className="actTodoCount">{pendingTodos.length} {pendingTodos.length===1?"afazer pendente":"afazeres pendentes"}</p>}
         </div>
 
-        {doneTodayTodos.length>0 && <div className="panel actDonePanel">
+        {(doneTodayTodos.length>0 || doneTodayLogs.length>0) && <div className="panel actDonePanel">
           <div className="panelTitle"><h2>Concluídos hoje</h2></div>
           <div className="actTodoList">
             {doneTodayTodos.map(t=><div className="actTodoRow done" key={t.id}>
@@ -11578,16 +11699,24 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
               {catBadge(t.item_id)}
               <span className="actDoneTime">{timeFromTimestamp(t.completed_at)}</span>
             </div>)}
+            {doneTodayLogs.map(l=>{
+              const cat = items.find(it=>it.id===l.item_id);
+              return <div className="actTodoRow done" key={"log-"+l.id}>
+                <span className="actDoneCheck"><CheckCircle2 size={17}/></span>
+                <span className="actTodoText strike">{cat ? cat.name : "Categoria"}</span>
+                <button type="button" className="actTodoDelete" onClick={()=>removeLog(l.id)} title="Desmarcar"><X size={15}/></button>
+              </div>;
+            })}
           </div>
           <div className="actDoneFooter">
-            <span>{doneTodayTodos.length} {doneTodayTodos.length===1?"afazer concluído":"afazeres concluídos"}</span>
-            <button type="button" className="ghost" onClick={clearCompletedToday}>Limpar concluídos</button>
+            <span>{doneTodayTodos.length+doneTodayLogs.length} {doneTodayTodos.length+doneTodayLogs.length===1?"concluído":"concluídos"}</span>
+            {doneTodayTodos.length>0 && <button type="button" className="ghost" onClick={clearCompletedToday}>Limpar concluídos</button>}
           </div>
         </div>}
 
-        <div className={"actMotivate "+(doneTodayTodos.length>0?"good":"neutral")}>
+        <div className={"actMotivate "+((doneTodayTodos.length+doneTodayLogs.length)>0?"good":"neutral")}>
           <Trophy size={16}/>
-          <span>{doneTodayTodos.length>0 ? "Continue assim! Consistência é o que te leva longe." : "Cada afazer concluído é um passo a mais. Bora começar?"}</span>
+          <span>{(doneTodayTodos.length+doneTodayLogs.length)>0 ? "Continue assim! Consistência é o que te leva longe." : "Cada afazer concluído é um passo a mais. Bora começar?"}</span>
         </div>
       </div>
 
@@ -11611,7 +11740,7 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
               : countChartType==="area" ? <ActivityAreaChart counts={counts}/>
               : countChartType==="dispersao" ? <ActivityScatterChart counts={counts}/>
               : countChartType==="radar" ? <ActivityRadarChart counts={counts}/>
-              : countChartType==="calor" ? <ActivityHeatmapChart items={items} logs={completionsInWindow.map(t=>({item_id:t.item_id, date:isoDateFromTimestamp(t.completed_at)}))} effectiveToday={effectiveToday} windowDays={windowDays}/>
+              : countChartType==="calor" ? <ActivityHeatmapChart items={items} logs={[...completionsInWindow.map(t=>({item_id:t.item_id, date:isoDateFromTimestamp(t.completed_at)})), ...loggedInWindow.map(l=>({item_id:l.item_id, date:l.date}))]} effectiveToday={effectiveToday} windowDays={windowDays}/>
               : null)}
         </div>
 
@@ -11625,6 +11754,15 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity}){
           {total===0
             ? <p className="emptyHint">Nenhum afazer concluído nesse período ainda.</p>
             : <ActivityPieChart counts={counts} donut={shareChartType==="rosca"}/>}
+        </div>
+
+        <div className="panel ai">
+          <div className="aiHead"><div className="aiIcon"><Bot/></div><div><h2>Análise da IA</h2><small>{aiAvailable?"Assistente de organização":"Disponível com sincronização ativa"}</small></div></div>
+          {aiInsight
+            ? <p className="aiText">{aiInsight}</p>
+            : <p>Peça uma análise dos seus afazeres e gráficos deste período — a IA olha suas categorias, o equilíbrio entre desenvolvimento e lazer e o que está pendente, e devolve umas dicas rápidas.</p>}
+          {aiError && <p className="aiErrorMsg">{aiError}</p>}
+          <button className="ghost" onClick={askActivityAI} disabled={aiLoading}>{aiLoading?"Analisando...":(aiInsight?"Analisar de novo →":"Perguntar à IA →")}</button>
         </div>
 
         {total>0 && <div className={"actTip "+tip.tone}><Lightbulb size={16}/><span>{tip.text}</span></div>}

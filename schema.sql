@@ -979,6 +979,9 @@ create table if not exists activity_tracker_items (
   sort_order int,
   created_at timestamptz not null default now()
 );
+-- "kind" classifica a categoria como desenvolvimento pessoal ou lazer, usado
+-- pela dica de equilíbrio da aba Gráfico (nula = sem classificação).
+alter table activity_tracker_items add column if not exists kind text check (kind is null or kind in ('desenvolvimento','lazer'));
 create table if not exists activity_tracker_logs (
   id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade,
   item_id uuid not null references activity_tracker_items(id) on delete cascade,

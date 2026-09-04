@@ -120,11 +120,13 @@ nav button.active,.navGroupHead.active{background:var(--accent);color:var(--acce
 main{width:calc(100% - 76px);margin-left:76px;padding:30px 34px;transition:margin-left .22s ease,width .22s ease}
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
 .headerActions{display:flex;align-items:center;gap:12px}
-.headerQuote{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;min-width:0;margin:0 16px;padding:8px 16px;border-radius:12px;background:var(--bg-surface-2);border:1px solid var(--border);color:var(--text-2);font-size:12.5px;font-style:italic}
-.headerQuote svg{flex:0 0 auto;opacity:.5}
-.headerQuote span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:760px){.headerQuote{margin:0 8px;padding:6px 10px;font-size:11px}}
-@media(max-width:520px){.headerQuote span{display:none}}
+.headerQuote{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;min-width:0;margin:0 16px;padding:4px 16px;border-radius:12px;background:transparent;border:none;color:var(--text-1);font-size:13px;font-style:italic;font-weight:500}
+.headerQuoteMark{flex:0 0 auto;font-family:Georgia,"Times New Roman",serif;font-style:normal;font-weight:800;font-size:28px;line-height:.6;color:var(--accent)}
+.headerQuoteMarkOpen{align-self:flex-end}
+.headerQuoteMarkClose{align-self:flex-start}
+.headerQuoteText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){.headerQuote{margin:0 8px;padding:4px 10px;font-size:11.5px}.headerQuoteMark{font-size:21px}}
+@media(max-width:520px){.headerQuoteText,.headerQuoteMark{display:none}}
 
 .notifWrap{position:relative}
 .notifBellBtn{position:relative;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-1)}
@@ -1473,6 +1475,9 @@ h1{font-size:23px}
 .actChip.actChipInput input{background:none;border:none;outline:none;color:var(--text-1);font-size:12.5px;font-weight:600;width:110px;font:inherit}
 .actChip.actChipInput button{background:var(--accent);color:var(--accent-text-on)}
 [data-theme="light"] .actChip.actChipInput button{background:var(--accent)}
+.actChip.actChipInput button.actKindBtn{background:#0002;color:var(--text-2)}
+[data-theme="light"] .actChip.actChipInput button.actKindBtn{background:#0000001a}
+.actChip.actChipInput button.actKindBtn.actKindOn{background:var(--accent);color:var(--accent-text-on)}
 
 /* Selo de categoria mostrado ao lado de um afazer (lista de pendentes/
    concluídos e painel "Concluídos hoje") */
