@@ -73,7 +73,3 @@ export function speak(html, langCode, { onStart, onEnd } = {}) {
 
   window.speechSynthesis.speak(utterance);
 }
-
-export function stopSpeaking() {
-  if (ttsSupported()) window.speechSynthesis.cancel();
-}

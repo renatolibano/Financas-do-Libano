@@ -5,10 +5,6 @@ import { supabase, cloudConfigured } from "./supabaseClient";
 // texto" da ferramenta de texto, tanto no anotador de PDF quanto no quadro
 // infinito. Diferente da sugestão de tradução, aqui o erro é repassado pra
 // UI mostrar, já que é uma ação explícita da pessoa (clicou em "Converter").
-export function handwritingOcrAvailable() {
-  return cloudConfigured && !!supabase?.auth;
-}
-
 export async function recognizeHandwriting(pngDataUrl) {
   if (!cloudConfigured) {
     throw new Error("Para usar esse modo, configure a sincronização (Supabase) primeiro — veja o README.");
