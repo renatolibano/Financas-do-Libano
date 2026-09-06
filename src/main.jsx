@@ -9888,6 +9888,8 @@ const PC_GPU_DB = [
   { name: "Intel UHD Graphics", score: 8 },
   { name: "Intel Iris Xe Graphics", score: 14 },
   { name: "AMD Radeon Vega 8", score: 12 },
+  { name: "AMD Radeon 610M", score: 7 },
+  { name: "AMD Radeon(TM) Graphics", score: 9 }, // fallback genérico — várias APUs AMD recentes (ex.: Ryzen 5 7520U) só expõem esse nome pelo navegador, sem o modelo exato do iGPU
   { name: "AMD Radeon 780M", score: 20 },
   { name: "GT 710", score: 4 },
   { name: "GT 730", score: 6 },
@@ -9956,7 +9958,7 @@ const PC_CPU_DB = [
   { name: "Core Ultra 5", score: 40 }, { name: "Core Ultra 7", score: 50 }, { name: "Core Ultra 9", score: 60 },
   { name: "FX-8", score: 8 }, { name: "FX-9590", score: 9 },
   { name: "Ryzen 3 1200", score: 10 }, { name: "Ryzen 5 1600", score: 14 }, { name: "Ryzen 7 2700", score: 20 },
-  { name: "Ryzen 3 3200G", score: 12 }, { name: "Ryzen 5 3600X", score: 23 }, { name: "Ryzen 5 3600", score: 22 },
+  { name: "Ryzen 3 3200G", score: 12 }, { name: "Ryzen 5 7520U", score: 9 }, { name: "Ryzen 5 3600X", score: 23 }, { name: "Ryzen 5 3600", score: 22 },
   { name: "Ryzen 7 3700X", score: 27 }, { name: "Ryzen 9 3900X", score: 34 },
   { name: "Ryzen 5 5600", score: 30 }, { name: "Ryzen 7 5800X", score: 36 },
   { name: "Ryzen 9 5900X", score: 44 }, { name: "Ryzen 9 5950X", score: 48 },
