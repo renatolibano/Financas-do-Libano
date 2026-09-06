@@ -7371,6 +7371,7 @@ function Whiteboard({ board, onClose, onSave }) {
   useEffect(() => { if (tool !== "laser") setLaserPoints([]); }, [tool]);
 
   const imageInputRef = useRef(null);
+  const [pdfImportBusy, setPdfImportBusy] = useState(false);
 
   // Calcula a visão ideal pra caber tudo que já existe no quadro (ou centraliza a origem, se estiver vazio).
   const fitToContent = () => {
@@ -7601,6 +7602,64 @@ function Whiteboard({ board, onClose, onSave }) {
       const centerWorld = rect ? { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom } : { x: 0, y: 0 };
       addImageAt(dataUrl, width, height, centerWorld.x, centerWorld.y);
     }).catch(e => console.error(e));
+  };
+
+  // Insere um PDF no quadro como uma pilha de imagens (uma por página),
+  // empilhadas verticalmente — igual ao Whiteboard da Microsoft. Tudo roda
+  // local, com o pdf.js/wasm que já vem embutido no app (mesmo esquema do
+  // leitor de PDF de estudo, ver src/lib/pdf.js): não baixa nem envia nada
+  // pra fora, então não gera egress nenhum além do que qualquer imagem colada
+  // no quadro já gera (o JSON final entra no autosave normal do quadro).
+  const addPdfFromFile = async (file, targetWorld) => {
+    if (!file || file.type !== "application/pdf") return;
+    setPdfImportBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
+      const rect = containerRef.current?.getBoundingClientRect();
+      const maxW = rect ? (rect.width * 0.6) / view.zoom : 480;
+      const centerWorld = targetWorld || (rect ? { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom } : { x: 0, y: 0 });
+      const gap = 24;
+      const newEls = [];
+      let cursorY = 0;
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const baseViewport = page.getViewport({ scale: 1 });
+        // Mesma referência de qualidade usada nas imagens coladas no quadro
+        // (ver addImageFromFile) — página fica legível sem pesar demais no
+        // JSON salvo.
+        const scale = 1400 / baseViewport.width;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        const width = Math.min(viewport.width, maxW);
+        const height = width * (viewport.height / viewport.width);
+        newEls.push({ id: crypto.randomUUID(), type: "image", dataUrl, x: centerWorld.x - width / 2, y: cursorY, width, height });
+        cursorY += height + gap;
+        canvas.width = 0; canvas.height = 0; // libera a memória do canvas antes da próxima página
+      }
+      const totalHeight = cursorY - gap;
+      const offsetY = centerWorld.y - totalHeight / 2;
+      newEls.forEach(el => { el.y += offsetY; });
+      pushHistory();
+      setElements(prev => [...prev, ...newEls]);
+      setFlash(true);
+      setTimeout(() => setFlash(false), 260);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível abrir esse PDF.");
+    } finally {
+      setPdfImportBusy(false);
+    }
+  };
+
+  const addMediaFromFile = (file) => {
+    if (!file) return;
+    if (file.type === "application/pdf") addPdfFromFile(file);
+    else addImageFromFile(file);
   };
 
   useEffect(() => {
@@ -7964,14 +8023,17 @@ function Whiteboard({ board, onClose, onSave }) {
 
   const handleDrop = (e) => {
     e.preventDefault();
-    const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith("image/"));
-    if (!files.length) return;
+    const allFiles = Array.from(e.dataTransfer?.files || []);
+    const images = allFiles.filter(f => f.type?.startsWith("image/"));
+    const pdfs = allFiles.filter(f => f.type === "application/pdf");
+    if (!images.length && !pdfs.length) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
-    files.forEach(f => {
+    images.forEach(f => {
       compressImageForPage(f, 1400, 1400, 0.82)
         .then(({ dataUrl, width, height }) => addImageAt(dataUrl, width, height, x, y))
         .catch(err => console.error(err));
     });
+    pdfs.forEach(f => addPdfFromFile(f, { x, y }));
   };
 
   const handleDownload = async () => {
@@ -8328,8 +8390,8 @@ function Whiteboard({ board, onClose, onSave }) {
                 <button title="Mover o quadro" className={tool === "pan" ? "active" : ""} onClick={() => { setTool("pan"); setSelectedId(null); }}><Hand size={16}/></button>
                 <button title="Recentralizar visão" onClick={fitToContent}><Crosshair size={16}/></button>
                 <span className="whiteboardDockDivider"/>
-                <button title="Inserir imagem/print" onClick={()=>imageInputRef.current?.click()}><ImageIcon size={16}/></button>
-                <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={(e)=>{ const f=e.target.files?.[0]; if(f) addImageFromFile(f); e.target.value=""; }}/>
+                <button title={pdfImportBusy ? "Processando PDF…" : "Inserir imagem/print ou PDF"} disabled={pdfImportBusy} onClick={()=>imageInputRef.current?.click()}><ImageIcon size={16}/></button>
+                <input ref={imageInputRef} type="file" accept="image/*,application/pdf" hidden onChange={(e)=>{ const f=e.target.files?.[0]; if(f) addMediaFromFile(f); e.target.value=""; }}/>
                 {boardClipboardCount > 0 && (
                   <button title="Colar (Ctrl+V)" onClick={pasteClipboard}><ClipboardPaste size={16}/></button>
                 )}
