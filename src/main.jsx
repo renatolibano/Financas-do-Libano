@@ -7685,8 +7685,16 @@ function Whiteboard({ board, onClose, onSave }) {
   // onWheel do React é passivo por padrão (não dá pra bloquear o zoom nativo
   // do navegador com preventDefault ali). Por isso o listener é registrado
   // manualmente como non-passive direto no elemento.
+  //
+  // Importante: o listener fica no container inteiro (que envolve o <svg> E
+  // a doca de ferramentas), não só no svg. A doca (.whiteboardDock) e os
+  // botões de voltar/configurações são elementos IRMÃOS do svg, não filhos
+  // dele — então um gesto de rolagem do touchpad que começasse em cima
+  // deles nunca passava pelo preventDefault daqui, e a página por trás
+  // (o quadro é só um overlay fixed) acabava rolando de verdade, fazendo
+  // tudo — inclusive a própria doca — parecer "pular" de lugar.
   useEffect(() => {
-    const el = svgRef.current;
+    const el = containerRef.current;
     if (!el) return;
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);

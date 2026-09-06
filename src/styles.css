@@ -471,8 +471,8 @@ h1{font-size:23px}
 
 .readerModalFull{width:100vw!important;height:100vh!important;border-radius:0}
 
-.whiteboardBody{position:relative;overflow:hidden;padding:0;display:block}
-.whiteboardBackFull{padding:0}
+.whiteboardBody{position:relative;overflow:hidden;padding:0;display:block;touch-action:none;overscroll-behavior:contain}
+.whiteboardBackFull{padding:0;overscroll-behavior:contain}
 .whiteboardModalFull{width:100vw;height:100vh;border-radius:0;position:relative}
 .whiteboardModalFull .whiteboardBody{position:absolute;inset:0}
 
