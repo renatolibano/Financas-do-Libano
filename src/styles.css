@@ -1525,3 +1525,19 @@ h1{font-size:23px}
   .actPieWrap{flex-direction:column}
   .actRangeBadge{font-size:11.5px;padding:7px 10px}
 }
+
+/* Teste de PC / "Meu PC roda?" (Área de Lazer) */
+.pcOverallBanner{display:flex;align-items:center;gap:10px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:700;line-height:1.4;border:1px solid var(--border);margin-bottom:16px}
+.pcOverallBanner svg{flex:0 0 auto}
+.pcOverallGood{background:#3ecf6a18;border-color:#3ecf6a44;color:#3ecf6a}
+.pcOverallWarn{background:#f5a52318;border-color:#f5a52344;color:#f5a523}
+.pcOverallBad{background:#ff5c5c18;border-color:#ff5c5c44;color:#ff5c5c}
+.pcRows{display:grid;gap:10px}
+.pcRow{border:1px solid var(--border);background:var(--bg-surface-3);border-radius:12px;padding:12px 14px;display:grid;gap:8px}
+.pcRowHead{display:flex;align-items:center;gap:8px;color:var(--text-1);font-size:13.5px}
+.pcRowSpecs{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--text-2)}
+.pcRowSpecs b{color:var(--text-1)}
+.pcRowVerdict{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700}
+.pcRow.pcRowGood .pcRowVerdict{color:#3ecf6a}
+.pcRow.pcRowWarn .pcRowVerdict{color:#f5a523}
+.pcRow.pcRowBad .pcRowVerdict{color:#ff5c5c}

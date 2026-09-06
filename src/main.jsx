@@ -20,7 +20,7 @@ import {
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, ImageOff, Lock, AlertTriangle,
   Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3,
-  Mic, Headphones, Quote
+  Mic, Headphones, Quote, Cpu, MemoryStick, HardDrive, MonitorCheck
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -212,7 +212,7 @@ const HOME_PAGE_OPTIONS = [
   { group: "Geral", pages: ["Calendário","Notas","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF"] },
-  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos"] },
+  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos",{key:"Teste de PC", label:"Meu PC roda?"}] },
 ];
 
 function Root(){
@@ -1023,6 +1023,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Treino", icon:Dumbbell },
       { key:"Filmes e Séries", icon:Clapperboard },
       { key:"Jogos", icon:Gamepad2 },
+      { key:"Teste de PC", label:"Meu PC roda?", icon:Cpu },
     ]},
     { type:"single", key:"Gráfico", icon:PieChart },
   ];
@@ -1135,6 +1136,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
+      {page==="Teste de PC" && <PcCompatTest/>}
       {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos} session={session}/>}
 
       <ToastHost/>
@@ -9869,6 +9871,470 @@ function GameItemForm({ item, session, onCancel, onSave }) {
           </div>
         </label>
       </div>
+    </div>
+  );
+}
+
+// ---------- Teste de PC / "Meu PC roda?" (Área de Lazer) ----------
+// Compara as especificações do computador da pessoa (detectadas automaticamente
+// quando possível, editáveis manualmente) com os requisitos mínimos/recomendados
+// de alguns jogos. As "notas" de GPU/CPU abaixo são uma estimativa relativa de
+// desempenho (não são benchmarks oficiais) só para permitir a comparação —
+// servem como um indicativo, não como garantia de desempenho real no jogo.
+
+const PC_GPU_DB = [
+  // Integradas / entrada
+  { name: "Intel HD Graphics", score: 5 },
+  { name: "Intel UHD Graphics", score: 8 },
+  { name: "Intel Iris Xe Graphics", score: 14 },
+  { name: "AMD Radeon Vega 8", score: 12 },
+  { name: "AMD Radeon 780M", score: 20 },
+  { name: "GT 710", score: 4 },
+  { name: "GT 730", score: 6 },
+  { name: "GTX 750 Ti", score: 14 },
+  // NVIDIA GTX 900/1000
+  { name: "GTX 950", score: 12 }, { name: "GTX 960", score: 15 },
+  { name: "GTX 970", score: 20 }, { name: "GTX 980 Ti", score: 27 }, { name: "GTX 980", score: 24 },
+  { name: "GTX 1050 Ti", score: 17 }, { name: "GTX 1050", score: 14 },
+  { name: "GTX 1060", score: 22 },
+  { name: "GTX 1070 Ti", score: 30 }, { name: "GTX 1070", score: 28 },
+  { name: "GTX 1080 Ti", score: 38 }, { name: "GTX 1080", score: 33 },
+  { name: "GTX 1630", score: 10 },
+  { name: "GTX 1650 Super", score: 20 }, { name: "GTX 1650", score: 18 },
+  { name: "GTX 1660 Super", score: 25 }, { name: "GTX 1660 Ti", score: 26 }, { name: "GTX 1660", score: 23 },
+  // NVIDIA RTX 20
+  { name: "RTX 2060 Super", score: 33 }, { name: "RTX 2060", score: 30 },
+  { name: "RTX 2070 Super", score: 38 }, { name: "RTX 2070", score: 35 },
+  { name: "RTX 2080 Super", score: 43 }, { name: "RTX 2080 Ti", score: 48 }, { name: "RTX 2080", score: 40 },
+  // NVIDIA RTX 30
+  { name: "RTX 3050", score: 27 },
+  { name: "RTX 3060 Ti", score: 45 }, { name: "RTX 3060", score: 38 },
+  { name: "RTX 3070 Ti", score: 52 }, { name: "RTX 3070", score: 50 },
+  { name: "RTX 3080 Ti", score: 62 }, { name: "RTX 3080", score: 58 },
+  { name: "RTX 3090 Ti", score: 68 }, { name: "RTX 3090", score: 65 },
+  // NVIDIA RTX 40
+  { name: "RTX 4060 Ti", score: 50 }, { name: "RTX 4060", score: 44 },
+  { name: "RTX 4070 Ti Super", score: 68 }, { name: "RTX 4070 Ti", score: 65 },
+  { name: "RTX 4070 Super", score: 62 }, { name: "RTX 4070", score: 58 },
+  { name: "RTX 4080 Super", score: 76 }, { name: "RTX 4080", score: 73 },
+  { name: "RTX 4090", score: 88 },
+  // NVIDIA RTX 50
+  { name: "RTX 5060 Ti", score: 55 }, { name: "RTX 5060", score: 48 },
+  { name: "RTX 5070 Ti", score: 72 }, { name: "RTX 5070", score: 65 },
+  { name: "RTX 5080", score: 82 }, { name: "RTX 5090", score: 100 },
+  // AMD
+  { name: "RX 470", score: 16 }, { name: "RX 480", score: 18 },
+  { name: "RX 570", score: 17 }, { name: "RX 580", score: 19 }, { name: "RX 590", score: 21 },
+  { name: "RX 5500 XT", score: 22 }, { name: "RX 5600 XT", score: 27 },
+  { name: "RX 5700 XT", score: 34 }, { name: "RX 5700", score: 32 },
+  { name: "RX 6400", score: 14 }, { name: "RX 6500 XT", score: 16 },
+  { name: "RX 6600 XT", score: 32 }, { name: "RX 6650 XT", score: 33 }, { name: "RX 6600", score: 29 },
+  { name: "RX 6700 XT", score: 40 }, { name: "RX 6750 XT", score: 42 },
+  { name: "RX 6800 XT", score: 52 }, { name: "RX 6800", score: 48 },
+  { name: "RX 6900 XT", score: 56 }, { name: "RX 6950 XT", score: 58 },
+  { name: "RX 7600", score: 33 }, { name: "RX 7700 XT", score: 48 },
+  { name: "RX 7800 XT", score: 54 }, { name: "RX 7900 XT", score: 68 }, { name: "RX 7900 XTX", score: 78 },
+  { name: "RX 9070 XT", score: 70 }, { name: "RX 9070", score: 62 },
+  // Intel Arc
+  { name: "Arc A380", score: 15 }, { name: "Arc A580", score: 24 },
+  { name: "Arc A750", score: 30 }, { name: "Arc A770", score: 34 }, { name: "Arc B580", score: 38 },
+];
+
+const PC_CPU_DB = [
+  { name: "Core 2 Quad", score: 3 },
+  { name: "Core i3-4", score: 8 }, { name: "Core i5-3", score: 10 }, { name: "Core i5-4", score: 12 },
+  { name: "Core i7-4", score: 15 }, { name: "Core i5-6", score: 15 }, { name: "Core i7-6", score: 18 },
+  { name: "Core i5-8400", score: 20 }, { name: "Core i7-8700K", score: 26 }, { name: "Core i7-8700", score: 25 },
+  { name: "Core i5-9600K", score: 22 }, { name: "Core i9-9900K", score: 30 },
+  { name: "Core i5-10400", score: 24 }, { name: "Core i7-10700", score: 28 },
+  { name: "Core i5-11400", score: 26 }, { name: "Core i7-11700", score: 30 },
+  { name: "Core i5-12400", score: 32 }, { name: "Core i5-12600K", score: 38 },
+  { name: "Core i7-12700", score: 42 }, { name: "Core i9-12900", score: 48 },
+  { name: "Core i5-13400", score: 36 }, { name: "Core i5-13600K", score: 44 },
+  { name: "Core i7-13700", score: 50 }, { name: "Core i9-13900", score: 58 },
+  { name: "Core i5-14600K", score: 47 }, { name: "Core i7-14700", score: 54 }, { name: "Core i9-14900", score: 62 },
+  { name: "Core Ultra 5", score: 40 }, { name: "Core Ultra 7", score: 50 }, { name: "Core Ultra 9", score: 60 },
+  { name: "FX-8", score: 8 }, { name: "FX-9590", score: 9 },
+  { name: "Ryzen 3 1200", score: 10 }, { name: "Ryzen 5 1600", score: 14 }, { name: "Ryzen 7 2700", score: 20 },
+  { name: "Ryzen 3 3200G", score: 12 }, { name: "Ryzen 5 3600X", score: 23 }, { name: "Ryzen 5 3600", score: 22 },
+  { name: "Ryzen 7 3700X", score: 27 }, { name: "Ryzen 9 3900X", score: 34 },
+  { name: "Ryzen 5 5600", score: 30 }, { name: "Ryzen 7 5800X", score: 36 },
+  { name: "Ryzen 9 5900X", score: 44 }, { name: "Ryzen 9 5950X", score: 48 },
+  { name: "Ryzen 5 7600", score: 40 }, { name: "Ryzen 7 7700X", score: 46 },
+  { name: "Ryzen 9 7900X", score: 54 }, { name: "Ryzen 9 7950X", score: 60 }, { name: "Ryzen 7 7800X3D", score: 52 },
+  { name: "Ryzen 5 9600X", score: 44 }, { name: "Ryzen 7 9700X", score: 50 }, { name: "Ryzen 9 9900X", score: 58 },
+  { name: "Ryzen 9 9950X", score: 64 }, { name: "Ryzen 7 9800X3D", score: 56 },
+];
+
+const PC_GAMES_DB = [
+  { id:"gta5", name:"GTA V (Enhanced)",
+    gpuMin:"GTX 1630 / RX 6400", gpuMinScore:10, gpuRec:"RTX 3060 / RX 6600 XT", gpuRecScore:38,
+    cpuMin:"Core i7-4770 / FX-9590", cpuMinScore:15, cpuRec:"Core i5-9600K / Ryzen 5 3600", cpuRecScore:22,
+    ramMin:8, ramRec:16, storage:105 },
+  { id:"elden-ring", name:"Elden Ring",
+    gpuMin:"GTX 1060 3GB / RX 580", gpuMinScore:22, gpuRec:"GTX 1070 / RX Vega 56", gpuRecScore:28,
+    cpuMin:"Core i5-8400 / Ryzen 3 3300X", cpuMinScore:20, cpuRec:"Core i7-8700K / Ryzen 5 3600X", cpuRecScore:26,
+    ramMin:12, ramRec:16, storage:60 },
+  { id:"cyberpunk", name:"Cyberpunk 2077",
+    gpuMin:"GTX 1060 6GB / RX 580", gpuMinScore:22, gpuRec:"RTX 2060 Super / RX 5700 XT", gpuRecScore:33,
+    cpuMin:"Core i7-6700 / Ryzen 5 1600", cpuMinScore:18, cpuRec:"Core i7-12700 / Ryzen 7 7800X3D", cpuRecScore:42,
+    ramMin:12, ramRec:16, storage:70 },
+  { id:"bg3", name:"Baldur's Gate 3",
+    gpuMin:"GTX 970 / RX 480", gpuMinScore:20, gpuRec:"RTX 2060 / RX 5700 XT", gpuRecScore:30,
+    cpuMin:"Core i5-4690 / FX-8350", cpuMinScore:12, cpuRec:"Core i7-8700K / Ryzen 5 3600", cpuRecScore:26,
+    ramMin:8, ramRec:16, storage:150 },
+  { id:"rdr2", name:"Red Dead Redemption 2",
+    gpuMin:"GTX 770 / RX 480", gpuMinScore:18, gpuRec:"GTX 1060 6GB / RX 590", gpuRecScore:22,
+    cpuMin:"Core i5-2500K / FX-6300", cpuMinScore:10, cpuRec:"Core i7-4770K / Ryzen 5 1500X", cpuRecScore:15,
+    ramMin:8, ramRec:12, storage:150 },
+  { id:"hogwarts", name:"Hogwarts Legacy",
+    gpuMin:"GTX 960 / RX 470", gpuMinScore:16, gpuRec:"RTX 2080 / RX 5700 XT", gpuRecScore:40,
+    cpuMin:"Core i5-6600 / Ryzen 5 1400", cpuMinScore:15, cpuRec:"Core i7-8700 / Ryzen 5 3600", cpuRecScore:25,
+    ramMin:16, ramRec:16, storage:85 },
+  { id:"starfield", name:"Starfield",
+    gpuMin:"GTX 1070 Ti / RX 5700", gpuMinScore:30, gpuRec:"RTX 2080 / RX 6800 XT", gpuRecScore:40,
+    cpuMin:"Core i7-6800K / Ryzen 5 2600X", cpuMinScore:15, cpuRec:"Core i5-10600K / Ryzen 5 3600X", cpuRecScore:24,
+    ramMin:16, ramRec:16, storage:125 },
+  { id:"palworld", name:"Palworld",
+    gpuMin:"GTX 1050 Ti", gpuMinScore:17, gpuRec:"RTX 2070", gpuRecScore:35,
+    cpuMin:"Core i5 (geração recente)", cpuMinScore:20, cpuRec:"Core i7 (geração recente)", cpuRecScore:30,
+    ramMin:16, ramRec:32, storage:40 },
+  { id:"helldivers2", name:"Helldivers 2",
+    gpuMin:"GTX 1050 Ti", gpuMinScore:17, gpuRec:"RTX 3060", gpuRecScore:38,
+    cpuMin:"Core i7-4770K", cpuMinScore:15, cpuRec:"Core i7-9700K", cpuRecScore:27,
+    ramMin:8, ramRec:16, storage:100 },
+  { id:"witcher3", name:"The Witcher 3 (Next-Gen)",
+    gpuMin:"GTX 660 / RX 570", gpuMinScore:15, gpuRec:"GTX 1070 / RX Vega 56", gpuRecScore:28,
+    cpuMin:"Core i5-2500K / FX-8350", cpuMinScore:10, cpuRec:"Core i7-8700K / Ryzen 5 3600X", cpuRecScore:26,
+    ramMin:8, ramRec:16, storage:50 },
+  { id:"valorant", name:"Valorant",
+    gpuMin:"Intel HD 4000 / GT 730", gpuMinScore:6, gpuRec:"GTX 1050 Ti", gpuRecScore:17,
+    cpuMin:"Core i3-4150", cpuMinScore:8, cpuRec:"Core i5-9400F", cpuRecScore:20,
+    ramMin:4, ramRec:4, storage:30 },
+  { id:"cs2", name:"Counter-Strike 2",
+    gpuMin:"GTX 660 / Radeon HD 7850", gpuMinScore:14, gpuRec:"GTX 1060 / RX 580", gpuRecScore:22,
+    cpuMin:"Dual-core (~2.4GHz)", cpuMinScore:10, cpuRec:"Quad-core recente", cpuRecScore:18,
+    ramMin:8, ramRec:8, storage:85 },
+  { id:"fortnite", name:"Fortnite",
+    gpuMin:"Intel UHD 630 / GT 730", gpuMinScore:8, gpuRec:"GTX 1060 6GB", gpuRecScore:22,
+    cpuMin:"Core i3-3225", cpuMinScore:10, cpuRec:"Core i5-7500 / Ryzen 3 3300X", cpuRecScore:20,
+    ramMin:8, ramRec:16, storage:30 },
+  { id:"minecraft", name:"Minecraft (Java)",
+    gpuMin:"Intel HD Graphics", gpuMinScore:6, gpuRec:"GTX 960 / equivalente", gpuRecScore:15,
+    cpuMin:"Core i3-3210 / AMD A8-7600", cpuMinScore:8, cpuRec:"Core i5-4690 / AMD A10-7800", cpuRecScore:15,
+    ramMin:4, ramRec:8, storage:4 },
+];
+
+function pcMatchHardware(rawText, db) {
+  if (!rawText) return null;
+  const norm = rawText.toUpperCase();
+  let best = null;
+  for (const entry of db) {
+    const key = entry.name.toUpperCase();
+    if (norm.includes(key) && (!best || key.length > best.name.length)) best = entry;
+  }
+  return best;
+}
+
+function pcDetectGpuRaw() {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (!gl) return null;
+    const ext = gl.getExtension("WEBGL_debug_renderer_info");
+    if (!ext) return null;
+    return gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || null;
+  } catch (e) { return null; }
+}
+
+function pcDetectOs() {
+  const ua = navigator.userAgent || "";
+  if (/Windows/.test(ua)) return "Windows 10/11";
+  if (/Mac OS X/.test(ua)) return "macOS";
+  if (/Android/.test(ua)) return "Android";
+  if (/Linux/.test(ua)) return "Linux";
+  return null;
+}
+
+function pcTierOf(have, min, rec) {
+  if (have == null || Number.isNaN(have)) return "unknown";
+  if (have >= rec) return "rec";
+  if (have >= min) return "min";
+  return "below";
+}
+
+const PC_TIER_META = {
+  rec: { label: "Atende o recomendado", icon: CheckCircle2, cls: "pcRowGood" },
+  min: { label: "Atende só o mínimo", icon: AlertTriangle, cls: "pcRowWarn" },
+  below: { label: "Abaixo do mínimo", icon: XCircle, cls: "pcRowBad" },
+  unknown: { label: "Selecione para comparar", icon: AlertTriangle, cls: "pcRowWarn" },
+};
+
+// Formulário pra cadastrar (ou editar) um jogo com specs próprias — pra quando
+// o jogo não está na lista embutida. A pessoa cola o texto dos requisitos (ex.:
+// "NVIDIA GTX 950 or AMD Radeon RX 470") e a gente sugere automaticamente a
+// placa/processador mais parecido na nossa base, pra entrar na comparação de
+// notas; dá pra trocar a sugestão manualmente se ela vier errada.
+function PcGameForm({ initial, onCancel, onSave, onDelete }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [gpuMinText, setGpuMinText] = useState(initial?.gpuMin || "");
+  const [gpuRecText, setGpuRecText] = useState(initial?.gpuRec || "");
+  const [cpuMinText, setCpuMinText] = useState(initial?.cpuMin || "");
+  const [cpuRecText, setCpuRecText] = useState(initial?.cpuRec || "");
+  const [gpuMinRef, setGpuMinRef] = useState(initial?.gpuMinRef || "");
+  const [gpuRecRef, setGpuRecRef] = useState(initial?.gpuRecRef || "");
+  const [cpuMinRef, setCpuMinRef] = useState(initial?.cpuMinRef || "");
+  const [cpuRecRef, setCpuRecRef] = useState(initial?.cpuRecRef || "");
+  const [ramMin, setRamMin] = useState(initial?.ramMin ?? 8);
+  const [ramRec, setRamRec] = useState(initial?.ramRec ?? 16);
+  const [storage, setStorage] = useState(initial?.storage ?? 50);
+
+  const gpuMinSuggestion = useMemo(() => pcMatchHardware(gpuMinText, PC_GPU_DB), [gpuMinText]);
+  const gpuRecSuggestion = useMemo(() => pcMatchHardware(gpuRecText, PC_GPU_DB), [gpuRecText]);
+  const cpuMinSuggestion = useMemo(() => pcMatchHardware(cpuMinText, PC_CPU_DB), [cpuMinText]);
+  const cpuRecSuggestion = useMemo(() => pcMatchHardware(cpuRecText, PC_CPU_DB), [cpuRecText]);
+
+  const gpuMinRefValue = gpuMinRef || (gpuMinSuggestion ? gpuMinSuggestion.name : "");
+  const gpuRecRefValue = gpuRecRef || (gpuRecSuggestion ? gpuRecSuggestion.name : "");
+  const cpuMinRefValue = cpuMinRef || (cpuMinSuggestion ? cpuMinSuggestion.name : "");
+  const cpuRecRefValue = cpuRecRef || (cpuRecSuggestion ? cpuRecSuggestion.name : "");
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    const gpuMinEntry = PC_GPU_DB.find(g => g.name === gpuMinRefValue);
+    const gpuRecEntry = PC_GPU_DB.find(g => g.name === gpuRecRefValue);
+    const cpuMinEntry = PC_CPU_DB.find(c => c.name === cpuMinRefValue);
+    const cpuRecEntry = PC_CPU_DB.find(c => c.name === cpuRecRefValue);
+    onSave({
+      id: initial?.id || ("custom-" + crypto.randomUUID()),
+      name: name.trim(),
+      custom: true,
+      gpuMin: gpuMinText.trim() || gpuMinRefValue || "—", gpuMinScore: gpuMinEntry ? gpuMinEntry.score : 0,
+      gpuRec: gpuRecText.trim() || gpuRecRefValue || "—", gpuRecScore: gpuRecEntry ? gpuRecEntry.score : 0,
+      cpuMin: cpuMinText.trim() || cpuMinRefValue || "—", cpuMinScore: cpuMinEntry ? cpuMinEntry.score : 0,
+      cpuRec: cpuRecText.trim() || cpuRecRefValue || "—", cpuRecScore: cpuRecEntry ? cpuRecEntry.score : 0,
+      gpuMinRef: gpuMinRefValue, gpuRecRef: gpuRecRefValue, cpuMinRef: cpuMinRefValue, cpuRecRef: cpuRecRefValue,
+      ramMin: Number(ramMin) || 0, ramRec: Number(ramRec) || 0, storage: Number(storage) || 0,
+    });
+  };
+
+  return (
+    <div className="content">
+      <div className="flashFormHead">
+        <h2>{initial ? "Editar" : "Adicionar"} jogo</h2>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onCancel}>Cancelar</button>
+          <button className="add" disabled={!name.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+
+      <div className="exerciseFormFields" style={{ maxWidth: 560 }}>
+        <label>Nome do jogo<input autoFocus value={name} onChange={e=>setName(e.target.value)} placeholder="Ex.: Resident Evil 4 Remake"/></label>
+
+        <label>Placa de vídeo — mínimo<input value={gpuMinText} onChange={e=>setGpuMinText(e.target.value)} placeholder="Ex.: NVIDIA GTX 950 or AMD Radeon RX 470"/></label>
+        <label>Nota de referência usada na comparação {gpuMinSuggestion && !gpuMinRef && <small className="boardSettingsHint">sugerido a partir do texto acima</small>}
+          <select value={gpuMinRefValue} onChange={e=>setGpuMinRef(e.target.value)}>
+            <option value="">Nenhuma (não compara)</option>
+            {PC_GPU_DB.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
+          </select>
+        </label>
+
+        <label>Placa de vídeo — recomendado<input value={gpuRecText} onChange={e=>setGpuRecText(e.target.value)} placeholder="Ex.: NVIDIA GTX 1060 6GB or AMD Radeon RX 580 8GB"/></label>
+        <label>Nota de referência usada na comparação {gpuRecSuggestion && !gpuRecRef && <small className="boardSettingsHint">sugerido a partir do texto acima</small>}
+          <select value={gpuRecRefValue} onChange={e=>setGpuRecRef(e.target.value)}>
+            <option value="">Nenhuma (não compara)</option>
+            {PC_GPU_DB.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
+          </select>
+        </label>
+
+        <label>Processador — mínimo<input value={cpuMinText} onChange={e=>setCpuMinText(e.target.value)} placeholder="Ex.: Intel Core i3-4160, 3.6 GHz or AMD equivalent"/></label>
+        <label>Nota de referência usada na comparação {cpuMinSuggestion && !cpuMinRef && <small className="boardSettingsHint">sugerido a partir do texto acima</small>}
+          <select value={cpuMinRefValue} onChange={e=>setCpuMinRef(e.target.value)}>
+            <option value="">Nenhuma (não compara)</option>
+            {PC_CPU_DB.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+        </label>
+
+        <label>Processador — recomendado<input value={cpuRecText} onChange={e=>setCpuRecText(e.target.value)} placeholder="Ex.: Intel Core i5-4670, 3.4 Ghz or AMD Ryzen5 1600, 3.2 Ghz"/></label>
+        <label>Nota de referência usada na comparação {cpuRecSuggestion && !cpuRecRef && <small className="boardSettingsHint">sugerido a partir do texto acima</small>}
+          <select value={cpuRecRefValue} onChange={e=>setCpuRecRef(e.target.value)}>
+            <option value="">Nenhuma (não compara)</option>
+            {PC_CPU_DB.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+        </label>
+
+        <label>RAM mínima (GB)<input type="number" min="1" max="256" value={ramMin} onChange={e=>setRamMin(e.target.value)}/></label>
+        <label>RAM recomendada (GB)<input type="number" min="1" max="256" value={ramRec} onChange={e=>setRamRec(e.target.value)}/></label>
+        <label>Armazenamento necessário (GB)<input type="number" min="1" max="500" value={storage} onChange={e=>setStorage(e.target.value)}/></label>
+      </div>
+
+      {initial && onDelete && (
+        <div className="flashSection">
+          <button className="ghost" onClick={onDelete}><Trash2 size={14}/> Excluir este jogo</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PcCompatTest() {
+  const [detected] = useState(() => ({
+    gpuRaw: pcDetectGpuRaw(),
+    cores: navigator.hardwareConcurrency || null,
+    ramGB: navigator.deviceMemory || null,
+    os: pcDetectOs(),
+  }));
+  const matchedGpu = useMemo(() => pcMatchHardware(detected.gpuRaw, PC_GPU_DB), [detected.gpuRaw]);
+
+  const [gpuKey, setGpuKey] = useState(matchedGpu ? matchedGpu.name : "");
+  const [cpuKey, setCpuKey] = useState("");
+  const [ramGB, setRamGB] = useState(detected.ramGB || 8);
+  const [customGames, setCustomGames] = usePersistentState("pc-test-custom-games", []);
+  const combinedGames = useMemo(() => [...PC_GAMES_DB, ...customGames], [customGames]);
+  const [gameId, setGameId] = useState(PC_GAMES_DB[0].id);
+  const [formMode, setFormMode] = useState(null); // null | "new" | jogo custom sendo editado
+
+  const game = combinedGames.find(g => g.id === gameId);
+  const gpuEntry = PC_GPU_DB.find(g => g.name === gpuKey);
+  const cpuEntry = PC_CPU_DB.find(c => c.name === cpuKey);
+
+  if (formMode !== null) {
+    return <PcGameForm
+      initial={formMode === "new" ? null : formMode}
+      onCancel={() => setFormMode(null)}
+      onSave={(g) => {
+        setCustomGames(list => {
+          const exists = list.some(x => x.id === g.id);
+          return exists ? list.map(x => x.id === g.id ? g : x) : [...list, g];
+        });
+        setGameId(g.id);
+        setFormMode(null);
+      }}
+      onDelete={formMode !== "new" ? () => {
+        if (!confirm(`Excluir "${formMode.name}"?`)) return;
+        setCustomGames(list => list.filter(x => x.id !== formMode.id));
+        if (gameId === formMode.id) setGameId(PC_GAMES_DB[0].id);
+        setFormMode(null);
+      } : undefined}
+    />;
+  }
+
+  const rows = game ? [
+    { label: "Placa de vídeo (GPU)", icon: MonitorCheck,
+      have: gpuEntry ? gpuEntry.score : null, haveLabel: gpuKey || "não selecionada",
+      min: game.gpuMinScore, minLabel: game.gpuMin, rec: game.gpuRecScore, recLabel: game.gpuRec },
+    { label: "Processador (CPU)", icon: Cpu,
+      have: cpuEntry ? cpuEntry.score : null, haveLabel: cpuKey || "não selecionado",
+      min: game.cpuMinScore, minLabel: game.cpuMin, rec: game.cpuRecScore, recLabel: game.cpuRec },
+    { label: "Memória RAM", icon: MemoryStick,
+      have: ramGB, haveLabel: ramGB + " GB",
+      min: game.ramMin, minLabel: game.ramMin + " GB", rec: game.ramRec, recLabel: game.ramRec + " GB" },
+  ] : [];
+
+  const tiers = rows.map(r => pcTierOf(r.have, r.min, r.rec));
+  const overall = rows.some((r,i) => tiers[i]==="unknown") ? "unknown"
+    : tiers.includes("below") ? "below"
+    : tiers.includes("min") ? "min" : "rec";
+
+  const overallMsg = {
+    rec: { text: "Deve rodar bem, próximo das configurações recomendadas.", cls: "pcOverallGood" },
+    min: { text: "Deve rodar, mas provavelmente só nas configurações mais baixas.", cls: "pcOverallWarn" },
+    below: { text: "Provavelmente não roda de forma satisfatória — pelo menos um componente está abaixo do mínimo.", cls: "pcOverallBad" },
+    unknown: { text: "Selecione a GPU e o CPU do seu PC abaixo para ver o resultado.", cls: "pcOverallWarn" },
+  }[overall];
+
+  return (
+    <div className="content">
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><Cpu size={22}/></div>
+          <div>
+            <small>ÁREA DE LAZER · JOGOS</small>
+            <h2>Meu PC roda?</h2>
+            <p>Compare as especificações do seu PC com os requisitos de alguns jogos.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flashSection">
+        <h3>Specs detectadas</h3>
+        <p className="emptyHint" style={{marginTop:-4}}>
+          O navegador não tem acesso total ao hardware — a GPU costuma ser detectada com boa precisão,
+          mas RAM e CPU são só uma estimativa. Confira e ajuste os campos abaixo se precisar.
+        </p>
+        <div className="exerciseFormFields" style={{maxWidth:520}}>
+          <label>Placa de vídeo (GPU) {matchedGpu && <small className="boardSettingsHint">detectada: {detected.gpuRaw}</small>}
+            <select value={gpuKey} onChange={e=>setGpuKey(e.target.value)}>
+              <option value="">Selecione a GPU...</option>
+              {PC_GPU_DB.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
+            </select>
+          </label>
+          <label>Processador (CPU) {detected.cores && <small className="boardSettingsHint">{detected.cores} núcleos lógicos detectados (não identifica o modelo exato)</small>}
+            <select value={cpuKey} onChange={e=>setCpuKey(e.target.value)}>
+              <option value="">Selecione o CPU...</option>
+              {PC_CPU_DB.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+          </label>
+          <label>Memória RAM (GB) {detected.ramGB && <small className="boardSettingsHint">estimativa do navegador: {detected.ramGB}GB (pode estar limitada abaixo do valor real)</small>}
+            <input type="number" min="1" max="256" value={ramGB} onChange={e=>setRamGB(Number(e.target.value)||0)}/>
+          </label>
+          {detected.os && <p className="emptyHint">Sistema operacional detectado: {detected.os}</p>}
+        </div>
+      </div>
+
+      <div className="flashSection">
+        <div className="flashHeadActions" style={{marginBottom:10}}>
+          <h3 style={{margin:0}}>Jogo</h3>
+          <button className="add" onClick={()=>setFormMode("new")}><Plus size={16}/> Adicionar jogo</button>
+        </div>
+        <div className="exerciseFormFields" style={{maxWidth:520}}>
+          <label>Escolha o jogo
+            <select value={gameId} onChange={e=>setGameId(e.target.value)}>
+              <optgroup label="Jogos padrão">
+                {PC_GAMES_DB.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </optgroup>
+              {customGames.length > 0 && <optgroup label="Seus jogos">
+                {customGames.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </optgroup>}
+            </select>
+          </label>
+          {game?.custom && <button className="ghost" onClick={()=>setFormMode(game)}><Pencil size={13}/> Editar este jogo</button>}
+        </div>
+      </div>
+
+      {game && <div className="flashSection">
+        <h3>Resultado</h3>
+        <div className={"pcOverallBanner "+overallMsg.cls}>
+          {overall==="rec" && <CheckCircle2 size={18}/>}
+          {overall==="min" && <AlertTriangle size={18}/>}
+          {overall==="below" && <XCircle size={18}/>}
+          {overall==="unknown" && <AlertTriangle size={18}/>}
+          <span>{overallMsg.text}</span>
+        </div>
+        <div className="pcRows">
+          {rows.map((r,i) => {
+            const t = tiers[i];
+            const meta = PC_TIER_META[t];
+            const MetaIcon = meta.icon;
+            const RowIcon = r.icon;
+            return (
+              <div className={"pcRow "+meta.cls} key={r.label}>
+                <div className="pcRowHead"><RowIcon size={17}/><b>{r.label}</b></div>
+                <div className="pcRowSpecs">
+                  <span>Você: <b>{r.haveLabel}</b></span>
+                  <span>Mínimo: {r.minLabel}</span>
+                  <span>Recomendado: {r.recLabel}</span>
+                </div>
+                <div className="pcRowVerdict"><MetaIcon size={15}/> {meta.label}</div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="emptyHint" style={{marginTop:12}}>
+          Armazenamento necessário: {game.storage}GB livres. As notas de GPU/CPU usadas na comparação são uma estimativa
+          relativa de desempenho, não um benchmark oficial — trate o resultado como indicativo.
+        </p>
+      </div>}
     </div>
   );
 }
