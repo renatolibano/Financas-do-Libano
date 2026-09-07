@@ -928,6 +928,36 @@ as $$
   order by coalesce(sort_order, 2147483647), created_at asc;
 $$;
 
+-- Área de Estudos: "Word" — editor de texto completo (estilo Microsoft Word)
+-- dentro do app. Segue o mesmo padrão de economia de egress já usado em
+-- "notes": a listagem só busca um resumo em texto puro ("preview"), e o
+-- "content" (HTML inteiro do documento) só é buscado quando o documento é
+-- aberto (ver useEntity/fetchFull).
+create table if not exists word_documents (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null default 'Documento sem título',
+  content text not null default '',
+  preview text not null default '',
+  page_size text not null default 'a4' check (page_size in ('a4','carta')),
+  orientation text not null default 'retrato' check (orientation in ('retrato','paisagem')),
+  margins text not null default 'normal' check (margins in ('estreita','normal','larga')),
+  sort_order int,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+alter table word_documents enable row level security;
+do $$ declare t text; begin foreach t in array array['word_documents'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
+
 -- Atualização: histórico de novidades do app. Cada linha publicada aqui vira
 -- a notificação "Novas atualizações!" pra todo mundo que usa o app (não é
 -- por usuário como as outras tabelas — select libera pra qualquer conta

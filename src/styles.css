@@ -1541,3 +1541,147 @@ h1{font-size:23px}
 .pcRow.pcRowGood .pcRowVerdict{color:#3ecf6a}
 .pcRow.pcRowWarn .pcRowVerdict{color:#f5a523}
 .pcRow.pcRowBad .pcRowVerdict{color:#ff5c5c}
+
+/* ---------------------------------------------------------------------- */
+/* "Word" (Área de Estudos) — faixa de opções, página em branco e barra   */
+/* de status, no mesmo espírito visual do Microsoft Word, com a paleta    */
+/* de cores do app.                                                       */
+/* ---------------------------------------------------------------------- */
+.wordDocIcon{width:30px;height:30px;border-radius:8px;background:var(--accent);color:var(--accent-text-on);display:grid;place-items:center;margin-bottom:8px}
+
+.wordModal{grid-template-rows:auto auto auto 1fr auto!important}
+.wordRibbonTabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow-x:auto}
+.wordRibbonTabs button{padding:9px 14px;font-size:12.5px;font-weight:700;color:var(--text-2);border-bottom:2px solid transparent;white-space:nowrap}
+.wordRibbonTabs button:hover{color:var(--text-1)}
+.wordRibbonTabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+.wordRibbon{display:flex;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow-x:auto}
+.wordRibbonGroup{display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 10px;min-width:60px}
+.wordRibbonGroupWide{min-width:150px}
+.wordRibbonRow{display:flex;align-items:center;gap:3px;flex-wrap:wrap;justify-content:center}
+.wordRibbonRow>button{width:29px;height:27px;border-radius:6px;display:grid;place-items:center;color:var(--text-2);flex:0 0 auto}
+.wordRibbonRow>button:hover{background:var(--bg-surface-3);color:var(--accent)}
+.wordRibbonRow>button.active{background:var(--accent-soft-bg);color:var(--accent)}
+.wordRibbonGroupLabel{font-size:9.5px;color:var(--text-3);white-space:nowrap;margin-top:auto}
+.wordRibbonDivider{width:1px;background:var(--border-soft);margin:2px 4px;flex:0 0 auto}
+.wordStylesGallery>button{width:32px}
+
+.wordDropdownWrap{position:relative;display:inline-flex}
+.wordDropdownBtn{display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;font-size:11.5px;color:var(--text-2);white-space:nowrap}
+.wordDropdownBtn:hover{background:var(--bg-surface-3);color:var(--text-1)}
+.wordDropdownMenu{position:absolute;top:calc(100% + 6px);left:0;z-index:8;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:1px;min-width:150px;max-height:260px;overflow-y:auto;box-shadow:0 20px 60px #000a}
+.wordDropdownMenu button{padding:7px 9px;border-radius:6px;text-align:left;font-size:12.5px;color:var(--text-1)}
+.wordDropdownMenu button:hover{background:var(--bg-hover-2)}
+.wordDropdownMenu button.active{color:var(--accent);font-weight:700}
+.wordSizeMenu{min-width:76px;flex-direction:row;flex-wrap:wrap;max-width:170px}
+.wordSizeMenu button{flex:0 0 auto;padding:6px 8px}
+
+.wordFindBar{position:absolute;top:8px;right:18px;display:flex;align-items:center;gap:6px;padding:7px 9px;background:var(--bg-modal);border:1px solid var(--border);border-radius:11px;box-shadow:0 16px 40px #000a;z-index:9;flex-wrap:wrap;max-width:min(92%,560px)}
+.wordFindBar input{background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:7px;padding:5px 8px;color:var(--text-1);font-size:12px;width:118px}
+.wordFindCount{font-size:11px;color:var(--text-3);min-width:34px;text-align:center}
+.wordFindBar>button{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--text-2);flex:0 0 auto}
+.wordFindBar>button:hover{background:var(--bg-surface-3);color:var(--text-1)}
+.wordFindBar>button.ghost{width:auto;padding:0 8px;font-size:11.5px}
+
+.wordPageArea{position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
+.wordPageWrap{display:flex;flex-direction:column;align-items:center}
+.wordRuler{width:794px;height:16px;margin-bottom:2px;border-radius:2px;background:repeating-linear-gradient(to right,#c9c2ab 0,#c9c2ab 1px,transparent 1px,transparent 9.53px),linear-gradient(#efe9d8,#efe9d8);box-shadow:0 2px 6px #0004;flex:0 0 auto}
+.wordRuler-paisagem{width:1123px}
+.wordRuler-carta{width:816px}
+.wordRuler-carta.wordRuler-paisagem{width:1056px}
+
+.wordPage{background:#fff;color:#1a1a1a;box-shadow:0 6px 30px #0007;width:794px;min-height:1123px;display:flex;flex-direction:column;box-sizing:border-box}
+.wordPage-carta{width:816px;min-height:1056px}
+.wordPage-paisagem{width:1123px;min-height:794px}
+.wordPage-carta.wordPage-paisagem{width:1056px;min-height:816px}
+.wordMargin-estreita .wordRichBody{padding:48px}
+.wordMargin-normal .wordRichBody{padding:76px}
+.wordMargin-larga .wordRichBody{padding:110px}
+
+.wordRichBody{flex:1;box-sizing:border-box;font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1a1a1a}
+.wordRichBody h1{font-size:20pt;font-weight:700;margin:14px 0 8px}
+.wordRichBody h2{font-size:16pt;font-weight:700;margin:12px 0 6px}
+.wordRichBody h3{font-size:13pt;font-weight:700;margin:10px 0 6px}
+.wordRichBody blockquote{margin:8px 0;padding-left:16px;border-left:3px solid #c9cdd6;color:#555;font-style:italic}
+.wordRichBody p,.wordRichBody div{margin:0 0 6px}
+.wordRichBody table.word-table{border-collapse:collapse;width:100%;margin:10px 0}
+.wordRichBody table.word-table td{border:1px solid #b9bec7;padding:6px 8px;min-width:40px;vertical-align:top}
+.wordRichBody img{max-width:100%;height:auto;display:block;margin:8px 0}
+.wordRichBody .word-page-break{position:relative;margin:22px 0;border-top:1px dashed #b9bec7;text-align:center;user-select:none}
+.wordRichBody .word-page-break span{position:relative;top:-9px;background:#fff;padding:0 8px;font-size:10px;color:#9aa0ab;text-transform:uppercase;letter-spacing:.05em}
+.wordRichBody mark.word-find-hit{background:#ffe066;color:inherit}
+.wordRichBody mark.word-find-hit-active{background:#ff9d3d}
+
+.wordStatusBar{display:flex;align-items:center;gap:14px;padding:7px 16px;border-top:1px solid var(--border-soft);background:var(--bg-reader-toolbar);font-size:11px;color:var(--text-3)}
+.wordStatusSpacer{flex:1}
+
+.wordExportWrap{position:relative}
+.wordExportMenu{position:absolute;top:calc(100% + 6px);right:0;z-index:9;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:1px;min-width:160px;box-shadow:0 20px 60px #000a}
+.wordExportMenu button{padding:8px 10px;border-radius:7px;text-align:left;font-size:12.5px;color:var(--text-1);display:flex;align-items:center;gap:7px}
+.wordExportMenu button:hover{background:var(--bg-hover-2)}
+.wordZoomValue{font-size:11.5px;color:var(--text-2);min-width:36px;text-align:center}
+
+.wordTableDialogBack{z-index:70}
+.wordTableDialog{background:var(--bg-modal);border:1px solid var(--border);border-radius:14px;padding:20px;width:260px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 90px #000a}
+.wordTableDialog h3{margin:0;font-size:15px}
+.wordTableDialog label{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text-2)}
+.wordTableDialog input{width:70px;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:7px;padding:6px 8px;color:var(--text-1)}
+.wordTableDialogActions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+
+/* Pincel de formatação — cursor de "aplicar formato" enquanto ativo */
+.wordPainting{cursor:cell}
+
+/* Aumentar/Diminuir fonte (A+/A-) */
+.wordTextBtn{width:auto!important;padding:0 6px;font-size:12px;font-weight:600}
+.wordTextBtn sup,.wordTextBtn sub{font-size:9px}
+
+/* Título/Subtítulo na galeria de Estilos */
+.wordStyleTextBtn{width:auto!important;padding:0 8px;font-size:11px;white-space:nowrap}
+.wordStyleTitleBtn{font-weight:800}
+.wordStyleSubtitleBtn{font-style:italic;color:var(--text-2)}
+.wordRichBody .word-title{font-size:28pt;font-weight:800;letter-spacing:-.01em;margin:16px 0 4px}
+.wordRichBody .word-subtitle{font-size:14pt;color:#5b6472;font-style:italic;margin:0 0 12px}
+
+/* Mostrar tudo — marcas de parágrafo (¶) */
+.wordShowMarks p::after,.wordShowMarks div::after,.wordShowMarks li::after,
+.wordShowMarks h1::after,.wordShowMarks h2::after,.wordShowMarks h3::after,
+.wordShowMarks blockquote::after{content:"¶";color:#8ea0c9;opacity:.6;margin-left:3px;font-weight:400}
+
+/* Caixa de texto */
+.wordRichBody .word-textbox{border:1px solid #b9bec7;border-radius:2px;padding:10px 14px;margin:10px 0;min-width:160px;max-width:100%;background:#fdfdfd}
+
+/* Letra capitular */
+.wordRichBody .word-dropcap{float:left;font-size:44pt;line-height:.8;padding:4px 6px 0 0;font-weight:700}
+
+/* Cabeçalho/Rodapé — faixa única (o editor não pagina em folhas separadas,
+   então não se repete "por página" como no Word real; ver aviso no chat) */
+.wordRichBody .word-header-band{border-bottom:1px dashed #c9cdd6;padding-bottom:8px;margin-bottom:14px;color:#5b6472;font-size:9.5pt}
+.wordRichBody .word-footer-band{border-top:1px dashed #c9cdd6;padding-top:8px;margin-top:14px;color:#5b6472;font-size:9.5pt}
+.wordRichBody .word-pagenum{display:inline-block;padding:0 5px;border:1px dashed #b9bec7;border-radius:3px;background:#f4f2ee;user-select:none}
+
+/* Modo de exibição "Rascunho" — tira a moldura/sombra de folha de papel e
+   mostra o texto corrido, como a visão de rascunho do Word de verdade. */
+.wordPage.wordPage-draft{box-shadow:none;width:min(100%,860px);min-height:0;background:transparent}
+.wordPage.wordPage-draft .wordRichBody{padding:26px 6px!important;max-width:720px;margin:0 auto}
+.wordPage.wordPage-draft .word-page-break{margin:14px 0}
+
+/* Colunas */
+.wordRichBody .word-columns{column-gap:28px;-webkit-column-gap:28px}
+
+/* Campos numéricos de Recuo/Espaçamento (aba Layout) */
+.wordNumberField{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-2);white-space:nowrap}
+.wordNumberField input{width:44px;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:6px;padding:3px 5px;color:var(--text-1);font-size:11.5px}
+
+/* Linhas de grade (View) */
+.wordPage.wordPage-grid{background-color:#fff;background-image:linear-gradient(#0000000f 1px,transparent 1px),linear-gradient(90deg,#0000000f 1px,transparent 1px);background-size:24px 24px}
+
+@media(max-width:760px){
+  .wordRibbonGroupLabel{display:none}
+  .wordRibbonGroup{min-width:auto;padding:0 5px}
+  .wordPage,.wordPage-carta,.wordPage-paisagem,.wordPage-carta.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.414)}
+  .wordRuler,.wordRuler-paisagem,.wordRuler-carta,.wordRuler-carta.wordRuler-paisagem{width:calc(100vw - 40px)}
+  .wordMargin-estreita .wordRichBody{padding:24px}
+  .wordMargin-normal .wordRichBody{padding:32px}
+  .wordMargin-larga .wordRichBody{padding:44px}
+  .wordFindBar{left:8px;right:8px;max-width:none}
+}

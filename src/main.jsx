@@ -20,7 +20,12 @@ import {
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
   ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, ImageOff, Lock, AlertTriangle,
   Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3,
-  Mic, Headphones, Quote, Cpu, MemoryStick, HardDrive, MonitorCheck
+  Mic, Headphones, Quote, Cpu, MemoryStick, HardDrive, MonitorCheck,
+  Strikethrough, Subscript, Superscript, Indent, IndentIncrease, IndentDecrease,
+  Ruler, Printer, Replace, Table2, RectangleHorizontal, RectangleVertical,
+  FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
+  Paintbrush, CaseSensitive, CaseUpper, Columns2, SquareDashed, PanelTop, PanelBottom,
+  Frame, PaintRoller, Sigma, FileDigit, ScrollText
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -59,6 +64,7 @@ import {
   sortByProximity,
 } from "./lib/calendar";
 import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
+import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
 import {
   playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
@@ -160,6 +166,10 @@ const initialNotes = [
   {id:2, title:"Lista de compras", content:"Arroz, feijão, café, frutas."},
 ];
 
+const initialWordDocuments = [
+  {id:1, title:"Documento sem título", content:"", preview:"", page_size:"a4", orientation:"retrato", margins:"normal"},
+];
+
 const initialReminders = [
   {id:1, title:"Aniversário do João", date:"14/08", kind:"Aniversário"},
   {id:2, title:"Fatura do cartão", date:"25/08", kind:"Financeiro"},
@@ -211,7 +221,7 @@ const HOME_PAGE_OPTIONS = [
   { group: "Lembretes", pages: [{key:"Lembretes Comuns", label:"Lembretes comuns"},"Aniversários"] },
   { group: "Geral", pages: ["Calendário","Notas","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
-  { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF"] },
+  { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF","Word"] },
   { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos",{key:"Teste de PC", label:"Meu PC roda?"}] },
 ];
 
@@ -485,6 +495,11 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // dados, em vez de baixar todas as capas toda vez que o app abre.
   const livrosVisitado = visitedPages.has("Biblioteca") || visitedPages.has("Livros Lendo") || visitedPages.has("Livros Lidos") || visitedPages.has("Livros Para Ler") || visitedPages.has("Metas de Estudo");
   const pdfEstudoVisitado = visitedPages.has("Leitor de PDF") || visitedPages.has("Metas de Estudo");
+  // "Word": mesma lógica de listagem enxuta que Notas — a estante só busca
+  // título/preview/data, e o "content" (HTML inteiro do documento) só é
+  // buscado ao abrir (fetchFull), pra não pagar egress com documentos que
+  // podem crescer bastante (imagens/tabelas embutidas no HTML).
+  const wordVisitado = visitedPages.has("Word");
   // Listagem enxuta (sem notes/drawings/highlights/favorite_excerpts — texto
   // e JSON que só importam quando o item é aberto no leitor). Ver
   // useEntity/fetchFull, que completa a linha inteira nesse momento.
@@ -499,6 +514,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const readingStats = useReadingStats(session);
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
+  const wordDocs = useEntity("word_documents", initialWordDocuments, session, "desc", {orderable:true, listSelect: "id,title,preview,page_size,orientation,margins,sort_order,updated_at,created_at", enabled: wordVisitado});
   // Flashcards soltos (criados a partir de um trecho selecionado no Leitor
   // de PDF, fora de uma lista) só são exibidos dentro da própria aba
   // Flashcards — então adiamos a primeira busca até ela ser visitada nesta
@@ -1018,6 +1034,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Flashcards", icon:Layers },
       { key:"Nivelamento", icon:BarChart3 },
       { key:"Leitor de PDF", icon:FileText },
+      { key:"Word", icon:FileType2 },
     ]},
     { type:"group", key:"lazer", label:"Área de Lazer", icon:Popcorn, children:[
       { key:"Treino", icon:Dumbbell },
@@ -1133,6 +1150,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session}/>}
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
+      {page==="Word" && <WordDocs entity={wordDocs}/>}
       {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
@@ -13504,5 +13522,1269 @@ function NoteEditor({ note, onClose, onSave }) {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// "Word" (Área de Estudos) — estante de documentos, no mesmo padrão de
+// Notas: listagem enxuta (sem o HTML inteiro) + fetchFull() só ao abrir.
+
+function WordDocs({ entity }) {
+  const { data, add, remove, update, fetchFull, cloud } = entity;
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [activeDoc, setActiveDoc] = useState(null);
+  const [openingId, setOpeningId] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const openDoc = async (doc) => {
+    setOpeningId(doc.id);
+    const full = cloud ? (await fetchFull(doc.id)) || doc : doc;
+    setOpeningId(null);
+    setActiveDoc(full);
+  };
+
+  const createDoc = async () => {
+    setCreating(true);
+    try {
+      const inserted = await add({ title: "Documento sem título", content: "", preview: "", page_size: "a4", orientation: "retrato", margins: "normal" });
+      if (inserted) setActiveDoc(inserted);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDuplicate = async (doc) => {
+    setOpenMenuId(null);
+    const full = cloud ? (await fetchFull(doc.id)) || doc : doc;
+    await add({ title: (full.title || "Documento") + " (cópia)", content: full.content || "", preview: full.preview || "", page_size: full.page_size || "a4", orientation: full.orientation || "retrato", margins: full.margins || "normal" });
+  };
+
+  const handleDelete = async (doc) => {
+    setOpenMenuId(null);
+    if (!confirm(`Excluir "${doc.title}"? Essa ação não pode ser desfeita.`)) return;
+    await remove(doc.id);
+  };
+
+  const visibleDocs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return data;
+    return data.filter(d => (d.title + " " + (d.preview || "")).toLowerCase().includes(q));
+  }, [data, query]);
+
+  return (
+    <div className="content">
+      <div className="notesActions">
+        <div className="notesSearchRow">
+          <div className="notesSearchBox">
+            <Search size={14}/>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar documentos..."/>
+          </div>
+        </div>
+      </div>
+
+      <div className="notesGrid" onClick={() => setOpenMenuId(null)}>
+        <div className="noteTile addTile" onClick={createDoc}>
+          <div className="noteCoverWrap addCover">
+            {creating ? <span>Criando...</span> : <><Plus size={26}/><span>Documento em branco</span></>}
+          </div>
+        </div>
+        {visibleDocs.map(doc => (
+          <div className="noteTile" key={doc.id}>
+            <div className="noteCoverWrap" onClick={() => openDoc(doc)}>
+              <div className="wordDocIcon"><FileType2 size={16}/></div>
+              <b className="noteTitle">{doc.title}</b>
+              <p className="notePreview">{openingId === doc.id ? "Abrindo..." : (doc.preview?.trim() || "Documento vazio")}</p>
+              <div className="noteTileFoot">
+                <small className="noteTileTime">{doc.updated_at ? `editado ${timeAgo(doc.updated_at)}` : ""}</small>
+              </div>
+            </div>
+            <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === doc.id ? null : doc.id); }}>
+              <MoreVertical size={15}/>
+            </button>
+            {openMenuId === doc.id && (
+              <div className="bookMenu" onClick={e => e.stopPropagation()}>
+                <button onClick={() => { setOpenMenuId(null); openDoc(doc); }}><FileType2 size={14}/> Abrir</button>
+                <button onClick={() => handleDuplicate(doc)}><Copy size={14}/> Duplicar</button>
+                <button className="danger" onClick={() => handleDelete(doc)}><Trash2 size={14}/> Excluir</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {visibleDocs.length === 0 && (
+        <p className="emptyHint">{data.length === 0 ? "Nenhum documento por aqui ainda." : "Nenhum documento encontrado."}</p>
+      )}
+
+      {activeDoc && (
+        <WordEditor
+          doc={activeDoc}
+          onClose={() => setActiveDoc(null)}
+          onSave={(patch) => {
+            const fullPatch = { ...patch, updated_at: new Date().toISOString() };
+            // Mesma lógica de Notas: mantém "preview" (a coluna leve da
+            // listagem) em dia sempre que o conteúdo muda.
+            if (patch.content !== undefined) {
+              const text = stripHtml(patch.content).trim();
+              fullPatch.preview = !text ? "" : text.slice(0, 200);
+            }
+            update(activeDoc.id, fullPatch);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Formatação de texto do "Word" — irmã mais completa de useNoteFormatting
+// (mesma técnica: contentEditable + execCommand), com fonte/tamanho real em
+// pt, cabeçalhos, recuo, espaçamento entre linhas, tabela, imagem, quebra de
+// página e localizar/substituir. Link e emoji reaproveitam os mesmos nomes
+// de campo de useNoteFormatting de propósito, pra poder usar o mesmo
+// <NoteLinkFloatingUI/> sem duplicar aquele componente.
+
+const WORD_TEXT_COLORS = ["#1a1a1a", "#f5f7fb", "#ff5c5c", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
+const WORD_FONTS = ["Calibri", "Arial", "Georgia", "Times New Roman", "Courier New", "Verdana", "Trebuchet MS"];
+const WORD_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 72];
+const WORD_LINE_HEIGHTS = ["1", "1.15", "1.5", "2", "2.5"];
+// Sombreamento (cor de fundo do parágrafo/bloco) — grupo separado do
+// realce de texto: no Word real, "Sombreamento" fica no fim da linha de
+// alinhamento do grupo Parágrafo, ao lado de "Bordas".
+const WORD_SHADING_COLORS = ["transparent", "#f2ede6", "#ffe066", "#c9f0d8", "#cfe4ff", "#f3d9ff", "#ffd6d6"];
+const WORD_BORDER_PRESETS = [
+  { key: "none", label: "Sem borda" },
+  { key: "bottom", label: "Borda inferior" },
+  { key: "top", label: "Borda superior" },
+  { key: "all", label: "Todas as bordas" },
+];
+// Símbolos especiais — equivalente simplificado do botão "Símbolo" do
+// Word (Inserir > Símbolos), com foco em matemática/grego já que é comum
+// nas provas de concurso.
+const WORD_SYMBOLS = [
+  "±", "×", "÷", "≈", "≠", "≤", "≥", "√", "∞", "π", "∑", "∫",
+  "Δ", "α", "β", "θ", "λ", "μ", "Ω", "°", "²", "³", "½", "¼",
+  "→", "←", "↔", "•", "§", "©", "®", "™",
+];
+
+function useWordFormatting(bodyRef, onChange) {
+  const [colorOpen, setColorOpen] = useState(false);
+  const [hiliteOpen, setHiliteOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [fontOpen, setFontOpen] = useState(false);
+  const [sizeOpen, setSizeOpen] = useState(false);
+  const [lineOpen, setLineOpen] = useState(false);
+  const [marginsOpen, setMarginsOpen] = useState(false);
+  const [shadingOpen, setShadingOpen] = useState(false);
+  const [borderOpen, setBorderOpen] = useState(false);
+  const [symbolOpen, setSymbolOpen] = useState(false);
+  const [pageNumOpen, setPageNumOpen] = useState(false);
+  const [linkBar, setLinkBar] = useState(null);
+  const [linkPopover, setLinkPopover] = useState(null);
+  const savedRangeRef = useRef(null);
+  const editingAnchorRef = useRef(null);
+
+  const keepFocus = (e) => e.preventDefault();
+
+  const exec = (command, value = null) => {
+    bodyRef.current?.focus();
+    document.execCommand(command, false, value);
+    onChange();
+  };
+
+  const closeAllPopovers = () => {
+    setColorOpen(false); setHiliteOpen(false); setEmojiOpen(false);
+    setFontOpen(false); setSizeOpen(false); setLineOpen(false); setMarginsOpen(false);
+    setShadingOpen(false); setBorderOpen(false); setSymbolOpen(false); setPageNumOpen(false);
+  };
+
+  const applyTextColor = (c) => { exec("foreColor", c); setColorOpen(false); };
+  const applyHilite = (c) => {
+    bodyRef.current?.focus();
+    const ok = document.execCommand("hiliteColor", false, c);
+    if (!ok) document.execCommand("backColor", false, c);
+    onChange();
+    setHiliteOpen(false);
+  };
+  const applyFont = (font) => { exec("fontName", font); setFontOpen(false); };
+
+  // O execCommand("fontSize") só entende a escala 1-7 do HTML antigo — aqui
+  // aplicamos com o maior valor (7) e trocamos o atributo pelo tamanho em pt
+  // de verdade, técnica padrão pra ter tamanhos reais num contentEditable.
+  const applyFontSize = (pt) => {
+    bodyRef.current?.focus();
+    document.execCommand("fontSize", false, "7");
+    bodyRef.current?.querySelectorAll('font[size="7"]').forEach(f => {
+      f.removeAttribute("size");
+      f.style.fontSize = pt + "pt";
+    });
+    onChange();
+    setSizeOpen(false);
+  };
+
+  // ---- pincel de formatação (format painter) — versão simplificada: copia
+  // negrito/itálico/sublinhado/tachado/cor do texto na posição do cursor e
+  // aplica na próxima seleção feita pelo usuário, desligando sozinho depois.
+  const [painting, setPainting] = useState(false);
+  const paintFormatRef = useRef(null);
+
+  const pickPaintFormat = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let node = sel.getRangeAt(0).startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const cs = node ? window.getComputedStyle(node) : null;
+    paintFormatRef.current = {
+      bold: document.queryCommandState("bold"),
+      italic: document.queryCommandState("italic"),
+      underline: document.queryCommandState("underline"),
+      strike: document.queryCommandState("strikeThrough"),
+      color: cs ? cs.color : null,
+    };
+    setPainting(true);
+  };
+
+  const applyPaintFormat = () => {
+    if (!painting) return;
+    const data = paintFormatRef.current;
+    const sel = window.getSelection();
+    if (!data || !sel || sel.rangeCount === 0 || sel.isCollapsed || !bodyRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      setPainting(false);
+      return;
+    }
+    bodyRef.current?.focus();
+    if (document.queryCommandState("bold") !== data.bold) document.execCommand("bold");
+    if (document.queryCommandState("italic") !== data.italic) document.execCommand("italic");
+    if (document.queryCommandState("underline") !== data.underline) document.execCommand("underline");
+    if (document.queryCommandState("strikeThrough") !== data.strike) document.execCommand("strikeThrough");
+    if (data.color) document.execCommand("foreColor", false, data.color);
+    setPainting(false);
+    onChange();
+  };
+
+  // ---- aumentar/diminuir fonte (A+ / A-) — passeia pela mesma escala de
+  // tamanhos do menu "Tamanho", a partir do tamanho atual do cursor.
+  const growShrinkFont = (delta) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    let currentPt = 11;
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === 3) node = node.parentElement;
+      if (node) currentPt = Math.round(parseFloat(window.getComputedStyle(node).fontSize) * 0.75) || 11;
+    }
+    let idx = 0;
+    let best = Infinity;
+    WORD_SIZES.forEach((v, i) => { const d = Math.abs(v - currentPt); if (d < best) { best = d; idx = i; } });
+    const nextIdx = Math.min(WORD_SIZES.length - 1, Math.max(0, idx + delta));
+    applyFontSize(WORD_SIZES[nextIdx]);
+  };
+
+  // ---- maiúsculas e minúsculas ----
+  const [caseOpen, setCaseOpen] = useState(false);
+  const applyChangeCase = (mode) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) { setCaseOpen(false); return; }
+    el.focus();
+    const range = sel.getRangeAt(0);
+    const frag = range.extractContents();
+    const transform = (t) => {
+      if (mode === "upper") return t.toUpperCase();
+      if (mode === "lower") return t.toLowerCase();
+      if (mode === "title") return t.replace(/\S+/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+      if (mode === "sentence") return t.replace(/(^\s*\w|[.!?]\s+\w)/g, m => m.toUpperCase());
+      if (mode === "toggle") return t.split("").map(c => c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()).join("");
+      return t;
+    };
+    const walker = document.createTreeWalker(frag, NodeFilter.SHOW_TEXT);
+    let tn;
+    while ((tn = walker.nextNode())) tn.textContent = transform(tn.textContent);
+    range.insertNode(frag);
+    setCaseOpen(false);
+    onChange();
+  };
+
+  // ---- estilos de parágrafo com classe própria (Título / Subtítulo) ----
+  const applyParagraphStyle = (kind) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    document.execCommand("formatBlock", false, "P");
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === 3) node = node.parentElement;
+      const block = node?.closest?.("p,div");
+      if (block && el.contains(block)) {
+        block.classList.remove("word-title", "word-subtitle");
+        if (kind === "title") block.classList.add("word-title");
+        if (kind === "subtitle") block.classList.add("word-subtitle");
+      }
+    }
+    onChange();
+  };
+
+  // ---- letra capitular (drop cap) — alterna no parágrafo atual ----
+  const toggleDropCap = () => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) return;
+    let node = sel.getRangeAt(0).startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const block = node?.closest?.("p,div,li");
+    if (!block || !el.contains(block)) return;
+    const existing = block.querySelector(":scope > span.word-dropcap");
+    if (existing) {
+      const parent = existing.parentNode;
+      while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
+      parent.removeChild(existing);
+    } else {
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      const firstText = walker.nextNode();
+      if (!firstText || !firstText.textContent.trim()) return;
+      const text = firstText.textContent;
+      const span = document.createElement("span");
+      span.className = "word-dropcap";
+      span.textContent = text[0];
+      const rest = document.createTextNode(text.slice(1));
+      firstText.parentNode.insertBefore(span, firstText);
+      firstText.parentNode.insertBefore(rest, firstText);
+      firstText.parentNode.removeChild(firstText);
+    }
+    onChange();
+  };
+
+  // ---- caixa de texto ----
+  const insertTextBox = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const box = document.createElement("div");
+    box.className = "word-textbox";
+    box.innerHTML = "<div>Caixa de texto</div>";
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(box); }
+      else el.append(box, after);
+    } else {
+      el.append(box, after);
+    }
+    onChange();
+  };
+
+  // ---- cabeçalho / rodapé — faixa única (o editor não pagina de verdade em
+  // várias folhas, então isso não se repete "por página" como no Word real;
+  // funciona como uma faixa fixa no topo/fim do documento) ----
+  const insertHeaderFooterBand = (kind) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const cls = kind === "header" ? "word-header-band" : "word-footer-band";
+    let band = el.querySelector("." + cls);
+    if (band) {
+      const r = document.createRange();
+      r.selectNodeContents(band);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      band.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.focus();
+      return;
+    }
+    band = document.createElement("div");
+    band.className = cls;
+    band.innerHTML = kind === "header" ? "<div>Cabeçalho</div>" : "<div>Rodapé</div>";
+    if (kind === "header") el.insertBefore(band, el.firstChild);
+    else el.appendChild(band);
+    onChange();
+  };
+
+  // ---- número de página — como o editor não pagina de verdade em folhas
+  // separadas (mesma observação de insertHeaderFooterBand acima), insere um
+  // marcador de texto editável na faixa de cabeçalho/rodapé em vez de um
+  // campo dinâmico real.
+  const insertPageNumber = (where) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const cls = where === "header" ? "word-header-band" : "word-footer-band";
+    let band = el.querySelector("." + cls);
+    if (!band) {
+      band = document.createElement("div");
+      band.className = cls;
+      band.innerHTML = "<div></div>";
+      if (where === "header") el.insertBefore(band, el.firstChild);
+      else el.appendChild(band);
+    }
+    const inner = band.querySelector("div") || band;
+    const span = document.createElement("span");
+    span.className = "word-pagenum";
+    span.setAttribute("contenteditable", "false");
+    span.textContent = "Página 1";
+    inner.appendChild(document.createTextNode(" "));
+    inner.appendChild(span);
+    setPageNumOpen(false);
+    onChange();
+  };
+
+  // ---- colunas ----
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const applyColumns = (n) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    const wrap = document.createElement("div");
+    wrap.className = "word-columns";
+    wrap.style.columnCount = String(n);
+    if (n <= 1) { setColumnsOpen(false); return; }
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed && el.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      const range = sel.getRangeAt(0);
+      wrap.appendChild(range.extractContents());
+      range.insertNode(wrap);
+    } else {
+      while (el.firstChild) wrap.appendChild(el.firstChild);
+      el.appendChild(wrap);
+    }
+    setColumnsOpen(false);
+    onChange();
+  };
+
+  // ---- recuo e espaçamento de parágrafo (aba Layout) ----
+  const currentBlock = () => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) return null;
+    let node = sel.getRangeAt(0).startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    return findTopLevelChild(el, node) || node?.closest?.("p,div,li") || null;
+  };
+  const setParagraphIndent = (cm) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.marginLeft = cm + "cm"; onChange(); }
+  };
+  const setParagraphIndentRight = (cm) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.marginRight = cm + "cm"; onChange(); }
+  };
+  const setParagraphSpacing = (pt) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.marginBottom = pt + "pt"; onChange(); }
+  };
+  const setParagraphSpacingBefore = (pt) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.marginTop = pt + "pt"; onChange(); }
+  };
+
+  // ---- sombreamento (cor de fundo do bloco) e bordas — irmãs do recuo
+  // acima, também agem sobre o bloco atual em vez de um trecho de texto ----
+  const applyShading = (color) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.backgroundColor = color === "transparent" ? "" : color; onChange(); }
+    setShadingOpen(false);
+  };
+  const applyBorder = (kind) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) {
+      block.style.border = ""; block.style.borderTop = ""; block.style.borderBottom = "";
+      block.style.padding = "";
+      if (kind === "bottom") { block.style.borderBottom = "1px solid #1a1a1a"; block.style.padding = "0 0 4px"; }
+      else if (kind === "top") { block.style.borderTop = "1px solid #1a1a1a"; block.style.padding = "4px 0 0"; }
+      else if (kind === "all") { block.style.border = "1px solid #1a1a1a"; block.style.padding = "4px 8px"; }
+      onChange();
+    }
+    setBorderOpen(false);
+  };
+
+  const applyHeading = (tag) => exec("formatBlock", tag);
+  const clearFormatting = () => exec("removeFormat");
+  const selectAll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
+  const insertEmoji = (emoji) => {
+    bodyRef.current?.focus();
+    document.execCommand("insertText", false, emoji);
+    setEmojiOpen(false);
+    onChange();
+  };
+
+  const insertSymbol = (sym) => {
+    bodyRef.current?.focus();
+    document.execCommand("insertText", false, sym);
+    setSymbolOpen(false);
+    onChange();
+  };
+
+  const insertDateTime = () => {
+    const now = new Date();
+    const text = now.toLocaleDateString("pt-BR") + " " + now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    exec("insertText", text);
+  };
+
+  const insertPageBreak = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const div = document.createElement("div");
+    div.className = "word-page-break";
+    div.setAttribute("contenteditable", "false");
+    div.innerHTML = "<span>Quebra de página</span>";
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(div); }
+      else el.append(div, after);
+    } else {
+      el.append(div, after);
+    }
+    const r = document.createRange();
+    r.setStart(after, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    onChange();
+  };
+
+  const insertTable = (rows, cols) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const table = document.createElement("table");
+    table.className = "word-table";
+    for (let r = 0; r < rows; r++) {
+      const tr = document.createElement("tr");
+      for (let c = 0; c < cols; c++) {
+        const td = document.createElement("td");
+        td.innerHTML = "<br>";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(table); }
+      else el.append(table, after);
+    } else {
+      el.append(table, after);
+    }
+    onChange();
+  };
+
+  const insertImageFile = async (file) => {
+    if (!file) return;
+    try {
+      // Redimensiona/comprime antes de embutir no HTML — sem isso, uma foto
+      // de celular facilmente passaria de vários MB em base64 dentro do
+      // documento, pesando tanto pra salvar quanto pra abrir depois.
+      const dataUrl = await resizeImageToDataUrl(file, 1000, 1400, 0.75);
+      bodyRef.current?.focus();
+      document.execCommand("insertImage", false, dataUrl);
+      onChange();
+    } catch (e) {
+      alert("Não foi possível inserir a imagem: " + (e.message || e));
+    }
+  };
+
+  const applyLineHeight = (value) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    let blocks = [];
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      const range = sel.getRangeAt(0);
+      Array.from(el.children).forEach(child => { if (range.intersectsNode(child)) blocks.push(child); });
+    } else if (sel && sel.rangeCount > 0) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).startContainer);
+      if (top) blocks = [top];
+    }
+    if (!blocks.length) blocks = [el];
+    blocks.forEach(b => { b.style.lineHeight = value; });
+    setLineOpen(false);
+    onChange();
+  };
+
+  // ---- localizar / substituir ----
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceValue, setReplaceValue] = useState("");
+  const [findMatches, setFindMatches] = useState([]);
+  const [findIndex, setFindIndex] = useState(0);
+
+  const clearFindMarks = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.querySelectorAll("mark.word-find-hit").forEach(m => {
+      const parent = m.parentNode;
+      if (!parent) return;
+      while (m.firstChild) parent.insertBefore(m.firstChild, m);
+      parent.removeChild(m);
+      parent.normalize();
+    });
+  };
+
+  const resetFindHighlights = () => { clearFindMarks(); setFindMatches([]); setFindIndex(0); };
+
+  const goToMatch = (marks, i) => {
+    marks.forEach(m => m.classList.remove("word-find-hit-active"));
+    const m = marks[i];
+    if (!m) return;
+    m.classList.add("word-find-hit-active");
+    m.scrollIntoView({ block: "center", behavior: "smooth" });
+    setFindIndex(i);
+  };
+
+  const runFind = (query) => {
+    clearFindMarks();
+    const el = bodyRef.current;
+    if (!el || !query.trim()) { setFindMatches([]); return; }
+    const q = query.toLowerCase();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+    const marks = [];
+    textNodes.forEach(tn => {
+      const text = tn.textContent;
+      const lower = text.toLowerCase();
+      const positions = [];
+      let idx = 0;
+      while ((idx = lower.indexOf(q, idx)) !== -1) { positions.push(idx); idx += q.length; }
+      if (!positions.length) return;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      positions.forEach(pos => {
+        if (pos > last) frag.appendChild(document.createTextNode(text.slice(last, pos)));
+        const mark = document.createElement("mark");
+        mark.className = "word-find-hit";
+        mark.textContent = text.slice(pos, pos + q.length);
+        frag.appendChild(mark);
+        marks.push(mark);
+        last = pos + q.length;
+      });
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      tn.parentNode.replaceChild(frag, tn);
+    });
+    setFindMatches(marks);
+    if (marks.length) goToMatch(marks, 0); else setFindIndex(0);
+  };
+
+  const findNext = () => { if (findMatches.length) goToMatch(findMatches, (findIndex + 1) % findMatches.length); };
+  const findPrev = () => { if (findMatches.length) goToMatch(findMatches, (findIndex - 1 + findMatches.length) % findMatches.length); };
+
+  const replaceCurrent = () => {
+    const m = findMatches[findIndex];
+    if (!m) return;
+    m.textContent = replaceValue;
+    clearFindMarks();
+    setFindMatches([]);
+    onChange();
+    setTimeout(() => runFind(findQuery), 0);
+  };
+
+  const replaceAll = () => {
+    if (!findMatches.length) return;
+    findMatches.forEach(m => { m.textContent = replaceValue; });
+    clearFindMarks();
+    setFindMatches([]);
+    onChange();
+  };
+
+  const closeFind = () => { resetFindHighlights(); setFindOpen(false); setFindQuery(""); setReplaceValue(""); };
+
+  // ---- link (mesmos nomes de campo de useNoteFormatting, de propósito) ----
+  const updateLinkBar = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) { setLinkBar(null); return; }
+    const range = sel.getRangeAt(0);
+    if (!bodyRef.current || !bodyRef.current.contains(range.commonAncestorContainer)) { setLinkBar(null); return; }
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setLinkBar(null); return; }
+    setLinkBar({ top: rect.top - 42, left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76) });
+  };
+
+  const openLinkPopover = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0).cloneRange();
+    savedRangeRef.current = range;
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const anchor = node?.closest?.("a");
+    editingAnchorRef.current = (anchor && bodyRef.current?.contains(anchor)) ? anchor : null;
+    const rect = range.getBoundingClientRect();
+    setLinkPopover({
+      top: Math.max(rect.top - 46, 8),
+      left: Math.min(Math.max(rect.left, 8), window.innerWidth - 268),
+      value: editingAnchorRef.current ? (editingAnchorRef.current.getAttribute("href") || "") : "",
+    });
+    setLinkBar(null);
+  };
+
+  const closeLinkPopover = () => { setLinkPopover(null); editingAnchorRef.current = null; savedRangeRef.current = null; };
+
+  const confirmLink = () => {
+    const raw = (linkPopover?.value || "").trim();
+    if (!raw) { closeLinkPopover(); return; }
+    const url = /^([a-z][a-z0-9+.-]*:)/i.test(raw) ? raw : `https://${raw}`;
+    bodyRef.current?.focus();
+    if (editingAnchorRef.current) {
+      editingAnchorRef.current.setAttribute("href", url);
+    } else {
+      const range = savedRangeRef.current;
+      if (range) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try {
+          const a = document.createElement("a");
+          a.href = url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.className = "note-link";
+          a.appendChild(range.extractContents());
+          range.insertNode(a);
+          const r = document.createRange();
+          r.setStartAfter(a);
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+        } catch { /* seleção cruza limites incompatíveis — ignora */ }
+      }
+    }
+    closeLinkPopover();
+    onChange();
+  };
+
+  const removeLink = () => {
+    const a = editingAnchorRef.current;
+    if (a && a.parentNode) {
+      const parent = a.parentNode;
+      while (a.firstChild) parent.insertBefore(a.firstChild, a);
+      parent.removeChild(a);
+    }
+    closeLinkPopover();
+    onChange();
+  };
+
+  const handleBodyClick = (e) => {
+    const link = e.target.closest?.("a");
+    if (link && bodyRef.current?.contains(link)) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        e.preventDefault();
+        const href = link.getAttribute("href");
+        if (href) window.open(href, "_blank", "noopener,noreferrer");
+      }
+    }
+  };
+
+  return {
+    exec, keepFocus, closeAllPopovers,
+    colorOpen, setColorOpen, hiliteOpen, setHiliteOpen, emojiOpen, setEmojiOpen,
+    fontOpen, setFontOpen, sizeOpen, setSizeOpen, lineOpen, setLineOpen, marginsOpen, setMarginsOpen,
+    shadingOpen, setShadingOpen, borderOpen, setBorderOpen, symbolOpen, setSymbolOpen, pageNumOpen, setPageNumOpen,
+    applyTextColor, applyHilite, applyFont, applyFontSize, applyHeading, clearFormatting, selectAll,
+    insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertImageFile, applyLineHeight,
+    findOpen, setFindOpen, findQuery, setFindQuery, replaceValue, setReplaceValue,
+    findMatches, findIndex, runFind, findNext, findPrev, replaceCurrent, replaceAll, closeFind, resetFindHighlights,
+    linkBar, linkPopover, setLinkPopover, openLinkPopover, confirmLink, removeLink, closeLinkPopover, updateLinkBar, handleBodyClick,
+    painting, pickPaintFormat, applyPaintFormat, growShrinkFont,
+    caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber,
+    columnsOpen, setColumnsOpen, applyColumns, setParagraphIndent, setParagraphIndentRight, setParagraphSpacing, setParagraphSpacingBefore,
+    applyShading, applyBorder,
+  };
+}
+
+function WordTableDialog({ onClose, onConfirm }) {
+  const [rows, setRows] = useState(3);
+  const [cols, setCols] = useState(3);
+  return (
+    <div className="readerBack wordTableDialogBack" onClick={onClose}>
+      <div className="wordTableDialog" onClick={e => e.stopPropagation()}>
+        <h3>Inserir tabela</h3>
+        <label>Linhas <input type="number" min="1" max="20" value={rows} onChange={e => setRows(Math.max(1, Number(e.target.value) || 1))}/></label>
+        <label>Colunas <input type="number" min="1" max="10" value={cols} onChange={e => setCols(Math.max(1, Number(e.target.value) || 1))}/></label>
+        <div className="wordTableDialogActions">
+          <button className="ghost" onClick={onClose}>Cancelar</button>
+          <button className="primary" onClick={() => onConfirm(rows, cols)}>Inserir</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WordEditor — a "faixa de opções" propriamente dita. 4 abas (Página
+// Inicial/Inserir/Layout/Exibir), igual à ordem e aos grupos do Word de
+// verdade, pra quem já usa (ou vai aprender por tutorial) achar tudo no
+// mesmo lugar.
+
+function WordEditor({ doc, onClose, onSave }) {
+  const [title, setTitle] = useState(doc.title || "");
+  const [pageSize, setPageSize] = useState(doc.page_size || "a4");
+  const [orientation, setOrientation] = useState(doc.orientation || "retrato");
+  const [margins, setMargins] = useState(doc.margins || "normal");
+  const [ribbonTab, setRibbonTab] = useState("home");
+  const [zoom, setZoom] = useState(100);
+  const [showRuler, setShowRuler] = useState(true);
+  const [wordCount, setWordCount] = useState(() => countWords(doc.content || ""));
+  const [exportOpen, setExportOpen] = useState(false);
+  const [tableDialogOpen, setTableDialogOpen] = useState(false);
+  const [showMarks, setShowMarks] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
+  const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
+
+  const bodyRef = useRef(null);
+  const modalRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const saveTimer = useRef(null);
+  const pageAreaRef = useRef(null);
+  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.innerHTML = doc.content || "";
+    setTitle(doc.title || "");
+    setPageSize(doc.page_size || "a4");
+    setOrientation(doc.orientation || "retrato");
+    setMargins(doc.margins || "normal");
+    setWordCount(countWords(doc.content || ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.id]);
+
+  const scheduleSave = (patch) => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => onSave(patch), 600);
+  };
+
+  const handleTitleChange = (e) => {
+    const v = e.target.value;
+    setTitle(v);
+    scheduleSave({ title: v });
+  };
+
+  const handleBodyInput = () => {
+    if (fmt.findMatches.length) fmt.resetFindHighlights();
+    const html = bodyRef.current?.innerHTML || "";
+    setWordCount(countWords(html));
+    scheduleSave({ content: html });
+  };
+
+  const fmt = useWordFormatting(bodyRef, handleBodyInput);
+
+  const changePageSetting = (key, value) => {
+    if (key === "page_size") setPageSize(value);
+    if (key === "orientation") setOrientation(value);
+    if (key === "margins") setMargins(value);
+    scheduleSave({ [key]: value });
+  };
+
+  const PAGE_DIMS = {
+    a4: { w: 794, h: 1123 }, carta: { w: 816, h: 1056 },
+  };
+  const currentPageDims = () => {
+    const base = PAGE_DIMS[pageSize] || PAGE_DIMS.a4;
+    return orientation === "paisagem" ? { w: base.h, h: base.w } : base;
+  };
+  const fitZoomToWidth = () => {
+    const area = pageAreaRef.current;
+    if (!area) return;
+    const { w } = currentPageDims();
+    const avail = area.clientWidth - 40;
+    setZoom(Math.max(50, Math.min(200, Math.round((avail / w) * 100))));
+  };
+  const fitZoomToPage = () => {
+    const area = pageAreaRef.current;
+    if (!area) return;
+    const { h } = currentPageDims();
+    const avail = area.clientHeight - 52;
+    setZoom(Math.max(50, Math.min(200, Math.round((avail / h) * 100))));
+  };
+
+  const handleClose = () => {
+    clearTimeout(saveTimer.current);
+    onSave({
+      title: title.trim() || "Documento sem título",
+      content: bodyRef.current?.innerHTML || "",
+      page_size: pageSize, orientation, margins,
+    });
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    onClose();
+  };
+
+  const handleImagePick = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) fmt.insertImageFile(file);
+  };
+
+  const currentDocForExport = () => ({ title, content: bodyRef.current?.innerHTML || "", page_size: pageSize, orientation, margins });
+
+  return (
+    <div className="readerBack">
+      <div ref={modalRef} className={"readerModal wordModal readerModalWide" + (fullscreen ? " readerModalFull" : "")}>
+        <div className="readerHead">
+          <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
+          <div className="readerHeadActions">
+            <div className="wordExportWrap">
+              <button className="ghost" onClick={() => setExportOpen(o => !o)}><Download size={15}/> <span>Baixar</span></button>
+              {exportOpen && (
+                <div className="wordExportMenu" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => { setExportOpen(false); downloadWordDocx(currentDocForExport()); }}><FileType2 size={14}/> Word (.docx)</button>
+                  <button onClick={() => { setExportOpen(false); downloadWordPdf(currentDocForExport()); }}><FileDown size={14}/> PDF</button>
+                </div>
+              )}
+            </div>
+            <button title="Imprimir" onClick={() => window.print()}><Printer size={16}/></button>
+            <button title={fullscreen ? "Sair da tela cheia" : "Tela cheia"} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
+            <button onClick={handleClose}><X/></button>
+          </div>
+        </div>
+
+        <div className="wordRibbonTabs">
+          <button className={ribbonTab === "home" ? "active" : ""} onClick={() => setRibbonTab("home")}>Página Inicial</button>
+          <button className={ribbonTab === "insert" ? "active" : ""} onClick={() => setRibbonTab("insert")}>Inserir</button>
+          <button className={ribbonTab === "layout" ? "active" : ""} onClick={() => setRibbonTab("layout")}>Layout</button>
+          <button className={ribbonTab === "view" ? "active" : ""} onClick={() => setRibbonTab("view")}>Exibir</button>
+        </div>
+
+        <div className="wordRibbon" onMouseDown={fmt.keepFocus}>
+          {ribbonTab === "home" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Recortar" onClick={() => fmt.exec("cut")}><Scissors size={15}/></button>
+                <button title="Copiar" onClick={() => fmt.exec("copy")}><Copy size={15}/></button>
+                <button title="Colar" onClick={() => fmt.exec("paste")}><ClipboardPaste size={15}/></button>
+                <button title="Pincel de formatação" className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Área de Transferência</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" onClick={() => { fmt.setFontOpen(o => !o); fmt.setSizeOpen(false); }}><Type size={13}/> Fonte <ChevronDown size={12}/></button>
+                  {fmt.fontOpen && <div className="wordDropdownMenu">{WORD_FONTS.map(f => <button key={f} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}</div>}
+                </div>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" onClick={() => { fmt.setSizeOpen(o => !o); fmt.setFontOpen(false); }}>Tamanho <ChevronDown size={12}/></button>
+                  {fmt.sizeOpen && <div className="wordDropdownMenu wordSizeMenu">{WORD_SIZES.map(s => <button key={s} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}</div>}
+                </div>
+                <button title="Aumentar fonte" className="wordTextBtn" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
+                <button title="Diminuir fonte" className="wordTextBtn" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
+              </div>
+              <div className="wordRibbonRow">
+                <button title="Negrito" onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
+                <button title="Itálico" onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
+                <button title="Sublinhado" onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
+                <button title="Tachado" onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
+                <button title="Subscrito" onClick={() => fmt.exec("subscript")}><Subscript size={15}/></button>
+                <button title="Sobrescrito" onClick={() => fmt.exec("superscript")}><Superscript size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" title="Maiúsculas e minúsculas" onClick={() => fmt.setCaseOpen(o => !o)}><CaseSensitive size={15}/> <ChevronDown size={12}/></button>
+                  {fmt.caseOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => fmt.applyChangeCase("sentence")}>Primeira letra da frase em maiúscula</button>
+                    <button onClick={() => fmt.applyChangeCase("lower")}>minúsculas</button>
+                    <button onClick={() => fmt.applyChangeCase("upper")}>MAIÚSCULAS</button>
+                    <button onClick={() => fmt.applyChangeCase("title")}>Cada Palavra Em Maiúscula</button>
+                    <button onClick={() => fmt.applyChangeCase("toggle")}>iNVERTER mAIÚSC/mINÚSC</button>
+                  </div>}
+                </div>
+                <div className="emojiWrap">
+                  <button title="Cor de realce" onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={15}/></button>
+                  {fmt.hiliteOpen && <div className="colorPopover">{NOTE_HILITE_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyHilite(c)}/>)}</div>}
+                </div>
+                <div className="emojiWrap">
+                  <button title="Cor da fonte" onClick={() => { fmt.setColorOpen(o => !o); fmt.setHiliteOpen(false); }}><Palette size={15}/></button>
+                  {fmt.colorOpen && <div className="colorPopover">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => fmt.applyTextColor(c)}/>)}</div>}
+                </div>
+                <button title="Limpar formatação" onClick={fmt.clearFormatting}><Eraser size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Fonte</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <button title="Lista com marcadores" onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
+                <button title="Lista numerada" onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
+                <button title="Diminuir recuo" onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
+                <button title="Aumentar recuo" onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" title="Espaçamento entre linhas" onClick={() => fmt.setLineOpen(o => !o)}><WrapText size={14}/> <ChevronDown size={12}/></button>
+                  {fmt.lineOpen && <div className="wordDropdownMenu">{WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}</div>}
+                </div>
+                <button title="Mostrar tudo (marcas de parágrafo)" className={showMarks ? "active" : ""} onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
+              </div>
+              <div className="wordRibbonRow">
+                <button title="Alinhar à esquerda" onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
+                <button title="Centralizar" onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
+                <button title="Alinhar à direita" onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
+                <button title="Justificar" onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
+                <div className="emojiWrap">
+                  <button title="Sombreamento" onClick={() => { fmt.setShadingOpen(o => !o); fmt.setBorderOpen(false); }}><PaintRoller size={15}/></button>
+                  {fmt.shadingOpen && <div className="colorPopover">{WORD_SHADING_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyShading(c)}/>)}</div>}
+                </div>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" title="Bordas" onClick={() => { fmt.setBorderOpen(o => !o); fmt.setShadingOpen(false); }}><Frame size={14}/> <ChevronDown size={12}/></button>
+                  {fmt.borderOpen && <div className="wordDropdownMenu">{WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}</div>}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Parágrafo</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow wordStylesGallery">
+                <button title="Normal" onClick={() => fmt.applyHeading("P")}><Pilcrow size={15}/></button>
+                <button title="Título" className="wordStyleTextBtn wordStyleTitleBtn" onClick={() => fmt.applyParagraphStyle("title")}>Título</button>
+                <button title="Subtítulo" className="wordStyleTextBtn wordStyleSubtitleBtn" onClick={() => fmt.applyParagraphStyle("subtitle")}>Subtítulo</button>
+                <button title="Título 1" onClick={() => fmt.applyHeading("H1")}><Heading1 size={15}/></button>
+                <button title="Título 2" onClick={() => fmt.applyHeading("H2")}><Heading2 size={15}/></button>
+                <button title="Título 3" onClick={() => fmt.applyHeading("H3")}><Heading3 size={15}/></button>
+                <button title="Citação" onClick={() => fmt.applyHeading("BLOCKQUOTE")}><Quote size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Estilos</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Localizar" onClick={() => fmt.setFindOpen(o => !o)}><Search size={15}/></button>
+                <button title="Substituir" onClick={() => fmt.setFindOpen(true)}><Replace size={15}/></button>
+                <button title="Selecionar tudo" onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Edição</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "insert" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button title="Quebra de página" onClick={fmt.insertPageBreak}><FileType size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Páginas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button title="Inserir tabela" onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Tabela</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Inserir imagem" onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
+                <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
+              </div>
+              <span className="wordRibbonGroupLabel">Ilustrações</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button title="Inserir link" onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Links</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Cabeçalho" onClick={() => fmt.insertHeaderFooterBand("header")}><PanelTop size={15}/></button>
+                <button title="Rodapé" onClick={() => fmt.insertHeaderFooterBand("footer")}><PanelBottom size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" title="Número de página" onClick={() => fmt.setPageNumOpen(o => !o)}><FileDigit size={14}/> <ChevronDown size={12}/></button>
+                  {fmt.pageNumOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => fmt.insertPageNumber("header")}>Início da página (cabeçalho)</button>
+                    <button onClick={() => fmt.insertPageNumber("footer")}>Fim da página (rodapé)</button>
+                  </div>}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Cabeçalho e Rodapé</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <button title="Caixa de texto" onClick={fmt.insertTextBox}><SquareDashed size={15}/></button>
+                <button title="Letra capitular" onClick={fmt.toggleDropCap}><CaseUpper size={15}/></button>
+                <button title="Data e hora" onClick={fmt.insertDateTime}><CalendarDays size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Texto</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <div className="emojiWrap">
+                  <button title="Emoji/Símbolo" onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
+                  {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
+                </div>
+                <div className="emojiWrap">
+                  <button title="Símbolo" onClick={() => fmt.setSymbolOpen(o => !o)}><Sigma size={15}/></button>
+                  {fmt.symbolOpen && <div className="emojiPopover">{WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}</div>}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Símbolos</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "layout" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" onClick={() => fmt.setMarginsOpen(o => !o)}>Margens <ChevronDown size={12}/></button>
+                  {fmt.marginsOpen && <div className="wordDropdownMenu">
+                    {["estreita", "normal", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => { changePageSetting("margins", m); fmt.setMarginsOpen(false); }}>{m[0].toUpperCase() + m.slice(1)}</button>)}
+                  </div>}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Margens</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Retrato" className={orientation === "retrato" ? "active" : ""} onClick={() => changePageSetting("orientation", "retrato")}><RectangleVertical size={15}/></button>
+                <button title="Paisagem" className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}><RectangleHorizontal size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Orientação</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="A4" className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4</button>
+                <button title="Carta" className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Tamanho</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" onClick={() => fmt.setColumnsOpen(o => !o)}><Columns2 size={13}/> Colunas <ChevronDown size={12}/></button>
+                  {fmt.columnsOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => fmt.applyColumns(1)}>Uma</button>
+                    <button onClick={() => fmt.applyColumns(2)}>Duas</button>
+                    <button onClick={() => fmt.applyColumns(3)}>Três</button>
+                  </div>}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Colunas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <label className="wordNumberField" title="Recuo à esquerda">Recuar esquerda <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
+              </div>
+              <div className="wordRibbonRow">
+                <label className="wordNumberField" title="Recuo à direita">Recuar direita <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
+              </div>
+              <span className="wordRibbonGroupLabel">Recuo</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <label className="wordNumberField" title="Espaçamento antes do parágrafo">Antes <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacingBefore(Number(e.target.value) || 0)}/> pt</label>
+              </div>
+              <div className="wordRibbonRow">
+                <label className="wordNumberField" title="Espaçamento depois do parágrafo">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
+              </div>
+              <span className="wordRibbonGroupLabel">Espaçamento</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "view" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Layout de Impressão" className={viewMode === "print" ? "active" : ""} onClick={() => setViewMode("print")}><FileText size={15}/></button>
+                <button title="Rascunho" className={viewMode === "draft" ? "active" : ""} onClick={() => setViewMode("draft")}><ScrollText size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Modos de Exibição</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title="Régua" className={showRuler ? "active" : ""} onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
+                <button title="Linhas de grade" className={showGrid ? "active" : ""} onClick={() => setShowGrid(g => !g)}><Grid3x3 size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Mostrar</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                <button title="Diminuir zoom" onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={15}/></button>
+                <span className="wordZoomValue">{zoom}%</span>
+                <button title="Aumentar zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={15}/></button>
+              </div>
+              <div className="wordRibbonRow">
+                <button title="Voltar para 100%" onClick={() => setZoom(100)}>100%</button>
+                <button title="Largura da página" onClick={fitZoomToWidth}>Largura</button>
+                <button title="Uma página" onClick={fitZoomToPage}>Página inteira</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Zoom</span>
+            </div>
+          </>)}
+        </div>
+
+        <div className="wordPageArea" ref={pageAreaRef} onClick={() => fmt.closeAllPopovers()}>
+          {fmt.findOpen && (
+            <div className="wordFindBar" onMouseDown={fmt.keepFocus} onClick={e => e.stopPropagation()}>
+              <Search size={13}/>
+              <input placeholder="Localizar" value={fmt.findQuery} onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }}/>
+              <span className="wordFindCount">{fmt.findMatches.length ? `${fmt.findIndex + 1}/${fmt.findMatches.length}` : "0/0"}</span>
+              <button title="Anterior" onClick={fmt.findPrev}><ChevronDown size={13} style={{ transform: "rotate(180deg)" }}/></button>
+              <button title="Próximo" onClick={fmt.findNext}><ChevronDown size={13}/></button>
+              <input placeholder="Substituir por" value={fmt.replaceValue} onChange={e => fmt.setReplaceValue(e.target.value)}/>
+              <button className="ghost" onClick={fmt.replaceCurrent}>Substituir</button>
+              <button className="ghost" onClick={fmt.replaceAll}>Substituir tudo</button>
+              <button onClick={fmt.closeFind}><X size={13}/></button>
+            </div>
+          )}
+          <div className="wordPageWrap" style={{ zoom: zoom / 100 }}>
+            {showRuler && viewMode === "print" && <div className={"wordRuler" + (orientation === "paisagem" ? " wordRuler-paisagem" : "") + (pageSize === "carta" ? " wordRuler-carta" : "")}/>}
+            <div className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}>
+              <div
+                ref={bodyRef}
+                className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "")}
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck
+                onInput={handleBodyInput}
+                onClick={fmt.handleBodyClick}
+                onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
+                onKeyUp={fmt.updateLinkBar}
+                data-placeholder="Comece a digitar..."
+              />
+            </div>
+          </div>
+          <NoteLinkFloatingUI fmt={fmt}/>
+        </div>
+
+        <div className="wordStatusBar">
+          <span>{wordCount.words} palavra{wordCount.words === 1 ? "" : "s"}</span>
+          <span>{wordCount.chars} caractere{wordCount.chars === 1 ? "" : "s"}</span>
+          <span className="wordStatusSpacer"/>
+          <SpellCheck size={13}/> <span>Verificação ortográfica do navegador ativada</span>
+        </div>
+
+        {tableDialogOpen && (
+          <WordTableDialog onClose={() => setTableDialogOpen(false)} onConfirm={(r, c) => { setTableDialogOpen(false); fmt.insertTable(r, c); }}/>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 createRoot(document.getElementById("root")).render(<Root/>);
