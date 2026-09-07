@@ -1555,7 +1555,7 @@ h1{font-size:23px}
 .wordRibbonTabs button:hover{color:var(--text-1)}
 .wordRibbonTabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
 
-.wordRibbon{display:flex;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow-x:auto}
+.wordRibbon{display:flex;flex-wrap:wrap;row-gap:8px;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow:visible}
 .wordRibbonGroup{display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 10px;min-width:60px}
 .wordRibbonGroupWide{min-width:150px}
 .wordRibbonRow{display:flex;align-items:center;gap:3px;flex-wrap:wrap;justify-content:center}
@@ -1622,6 +1622,17 @@ h1{font-size:23px}
 .wordZoomValue{font-size:11.5px;color:var(--text-2);min-width:36px;text-align:center}
 
 .wordTableDialogBack{z-index:70}
+
+@media print{
+  body *{display:none!important}
+  .readerBack,.wordModal,.wordPageArea,.wordPageWrap,.wordPage,.wordPage *{display:revert!important}
+  .readerBack{display:block!important;position:static!important;inset:auto!important;background:none!important;backdrop-filter:none!important;padding:0!important;height:auto!important}
+  .wordModal{display:block!important;position:static!important;width:auto!important;height:auto!important;max-height:none!important;border:none!important;box-shadow:none!important;background:none!important;overflow:visible!important}
+  .readerHead,.wordRibbonTabs,.wordRibbon,.wordStatusBar,.wordFindBar,.wordRuler,.noteLinkBarBtn,.noteLinkPopover{display:none!important}
+  .wordPageArea{display:block!important;position:static!important;overflow:visible!important;padding:0!important;background:none!important}
+  .wordPageWrap{display:block!important;zoom:1!important}
+  .wordPage{box-shadow:none!important;width:auto!important;min-height:0!important;margin:0!important}
+}
 .wordTableDialog{background:var(--bg-modal);border:1px solid var(--border);border-radius:14px;padding:20px;width:260px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 90px #000a}
 .wordTableDialog h3{margin:0;font-size:15px}
 .wordTableDialog label{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text-2)}
@@ -1632,13 +1643,26 @@ h1{font-size:23px}
 .wordPainting{cursor:cell}
 
 /* Aumentar/Diminuir fonte (A+/A-) */
-.wordTextBtn{width:auto!important;padding:0 6px;font-size:12px;font-weight:600}
+.wordTextBtn{width:auto!important;padding:0 6px;font-size:12px;font-weight:600;white-space:nowrap}
 .wordTextBtn sup,.wordTextBtn sub{font-size:9px}
 
 /* Título/Subtítulo na galeria de Estilos */
 .wordStyleTextBtn{width:auto!important;padding:0 8px;font-size:11px;white-space:nowrap}
 .wordStyleTitleBtn{font-weight:800}
 .wordStyleSubtitleBtn{font-style:italic;color:var(--text-2)}
+
+/* Lista de vários níveis — numeração 1. / 1.1 / 1.1.1 via CSS counters */
+.word-multilevel{counter-reset:wordml;list-style:none;padding-left:22px}
+.word-multilevel>li{counter-increment:wordml;position:relative}
+.word-multilevel>li::marker{content:""}
+.word-multilevel>li::before{content:counters(wordml,".") ". ";position:absolute;left:-22px;font-weight:600;color:var(--text-2)}
+.word-multilevel ol{counter-reset:wordml;list-style:none;padding-left:22px;margin:0}
+
+/* Painel do "Editor" (grupo Editor, aba Página Inicial) */
+.wordEditorPanel{min-width:210px;gap:6px;padding:10px}
+.wordEditorScore{font-weight:700;font-size:12.5px;color:var(--accent);padding-bottom:4px;border-bottom:1px solid var(--border-soft);margin-bottom:2px}
+.wordEditorRow{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--text-2);padding:2px 0}
+.wordEditorRow b{color:var(--text-1)}
 .wordRichBody .word-title{font-size:28pt;font-weight:800;letter-spacing:-.01em;margin:16px 0 4px}
 .wordRichBody .word-subtitle{font-size:14pt;color:#5b6472;font-style:italic;margin:0 0 12px}
 

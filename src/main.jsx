@@ -13664,6 +13664,10 @@ const WORD_SYMBOLS = [
   "Δ", "α", "β", "θ", "λ", "μ", "Ω", "°", "²", "³", "½", "¼",
   "→", "←", "↔", "•", "§", "©", "®", "™",
 ];
+// Rótulos de confidencialidade — equivalente simplificado do grupo
+// "Confidencialidade" do Word/Microsoft 365 (apenas rótulo local, sem
+// nenhuma verificação ou envio a servidor).
+const SENSITIVITY_LABELS = ["Nenhum", "Pessoal", "Geral", "Confidencial", "Altamente confidencial"];
 
 function useWordFormatting(bodyRef, onChange) {
   const [colorOpen, setColorOpen] = useState(false);
@@ -13677,6 +13681,7 @@ function useWordFormatting(bodyRef, onChange) {
   const [borderOpen, setBorderOpen] = useState(false);
   const [symbolOpen, setSymbolOpen] = useState(false);
   const [pageNumOpen, setPageNumOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   const [linkBar, setLinkBar] = useState(null);
   const [linkPopover, setLinkPopover] = useState(null);
   const savedRangeRef = useRef(null);
@@ -13694,6 +13699,7 @@ function useWordFormatting(bodyRef, onChange) {
     setColorOpen(false); setHiliteOpen(false); setEmojiOpen(false);
     setFontOpen(false); setSizeOpen(false); setLineOpen(false); setMarginsOpen(false);
     setShadingOpen(false); setBorderOpen(false); setSymbolOpen(false); setPageNumOpen(false);
+    setSortOpen(false);
   };
 
   const applyTextColor = (c) => { exec("foreColor", c); setColorOpen(false); };
@@ -14126,6 +14132,103 @@ function useWordFormatting(bodyRef, onChange) {
     onChange();
   };
 
+  // ---- lista de vários níveis — cria/alterna uma lista numerada e marca
+  // com uma classe própria pra numeração hierárquica (1. / 1.1 / 1.1.1) via
+  // CSS counters; o aninhamento em si usa Aumentar recuo (Tab), que o
+  // próprio navegador já resolve criando uma <ol> filha dentro do <li>.
+  const applyMultilevelList = () => {
+    bodyRef.current?.focus();
+    document.execCommand("insertOrderedList");
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === 3) node = node.parentElement;
+      const li = node?.closest?.("li");
+      const ol = li?.closest?.("ol");
+      if (ol && bodyRef.current?.contains(ol)) ol.classList.add("word-multilevel");
+    }
+    onChange();
+  };
+
+  // ---- classificar (A→Z / Z→A) — ordena os itens de uma lista, ou os
+  // parágrafos do documento inteiro quando o cursor não está numa lista ----
+  const sortBlocks = (dir) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    let container = el;
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === 3) node = node.parentElement;
+      const list = node?.closest?.("ol,ul");
+      if (list && el.contains(list)) container = list;
+    }
+    const items = Array.from(container.children).filter(c => c.tagName !== "BR");
+    if (items.length < 2) { setSortOpen(false); return; }
+    const collator = new Intl.Collator("pt-BR", { sensitivity: "base" });
+    const sorted = [...items].sort((a, b) => {
+      const cmp = collator.compare(a.textContent || "", b.textContent || "");
+      return dir === "desc" ? -cmp : cmp;
+    });
+    sorted.forEach(it => container.appendChild(it));
+    setSortOpen(false);
+    onChange();
+  };
+
+  // ---- "Sem Espaçamento" — mesmo estilo Normal, mas zera o espaçamento
+  // antes/depois do parágrafo (igual ao estilo rápido do Word real) ----
+  const applyNoSpacing = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    document.execCommand("formatBlock", false, "P");
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      let node = sel.getRangeAt(0).startContainer;
+      if (node.nodeType === 3) node = node.parentElement;
+      const block = node?.closest?.("p,div");
+      if (block && el.contains(block)) {
+        block.classList.remove("word-title", "word-subtitle");
+        block.style.marginTop = "0";
+        block.style.marginBottom = "0";
+      }
+    }
+    onChange();
+  };
+
+  // ---- ditado por voz (grupo "Voz") — usa a Web Speech API nativa do
+  // navegador (sem chamada a servidor nenhum daqui); some sozinho se o
+  // navegador não suportar. ----
+  const [dictating, setDictating] = useState(false);
+  const [dictationSupported] = useState(() => typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition));
+  const recognitionRef = useRef(null);
+  const toggleDictation = () => {
+    if (dictating) { recognitionRef.current?.stop(); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Ditado por voz não é suportado neste navegador."); return; }
+    const rec = new SR();
+    rec.lang = "pt-BR";
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = (e) => {
+      let text = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) text += e.results[i][0].transcript;
+      }
+      if (text) {
+        bodyRef.current?.focus();
+        document.execCommand("insertText", false, text);
+        onChange();
+      }
+    };
+    rec.onend = () => setDictating(false);
+    rec.onerror = () => setDictating(false);
+    recognitionRef.current = rec;
+    bodyRef.current?.focus();
+    try { rec.start(); setDictating(true); } catch { setDictating(false); }
+  };
+
   // ---- localizar / substituir ----
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -14315,6 +14418,8 @@ function useWordFormatting(bodyRef, onChange) {
     caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber,
     columnsOpen, setColumnsOpen, applyColumns, setParagraphIndent, setParagraphIndentRight, setParagraphSpacing, setParagraphSpacingBefore,
     applyShading, applyBorder,
+    applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
+    dictating, dictationSupported, toggleDictation,
   };
 }
 
@@ -14355,6 +14460,9 @@ function WordEditor({ doc, onClose, onSave }) {
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [showMarks, setShowMarks] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
+  const [sensitivityLabel, setSensitivityLabel] = useState("Nenhum");
+  const [sensitivityOpen, setSensitivityOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
 
   const bodyRef = useRef(null);
@@ -14529,8 +14637,16 @@ function WordEditor({ doc, onClose, onSave }) {
               <div className="wordRibbonRow">
                 <button title="Lista com marcadores" onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
                 <button title="Lista numerada" onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
+                <button title="Lista de vários níveis" onClick={fmt.applyMultilevelList}><ListTree size={15}/></button>
                 <button title="Diminuir recuo" onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
                 <button title="Aumentar recuo" onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" title="Classificar" onClick={() => fmt.setSortOpen(o => !o)}><ArrowDown size={13}/> <ChevronDown size={12}/></button>
+                  {fmt.sortOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => fmt.sortBlocks("asc")}>Classificar A → Z</button>
+                    <button onClick={() => fmt.sortBlocks("desc")}>Classificar Z → A</button>
+                  </div>}
+                </div>
                 <div className="wordDropdownWrap">
                   <button className="wordDropdownBtn" title="Espaçamento entre linhas" onClick={() => fmt.setLineOpen(o => !o)}><WrapText size={14}/> <ChevronDown size={12}/></button>
                   {fmt.lineOpen && <div className="wordDropdownMenu">{WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}</div>}
@@ -14557,6 +14673,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow wordStylesGallery">
                 <button title="Normal" onClick={() => fmt.applyHeading("P")}><Pilcrow size={15}/></button>
+                <button title="Sem Espaçamento" className="wordStyleTextBtn" onClick={fmt.applyNoSpacing}>Sem Espaçamento</button>
                 <button title="Título" className="wordStyleTextBtn wordStyleTitleBtn" onClick={() => fmt.applyParagraphStyle("title")}>Título</button>
                 <button title="Subtítulo" className="wordStyleTextBtn wordStyleSubtitleBtn" onClick={() => fmt.applyParagraphStyle("subtitle")}>Subtítulo</button>
                 <button title="Título 1" onClick={() => fmt.applyHeading("H1")}><Heading1 size={15}/></button>
@@ -14574,6 +14691,44 @@ function WordEditor({ doc, onClose, onSave }) {
                 <button title="Selecionar tudo" onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Edição</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button title={fmt.dictationSupported ? "Ditar" : "Ditado não suportado neste navegador"} className={fmt.dictating ? "active" : ""} onClick={fmt.toggleDictation}><Mic size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Voz</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" title="Confidencialidade" onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
+                {sensitivityOpen && <div className="wordDropdownMenu">
+                  {SENSITIVITY_LABELS.map(l => <button key={l} className={sensitivityLabel === l ? "active" : ""} onClick={() => { setSensitivityLabel(l); setSensitivityOpen(false); }}>{l}</button>)}
+                </div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Confidencialidade{sensitivityLabel !== "Nenhum" ? ": " + sensitivityLabel : ""}</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" title="Editor" onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
+                {editorOpen && (() => {
+                  const text = bodyRef.current?.innerText || "";
+                  const doubleSpaces = (text.match(/ {2,}/g) || []).length;
+                  const repeated = (text.match(/\b(\p{L}+)\s+\1\b/giu) || []).length;
+                  const issues = doubleSpaces + repeated;
+                  return (
+                    <div className="wordDropdownMenu wordEditorPanel">
+                      <div className="wordEditorScore">{issues === 0 ? "Nenhum problema encontrado" : `${issues} possível(is) problema(s)`}</div>
+                      <div className="wordEditorRow">Espaços duplos <b>{doubleSpaces}</b></div>
+                      <div className="wordEditorRow">Palavras repetidas <b>{repeated}</b></div>
+                      <div className="wordEditorRow">Tempo de leitura estimado <b>{Math.max(1, Math.round(wordCount.words / 200))} min</b></div>
+                    </div>
+                  );
+                })()}
+              </div>
+              <span className="wordRibbonGroupLabel">Editor</span>
             </div>
           </>)}
 
@@ -14728,9 +14883,9 @@ function WordEditor({ doc, onClose, onSave }) {
                 <button title="Aumentar zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={15}/></button>
               </div>
               <div className="wordRibbonRow">
-                <button title="Voltar para 100%" onClick={() => setZoom(100)}>100%</button>
-                <button title="Largura da página" onClick={fitZoomToWidth}>Largura</button>
-                <button title="Uma página" onClick={fitZoomToPage}>Página inteira</button>
+                <button className="wordTextBtn" title="Voltar para 100%" onClick={() => setZoom(100)}>100%</button>
+                <button className="wordTextBtn" title="Largura da página" onClick={fitZoomToWidth}>Largura</button>
+                <button className="wordTextBtn" title="Uma página" onClick={fitZoomToPage}>Página inteira</button>
               </div>
               <span className="wordRibbonGroupLabel">Zoom</span>
             </div>
