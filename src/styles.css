@@ -1565,6 +1565,14 @@ h1{font-size:23px}
 .wordRibbonGroupLabel{font-size:9.5px;color:var(--text-3);white-space:nowrap;margin-top:auto}
 .wordRibbonDivider{width:1px;background:var(--border-soft);margin:2px 4px;flex:0 0 auto}
 .wordStylesGallery>button{width:32px}
+.wordClipboardRow{display:flex;align-items:stretch;gap:6px}
+.wordPasteBtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:46px;padding:2px 4px;border-radius:6px;color:var(--text-2)}
+.wordPasteBtn:hover{background:var(--bg-surface-3);color:var(--accent)}
+.wordPasteBtnLabel{display:flex;align-items:center;gap:1px;font-size:10px}
+.wordRibbonCol{display:flex;flex-direction:column;gap:2px}
+.wordRibbonCol>button{width:27px;height:19px;border-radius:5px;display:grid;place-items:center;color:var(--text-2)}
+.wordRibbonCol>button:hover{background:var(--bg-surface-3);color:var(--accent)}
+.wordRibbonCol>button.active{background:var(--accent-soft-bg);color:var(--accent)}
 
 .wordDropdownWrap{position:relative;display:inline-flex}
 .wordDropdownBtn{display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;font-size:11.5px;color:var(--text-2);white-space:nowrap}

@@ -15110,6 +15110,7 @@ function WordEditor({ doc, onClose, onSave }) {
   const [sensitivityLabel, setSensitivityLabel] = useState("Nenhum");
   const [sensitivityOpen, setSensitivityOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [addinsOpen, setAddinsOpen] = useState(false);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
   const [ribbonTip, setRibbonTip] = useState(null); // { label, desc, x, y } - tooltip estilo Word
   // Aba "Design" — guardadas dentro do próprio content (ver persistPageMeta),
@@ -15352,11 +15353,16 @@ function WordEditor({ doc, onClose, onSave }) {
         <div className="wordRibbon" onMouseDown={fmt.keepFocus}>
           {ribbonTab === "home" && (<>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Recortar (Ctrl+X)" data-tipdesc="Remove a seleção e a guarda na área de transferência, para colar em outro lugar." onClick={() => fmt.exec("cut")}><Scissors size={15}/></button>
-                <button data-tip="Copiar (Ctrl+C)" data-tipdesc="Copia a seleção para a área de transferência, mantendo o original no lugar." onClick={() => fmt.exec("copy")}><Copy size={15}/></button>
-                <button data-tip="Colar (Ctrl+V)" data-tipdesc="Insere o conteúdo da área de transferência no ponto onde está o cursor." onClick={() => fmt.exec("paste")}><ClipboardPaste size={15}/></button>
-                <button data-tip="Pincel de Formatação" data-tipdesc="Copia a formatação de um trecho de texto e aplica em outro. Clique em um texto formatado, depois selecione o texto que vai receber a mesma formatação." className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={15}/></button>
+              <div className="wordClipboardRow">
+                <button className="wordPasteBtn" data-tip="Colar (Ctrl+V)" data-tipdesc="Insere o conteúdo da área de transferência no ponto onde está o cursor." onClick={() => fmt.exec("paste")}>
+                  <ClipboardPaste size={19}/>
+                  <span className="wordPasteBtnLabel">Colar<ChevronDown size={10}/></span>
+                </button>
+                <div className="wordRibbonCol">
+                  <button data-tip="Recortar (Ctrl+X)" data-tipdesc="Remove a seleção e a guarda na área de transferência, para colar em outro lugar." onClick={() => fmt.exec("cut")}><Scissors size={13}/></button>
+                  <button data-tip="Copiar (Ctrl+C)" data-tipdesc="Copia a seleção para a área de transferência, mantendo o original no lugar." onClick={() => fmt.exec("copy")}><Copy size={13}/></button>
+                  <button data-tip="Pincel de Formatação" data-tipdesc="Copia a formatação de um trecho de texto e aplica em outro. Clique em um texto formatado, depois selecione o texto que vai receber a mesma formatação." className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={13}/></button>
+                </div>
               </div>
               <span className="wordRibbonGroupLabel">Área de Transferência</span>
             </div>
@@ -15461,7 +15467,7 @@ function WordEditor({ doc, onClose, onSave }) {
                 <button data-tip="Substituir (Ctrl+H)" data-tipdesc="Procura um texto no documento e o substitui por outro." onClick={() => fmt.setFindOpen(true)}><Replace size={15}/></button>
                 <button data-tip="Selecionar Tudo (Ctrl+A)" data-tipdesc="Seleciona todo o conteúdo do documento." onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
               </div>
-              <span className="wordRibbonGroupLabel">Edição</span>
+              <span className="wordRibbonGroupLabel">Editando</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
@@ -15473,7 +15479,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Confidencialidade" data-tipdesc="Classifica o documento quanto ao nível de sensibilidade da informação que ele contém." onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
+                <button className="wordDropdownBtn" data-tip="Confidencialidade" data-tipdesc="Classifica o documento quanto ao nível de sensibilidade da informação que ele contém." onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); setAddinsOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
                 {sensitivityOpen && <div className="wordDropdownMenu">
                   {SENSITIVITY_LABELS.map(l => <button key={l} className={sensitivityLabel === l ? "active" : ""} onClick={() => { setSensitivityLabel(l); setSensitivityOpen(false); }}>{l}</button>)}
                 </div>}
@@ -15483,7 +15489,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Editor" data-tipdesc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
+                <button className="wordDropdownBtn" data-tip="Editor" data-tipdesc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); setAddinsOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
                 {editorOpen && (() => {
                   const text = bodyRef.current?.innerText || "";
                   const doubleSpaces = (text.match(/ {2,}/g) || []).length;
@@ -15499,7 +15505,15 @@ function WordEditor({ doc, onClose, onSave }) {
                   );
                 })()}
               </div>
-              <span className="wordRibbonGroupLabel">Editor</span>
+              <span className="wordRibbonGroupLabel">Revisão de Texto</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" data-tip="Suplementos" data-tipdesc="Adiciona ou gerencia extensões que ampliam os recursos do documento." onClick={() => { setAddinsOpen(o => !o); setSensitivityOpen(false); setEditorOpen(false); }}><Grid3x3 size={15}/> Suplementos</button>
+                {addinsOpen && <div className="wordDropdownMenu"><div className="wordEditorRow">Nenhum suplemento instalado</div></div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Suplementos</span>
             </div>
           </>)}
 
