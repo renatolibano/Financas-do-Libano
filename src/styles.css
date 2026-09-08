@@ -1585,10 +1585,39 @@ h1{font-size:23px}
 
 .wordPageArea{position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
 .wordPageWrap{display:flex;flex-direction:column;align-items:center}
-.wordRuler{width:794px;height:16px;margin-bottom:2px;border-radius:2px;background:repeating-linear-gradient(to right,#c9c2ab 0,#c9c2ab 1px,transparent 1px,transparent 9.53px),linear-gradient(#efe9d8,#efe9d8);box-shadow:0 2px 6px #0004;flex:0 0 auto}
+.wordRulerBar{display:flex;align-items:stretch;flex:0 0 auto;margin-bottom:2px;user-select:none}
+.wordRulerCorner{width:22px;height:22px;flex:0 0 auto;margin-right:1px;border:none;border-radius:2px 0 0 2px;background:#c9c2ab;box-shadow:0 2px 6px #0004;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.wordRulerCorner:hover{background:#d6cfb6}
+.wordRulerTrack{position:relative;height:22px;border-radius:0 2px 2px 0;background:#b7ae95;box-shadow:0 2px 6px #0004;flex:0 0 auto;cursor:text;overflow:visible}
 .wordRuler-paisagem{width:1123px}
 .wordRuler-carta{width:816px}
 .wordRuler-carta.wordRuler-paisagem{width:1056px}
+.wordRulerWhite{position:absolute;top:0;bottom:0;background:#f3efe2;pointer-events:none}
+.wordRulerTick{position:absolute;bottom:0;width:1px;height:5px;background:#8a8267;pointer-events:none;transform:translateX(-50%)}
+.wordRulerTickMajor{height:9px;background:#5b5540}
+.wordRulerNum{position:absolute;bottom:9px;left:0;transform:translateX(-50%);font-size:8.5px;line-height:1;color:#5b5540;pointer-events:none;white-space:nowrap}
+.wordRulerHandle{position:absolute;top:0;bottom:0;width:10px;transform:translateX(-50%);cursor:ew-resize;z-index:3}
+.wordRulerHandle::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:transparent;transform:translateX(-50%)}
+.wordRulerHandle:hover::after{background:#2f6fed}
+.wordRulerIndent{position:absolute;width:0;height:0;transform:translateX(-50%);cursor:ew-resize;z-index:4}
+.wordRulerIndent-firstline{top:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #4a4530}
+.wordRulerIndent-firstline:hover{border-top-color:#2f6fed}
+.wordRulerIndent-left,.wordRulerIndent-right{bottom:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:7px solid #4a4530}
+.wordRulerIndent-left:hover,.wordRulerIndent-right:hover{border-bottom-color:#2f6fed}
+.wordRulerTab{position:absolute;bottom:2px;width:9px;height:9px;transform:translateX(-50%);cursor:grab;z-index:4}
+.wordRulerTab-left{border-left:2px solid #2f6fed;border-bottom:2px solid #2f6fed}
+.wordRulerTab-right{border-right:2px solid #2f6fed;border-bottom:2px solid #2f6fed}
+.wordRulerTab-center{border-bottom:2px solid #2f6fed}
+.wordRulerTab-center::after{content:"";position:absolute;left:50%;top:0;bottom:2px;width:2px;background:#2f6fed;transform:translateX(-50%)}
+.wordRulerTab-decimal{border-bottom:2px solid #2f6fed}
+.wordRulerTab-decimal::after{content:"";position:absolute;right:-1px;bottom:-1px;width:2px;height:2px;border-radius:50%;background:#2f6fed}
+.wordRulerTabGlyph{position:relative;display:block;width:10px;height:10px}
+.wordRulerTabGlyph-left{border-left:2px solid #4a4530;border-bottom:2px solid #4a4530}
+.wordRulerTabGlyph-right{border-right:2px solid #4a4530;border-bottom:2px solid #4a4530}
+.wordRulerTabGlyph-center{border-bottom:2px solid #4a4530}
+.wordRulerTabGlyph-center::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:#4a4530;transform:translateX(-50%)}
+.wordRulerTabGlyph-decimal{border-bottom:2px solid #4a4530}
+.wordRulerTabGlyph-decimal::after{content:"";position:absolute;right:-1px;bottom:-1px;width:2px;height:2px;border-radius:50%;background:#4a4530}
 
 .wordPage{background:#fff;color:#1a1a1a;box-shadow:0 6px 30px #0007;width:794px;min-height:1123px;display:flex;flex-direction:column;box-sizing:border-box}
 .wordPage-carta{width:816px;min-height:1056px}
@@ -1597,6 +1626,7 @@ h1{font-size:23px}
 .wordMargin-estreita .wordRichBody{padding:48px}
 .wordMargin-normal .wordRichBody{padding:76px}
 .wordMargin-larga .wordRichBody{padding:110px}
+.word-tab{display:inline-block;vertical-align:top}
 
 .wordRichBody{flex:1;box-sizing:border-box;font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1a1a1a}
 .wordRichBody h1{font-size:20pt;font-weight:700;margin:14px 0 8px}
@@ -1628,7 +1658,7 @@ h1{font-size:23px}
   .readerBack,.wordModal,.wordPageArea,.wordPageWrap,.wordPage,.wordPage *{display:revert!important}
   .readerBack{display:block!important;position:static!important;inset:auto!important;background:none!important;backdrop-filter:none!important;padding:0!important;height:auto!important}
   .wordModal{display:block!important;position:static!important;width:auto!important;height:auto!important;max-height:none!important;border:none!important;box-shadow:none!important;background:none!important;overflow:visible!important}
-  .readerHead,.wordRibbonTabs,.wordRibbon,.wordStatusBar,.wordFindBar,.wordRuler,.noteLinkBarBtn,.noteLinkPopover{display:none!important}
+  .readerHead,.wordRibbonTabs,.wordRibbon,.wordStatusBar,.wordFindBar,.wordRuler,.wordRulerBar,.noteLinkBarBtn,.noteLinkPopover{display:none!important}
   .wordPageArea{display:block!important;position:static!important;overflow:visible!important;padding:0!important;background:none!important}
   .wordPageWrap{display:block!important;zoom:1!important}
   .wordPage{box-shadow:none!important;width:auto!important;min-height:0!important;margin:0!important}

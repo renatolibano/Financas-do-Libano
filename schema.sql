@@ -947,6 +947,10 @@ create table if not exists word_documents (
   created_at timestamptz not null default now()
 );
 alter table word_documents enable row level security;
+-- Margem esquerda/direita personalizadas (em cm), definidas arrastando a
+-- régua do editor. Nulo = segue o valor do preset em `margins` acima.
+alter table word_documents add column if not exists margin_left numeric;
+alter table word_documents add column if not exists margin_right numeric;
 do $$ declare t text; begin foreach t in array array['word_documents'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);

@@ -277,6 +277,9 @@ export async function downloadWordDocx(doc) {
   }
 
   const marginTwips = MARGIN_TWIPS[doc.margins] || MARGIN_TWIPS.normal;
+  const cmToTwips = (cm) => Math.round(cm * 566.9291339);
+  const leftTwips = doc.margin_left != null ? cmToTwips(doc.margin_left) : marginTwips;
+  const rightTwips = doc.margin_right != null ? cmToTwips(doc.margin_right) : marginTwips;
   const landscape = doc.orientation === "paisagem";
 
   const document = new Document({
@@ -290,7 +293,7 @@ export async function downloadWordDocx(doc) {
       properties: {
         page: {
           size: { orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-          margin: { top: marginTwips, bottom: marginTwips, left: marginTwips, right: marginTwips },
+          margin: { top: marginTwips, bottom: marginTwips, left: leftTwips, right: rightTwips },
         },
       },
       children,
@@ -316,11 +319,14 @@ export function downloadWordPdf(doc) {
   const landscape = doc.orientation === "paisagem";
   const format = doc.page_size === "carta" ? "letter" : "a4";
   const marginPt = doc.margins === "estreita" ? 36 : doc.margins === "larga" ? 72 : 54;
+  const cmToPt = (cm) => cm * 28.3464567;
+  const marginLeftPt = doc.margin_left != null ? cmToPt(doc.margin_left) : marginPt;
+  const marginRightPt = doc.margin_right != null ? cmToPt(doc.margin_right) : marginPt;
 
   const pdf = new jsPDF({ unit: "pt", format, orientation: landscape ? "landscape" : "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const maxWidth = pageWidth - marginPt * 2;
+  const maxWidth = pageWidth - marginLeftPt - marginRightPt;
   let y = marginPt;
 
   const ensureSpace = (lineHeight) => {
@@ -339,9 +345,9 @@ export function downloadWordPdf(doc) {
         const rowLines = Math.max(1, ...cellLines.map((l) => l.length));
         const rowHeight = rowLines * 13 + 8;
         ensureSpace(rowHeight);
-        pdf.rect(marginPt, y, maxWidth, rowHeight);
-        for (let i = 1; i < cols; i++) pdf.line(marginPt + colWidth * i, y, marginPt + colWidth * i, y + rowHeight);
-        cellLines.forEach((lines, i) => lines.forEach((line, li) => pdf.text(line, marginPt + colWidth * i + 4, y + 13 + li * 13)));
+        pdf.rect(marginLeftPt, y, maxWidth, rowHeight);
+        for (let i = 1; i < cols; i++) pdf.line(marginLeftPt + colWidth * i, y, marginLeftPt + colWidth * i, y + rowHeight);
+        cellLines.forEach((lines, i) => lines.forEach((line, li) => pdf.text(line, marginLeftPt + colWidth * i + 4, y + 13 + li * 13)));
         y += rowHeight;
       });
       y += 8;
@@ -353,7 +359,7 @@ export function downloadWordPdf(doc) {
         const w = Math.min(maxWidth, props.width);
         const h = (props.height * w) / props.width;
         ensureSpace(h);
-        pdf.addImage(b.src, "JPEG", marginPt, y, w, h);
+        pdf.addImage(b.src, "JPEG", marginLeftPt, y, w, h);
         y += h + 10;
       } catch { /* ignora imagem inválida */ }
       return;
@@ -367,7 +373,7 @@ export function downloadWordPdf(doc) {
     blockToLines(b).forEach((rawLine) => {
       pdf.splitTextToSize(rawLine || " ", maxWidth - indent).forEach((line) => {
         ensureSpace(lineHeight);
-        pdf.text(line, marginPt + indent, y);
+        pdf.text(line, marginLeftPt + indent, y);
         y += lineHeight;
       });
     });

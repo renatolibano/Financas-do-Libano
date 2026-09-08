@@ -2768,6 +2768,30 @@ function useNoteFormatting(bodyRef, onChange) {
     onChange();
   };
 
+  // Cola texto colado sem cor/fundo herdados do app de origem (ex.: fundo
+  // preto de um chat), mantendo negrito/itálico/links/listas.
+  const handlePaste = (e) => {
+    e.preventDefault();
+    const html = e.clipboardData?.getData("text/html");
+    if (html) {
+      const container = document.createElement("div");
+      container.innerHTML = html;
+      container.querySelectorAll("*").forEach((el) => {
+        el.style.removeProperty("color");
+        el.style.removeProperty("background");
+        el.style.removeProperty("background-color");
+        el.style.removeProperty("background-image");
+        el.removeAttribute("color");
+        el.removeAttribute("bgcolor");
+        if (!el.style.length) el.removeAttribute("style");
+      });
+      document.execCommand("insertHTML", false, container.innerHTML);
+    } else {
+      document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") || "");
+    }
+    onChange();
+  };
+
   const insertEmoji = (emoji) => {
     bodyRef.current?.focus();
     document.execCommand("insertText", false, emoji);
@@ -2972,7 +2996,7 @@ function useNoteFormatting(bodyRef, onChange) {
     emojiOpen, setEmojiOpen, colorOpen, setColorOpen, hiliteOpen, setHiliteOpen,
     linkBar, linkPopover, setLinkPopover, editingAnchorRef,
     keepFocus, exec, insertEmoji, applyTextColor, applyHilite, insertChecklist,
-    handleBodyClick, handleBodyKeyDown, updateLinkBar,
+    handleBodyClick, handleBodyKeyDown, handlePaste, updateLinkBar,
     openLinkPopover, closeLinkPopover, confirmLink, removeLink,
   };
 }
@@ -13708,6 +13732,7 @@ function NoteEditor({ note, onClose, onSave }) {
             onInput={handleBodyInput}
             onClick={fmt.handleBodyClick}
             onKeyDown={fmt.handleBodyKeyDown}
+            onPaste={fmt.handlePaste}
             onMouseUp={fmt.updateLinkBar}
             onKeyUp={fmt.updateLinkBar}
             data-placeholder="Escreva o que quiser..."
@@ -13889,7 +13914,7 @@ const WORD_SYMBOLS = [
 // nenhuma verificação ou envio a servidor).
 const SENSITIVITY_LABELS = ["Nenhum", "Pessoal", "Geral", "Confidencial", "Altamente confidencial"];
 
-function useWordFormatting(bodyRef, onChange) {
+function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const [colorOpen, setColorOpen] = useState(false);
   const [hiliteOpen, setHiliteOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -14207,6 +14232,172 @@ function useWordFormatting(bodyRef, onChange) {
     bodyRef.current?.focus();
     const block = currentBlock();
     if (block) { block.style.marginTop = pt + "pt"; onChange(); }
+  };
+  // "Recuo especial" (primeira linha adiantada, ou deslocado/hanging quando
+  // negativo) — junto com marginLeft, é o que a régua desenha como os dois
+  // triângulos do lado esquerdo do parágrafo.
+  const setFirstLineIndent = (cm) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (block) { block.style.textIndent = cm + "cm"; onChange(); }
+  };
+
+  // ---- régua: recuo do parágrafo atual + paradas de tabulação, mantidos
+  // em sincronia com onde está o cursor (igual a régua de verdade do Word,
+  // que muda os marcadores conforme você anda pelo texto) ----
+  const [paraIndent, setParaIndent] = useState({ left: 0, right: 0, firstLine: 0 });
+  const [tabStops, setTabStopsState] = useState([]);
+  const [tabType, setTabType] = useState("left");
+  const cycleTabType = () => setTabType(t => {
+    const order = ["left", "center", "right", "decimal"];
+    return order[(order.indexOf(t) + 1) % order.length];
+  });
+
+  const getTabStops = (block) => {
+    try { return JSON.parse(block.dataset.tabStops || "[]"); } catch { return []; }
+  };
+  const persistTabStops = (block, stops, { sort = true } = {}) => {
+    const list = sort ? [...stops].sort((a, b) => a.pos - b.pos) : stops;
+    block.dataset.tabStops = JSON.stringify(list);
+    return list;
+  };
+  const tabIdRef = useRef(0);
+  const nextTabId = () => "t" + (tabIdRef.current++) + "_" + Date.now().toString(36);
+
+  const syncRulerState = () => {
+    const block = currentBlock();
+    if (!block) { setParaIndent({ left: 0, right: 0, firstLine: 0 }); setTabStopsState([]); return; }
+    setParaIndent({
+      left: parseFloat(block.style.marginLeft) || 0,
+      right: parseFloat(block.style.marginRight) || 0,
+      firstLine: parseFloat(block.style.textIndent) || 0,
+    });
+    setTabStopsState(getTabStops(block));
+  };
+
+  // Só sincroniza quando a seleção muda dentro do próprio editor (não a
+  // cada tecla) — é isso que faz a régua "seguir o cursor" sem custo.
+  useEffect(() => {
+    const onSelChange = () => {
+      const sel = window.getSelection();
+      if (!sel || !sel.anchorNode || !bodyRef.current?.contains(sel.anchorNode)) return;
+      syncRulerState();
+    };
+    document.addEventListener("selectionchange", onSelChange);
+    return () => document.removeEventListener("selectionchange", onSelChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const addTabStopAt = (posCm) => {
+    const block = currentBlock();
+    if (!block) return;
+    bodyRef.current?.focus();
+    const stops = getTabStops(block);
+    stops.push({ id: nextTabId(), pos: Math.max(0, Math.round(posCm * 100) / 100), type: tabType });
+    setTabStopsState(persistTabStops(block, stops));
+    recalcTabsInBlock(block);
+    onChange();
+  };
+  const moveTabStop = (id, posCm) => {
+    const block = currentBlock();
+    if (!block) return;
+    const stops = getTabStops(block).map(s => s.id === id ? { ...s, pos: Math.max(0, Math.round(posCm * 100) / 100) } : s);
+    setTabStopsState(persistTabStops(block, stops, { sort: false }));
+    recalcTabsInBlock(block);
+    onChange();
+  };
+  const commitTabStopOrder = () => {
+    const block = currentBlock();
+    if (!block) return;
+    setTabStopsState(persistTabStops(block, getTabStops(block)));
+    recalcTabsInBlock(block);
+  };
+  const removeTabStop = (id) => {
+    const block = currentBlock();
+    if (!block) return;
+    const stops = getTabStops(block).filter(s => s.id !== id);
+    setTabStopsState(persistTabStops(block, stops));
+    recalcTabsInBlock(block);
+    onChange();
+  };
+
+  // pxPerCm medido de verdade na página renderizada (em vez de uma
+  // constante fixa) pra já vir certo em qualquer zoom e também no ajuste
+  // de largura que a página ganha nas telas estreitas (celular).
+  const currentPxPerCm = () => {
+    const w = pageRef?.current?.getBoundingClientRect?.().width;
+    return (w && pageWidthCm) ? w / pageWidthCm : 37.795;
+  };
+  const safeRectWidth = (range) => { try { return range.getBoundingClientRect().width || 0; } catch { return 0; } };
+
+  // Reposiciona (redimensiona) os marcadores de tabulação já inseridos no
+  // parágrafo, medindo o texto ao redor de cada um — é isso que faz o texto
+  // depois de uma tabulação "center"/"right"/"decimal" continuar alinhado
+  // à parada certa conforme a pessoa continua digitando.
+  const recalcTabsInBlock = (block) => {
+    if (!block) return;
+    const tabs = Array.from(block.querySelectorAll(":scope .word-tab"));
+    if (!tabs.length) return;
+    const pxPerCm = currentPxPerCm();
+    const stops = getTabStops(block);
+    const leftIndentCm = parseFloat(block.style.marginLeft) || 0;
+    let defaultGridIdx = 0;
+    tabs.forEach((tab, i) => {
+      const rPre = document.createRange();
+      rPre.setStart(block, 0);
+      try { rPre.setEndBefore(tab); } catch { return; }
+      const cursorPx = safeRectWidth(rPre);
+      const cursorCm = leftIndentCm + cursorPx / pxPerCm;
+      const stop = stops[i];
+      let targetCm;
+      let type;
+      if (stop) { targetCm = stop.pos; type = stop.type; }
+      else { defaultGridIdx = Math.floor(cursorCm / 1.25) + 1; targetCm = defaultGridIdx * 1.25; type = "left"; }
+      const targetPxFromBlockStart = Math.max((targetCm - leftIndentCm) * pxPerCm, cursorPx + 6);
+      let widthPx;
+      if (type === "left") {
+        widthPx = targetPxFromBlockStart - cursorPx;
+      } else {
+        const rPost = document.createRange();
+        try { rPost.setStartAfter(tab); } catch { return; }
+        const nextTab = tabs[i + 1];
+        try { if (nextTab) rPost.setEndBefore(nextTab); else rPost.setEnd(block, block.childNodes.length); } catch { rPost.collapse(true); }
+        const followPx = safeRectWidth(rPost);
+        if (type === "center") widthPx = Math.max(6, targetPxFromBlockStart - cursorPx - followPx / 2);
+        else widthPx = Math.max(6, targetPxFromBlockStart - cursorPx - followPx); // right e decimal (aproximado como right)
+      }
+      tab.style.width = (widthPx / pxPerCm) + "cm";
+    });
+  };
+
+  // Tab dentro do corpo do documento pula pra próxima parada de tabulação
+  // do parágrafo (ou pra grade padrão de 1,25cm quando não há nenhuma
+  // definida), em vez do comportamento padrão do navegador (que tiraria o
+  // foco do editor).
+  const handleBodyKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const el = bodyRef.current;
+    if (!el) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return;
+    const block = currentBlock();
+    if (!block) return;
+    if (!range.collapsed) range.deleteContents();
+    const span = document.createElement("span");
+    span.className = "word-tab";
+    span.setAttribute("contenteditable", "false");
+    span.textContent = "\u200b";
+    range.insertNode(span);
+    const after = document.createRange();
+    after.setStartAfter(span);
+    after.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(after);
+    recalcTabsInBlock(block);
+    onChange();
   };
 
   // ---- sombreamento (cor de fundo do bloco) e bordas — irmãs do recuo
@@ -14640,6 +14831,8 @@ function useWordFormatting(bodyRef, onChange) {
     applyShading, applyBorder,
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
     dictating, dictationSupported, toggleDictation,
+    currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
+    tabStops, tabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
   };
 }
 
@@ -14667,11 +14860,116 @@ function WordTableDialog({ onClose, onConfirm }) {
 // verdade, pra quem já usa (ou vai aprender por tutorial) achar tudo no
 // mesmo lugar.
 
+// Régua horizontal do editor "Word" — margens e recuos de parágrafo
+// arrastáveis, e paradas de tabulação (clique na régua pra criar, arraste
+// pra mover, arraste pra baixo pra apagar), igual ao Word de verdade.
+function WordRuler({
+  pageWidthCm, widthClass, marginLeft, marginRight, onMarginDrag,
+  paraIndent, onIndentLeft, onIndentRight, onIndentFirstLine,
+  tabStops, tabType, onCycleTabType, onAddTab, onMoveTab, onCommitTabOrder, onRemoveTab,
+}) {
+  const trackRef = useRef(null);
+  const dragRef = useRef(null);
+
+  const cmFromClientX = (clientX) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width) return 0;
+    return ((clientX - rect.left) / rect.width) * pageWidthCm;
+  };
+
+  const startDrag = (e, kind, extra) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { kind, startY: e.clientY, deleted: false, ...(extra || {}) };
+    const move = (ev) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const absCm = cmFromClientX(ev.clientX);
+      const cmFromMargin = absCm - marginLeft;
+      if (d.kind === "marginLeft") onMarginDrag("left", Math.max(0, absCm));
+      else if (d.kind === "marginRight") onMarginDrag("right", Math.max(0, pageWidthCm - absCm));
+      else if (d.kind === "indentLeft") onIndentLeft(Math.max(0, cmFromMargin));
+      else if (d.kind === "indentFirstLine") onIndentFirstLine(cmFromMargin - paraIndent.left);
+      else if (d.kind === "indentRight") {
+        const textWidth = pageWidthCm - marginLeft - marginRight;
+        onIndentRight(Math.max(0, textWidth - cmFromMargin));
+      } else if (d.kind === "tab") {
+        const dy = ev.clientY - d.startY;
+        d.deleted = dy > 26;
+        if (!d.deleted) onMoveTab(d.id, Math.max(0, cmFromMargin));
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const d = dragRef.current;
+      dragRef.current = null;
+      if (d && d.kind === "tab") {
+        if (d.deleted) onRemoveTab(d.id); else onCommitTabOrder();
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const handleTrackClick = (e) => {
+    if (e.target !== trackRef.current) return;
+    const cm = cmFromClientX(e.clientX) - marginLeft;
+    if (cm < 0) return;
+    onAddTab(cm);
+  };
+
+  const toPct = (cmFromMargin) => {
+    const abs = marginLeft + cmFromMargin;
+    return Math.max(0, Math.min(100, (abs / pageWidthCm) * 100));
+  };
+
+  const textWidthCm = Math.max(0, pageWidthCm - marginLeft - marginRight);
+  const ticks = [];
+  for (let h = Math.ceil(-marginLeft * 2); h <= Math.floor((pageWidthCm - marginLeft) * 2); h++) ticks.push(h / 2);
+
+  return (
+    <div className="wordRulerBar">
+      <button
+        type="button"
+        className="wordRulerCorner"
+        data-tip="Tipo de tabulação"
+        data-tipdesc="Clique para alternar entre esquerda, centralizada, direita e decimal, depois clique na régua para inserir uma parada."
+        onMouseDown={e => e.preventDefault()}
+        onClick={onCycleTabType}
+      >
+        <span className={"wordRulerTabGlyph wordRulerTabGlyph-" + tabType}/>
+      </button>
+      <div className={widthClass + " wordRulerTrack"} ref={trackRef} onClick={handleTrackClick}>
+        <div className="wordRulerWhite" style={{ left: toPct(0) + "%", width: (textWidthCm / pageWidthCm) * 100 + "%" }}/>
+        {ticks.map((n) => {
+          const isMajor = Number.isInteger(n);
+          return (
+            <div key={n} className={"wordRulerTick" + (isMajor ? " wordRulerTickMajor" : "")} style={{ left: toPct(n) + "%" }}>
+              {isMajor && n !== 0 && <span className="wordRulerNum">{Math.round(n)}</span>}
+            </div>
+          );
+        })}
+        <div className="wordRulerHandle wordRulerHandle-left" data-tip="Margem esquerda" data-tipdesc="Arraste para ajustar a margem esquerda da página." style={{ left: toPct(0) + "%" }} onPointerDown={e => startDrag(e, "marginLeft")}/>
+        <div className="wordRulerHandle wordRulerHandle-right" data-tip="Margem direita" data-tipdesc="Arraste para ajustar a margem direita da página." style={{ left: toPct(textWidthCm) + "%" }} onPointerDown={e => startDrag(e, "marginRight")}/>
+        {tabStops.map(t => (
+          <div key={t.id} className={"wordRulerTab wordRulerTab-" + t.type} data-tip="Parada de tabulação" data-tipdesc="Arraste para reposicionar, ou arraste para baixo para remover." style={{ left: toPct(t.pos) + "%" }} onPointerDown={e => startDrag(e, "tab", { id: t.id })}/>
+        ))}
+        <div className="wordRulerIndent wordRulerIndent-firstline" data-tip="Recuo da primeira linha" style={{ left: toPct(paraIndent.left + paraIndent.firstLine) + "%" }} onPointerDown={e => startDrag(e, "indentFirstLine")}/>
+        <div className="wordRulerIndent wordRulerIndent-left" data-tip="Recuo à esquerda" style={{ left: toPct(paraIndent.left) + "%" }} onPointerDown={e => startDrag(e, "indentLeft")}/>
+        <div className="wordRulerIndent wordRulerIndent-right" data-tip="Recuo à direita" style={{ left: toPct(textWidthCm - paraIndent.right) + "%" }} onPointerDown={e => startDrag(e, "indentRight")}/>
+      </div>
+    </div>
+  );
+}
+
 function WordEditor({ doc, onClose, onSave }) {
   const [title, setTitle] = useState(doc.title || "");
   const [pageSize, setPageSize] = useState(doc.page_size || "a4");
   const [orientation, setOrientation] = useState(doc.orientation || "retrato");
   const [margins, setMargins] = useState(doc.margins || "normal");
+  const [marginLeftCm, setMarginLeftCm] = useState(doc.margin_left ?? null);
+  const [marginRightCm, setMarginRightCm] = useState(doc.margin_right ?? null);
   const [ribbonTab, setRibbonTab] = useState("home");
   const [zoom, setZoom] = useState(100);
   const [showRuler, setShowRuler] = useState(true);
@@ -14691,6 +14989,7 @@ function WordEditor({ doc, onClose, onSave }) {
   const imageInputRef = useRef(null);
   const saveTimer = useRef(null);
   const pageAreaRef = useRef(null);
+  const pageRef = useRef(null);
   const ribbonTipTimer = useRef(null);
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
 
@@ -14726,6 +15025,8 @@ function WordEditor({ doc, onClose, onSave }) {
     setPageSize(doc.page_size || "a4");
     setOrientation(doc.orientation || "retrato");
     setMargins(doc.margins || "normal");
+    setMarginLeftCm(doc.margin_left ?? null);
+    setMarginRightCm(doc.margin_right ?? null);
     setWordCount(countWords(doc.content || ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
@@ -14743,26 +15044,60 @@ function WordEditor({ doc, onClose, onSave }) {
 
   const handleBodyInput = () => {
     if (fmt.findMatches.length) fmt.resetFindHighlights();
+    fmt.recalcTabsInBlock?.(fmt.currentBlock?.());
     const html = bodyRef.current?.innerHTML || "";
     setWordCount(countWords(html));
     scheduleSave({ content: html });
   };
 
-  const fmt = useWordFormatting(bodyRef, handleBodyInput);
-
-  const changePageSetting = (key, value) => {
-    if (key === "page_size") setPageSize(value);
-    if (key === "orientation") setOrientation(value);
-    if (key === "margins") setMargins(value);
-    scheduleSave({ [key]: value });
-  };
-
   const PAGE_DIMS = {
     a4: { w: 794, h: 1123 }, carta: { w: 816, h: 1056 },
+  };
+  const PAGE_DIMS_CM = {
+    a4: { w: 21, h: 29.7 }, carta: { w: 21.6, h: 27.9 },
   };
   const currentPageDims = () => {
     const base = PAGE_DIMS[pageSize] || PAGE_DIMS.a4;
     return orientation === "paisagem" ? { w: base.h, h: base.w } : base;
+  };
+  const currentPageDimsCm = () => {
+    const base = PAGE_DIMS_CM[pageSize] || PAGE_DIMS_CM.a4;
+    return orientation === "paisagem" ? { w: base.h, h: base.w } : base;
+  };
+  const pageWidthCm = currentPageDimsCm().w;
+
+  const fmt = useWordFormatting(bodyRef, handleBodyInput, pageRef, pageWidthCm);
+
+  // Margens dos presets em cm — bem próximas dos px antigos (48/76/110px a
+  // 96dpi), só pra régua e o arrasto terem um número em cm pra partir
+  // quando a margem ainda não foi personalizada.
+  const MARGIN_PRESET_CM = { estreita: 1.27, normal: 2.01, larga: 2.91 };
+  const effMarginLeft = marginLeftCm ?? MARGIN_PRESET_CM[margins] ?? 2.01;
+  const effMarginRight = marginRightCm ?? MARGIN_PRESET_CM[margins] ?? 2.01;
+
+  const changePageSetting = (key, value) => {
+    if (key === "page_size") setPageSize(value);
+    if (key === "orientation") setOrientation(value);
+    if (key === "margins") {
+      setMargins(value);
+      setMarginLeftCm(null);
+      setMarginRightCm(null);
+      scheduleSave({ margins: value, margin_left: null, margin_right: null });
+      return;
+    }
+    scheduleSave({ [key]: value });
+  };
+
+  // Arrastar a régua liga a margem numa medida personalizada (deixa de
+  // seguir o preset "Estreita/Normal/Larga", igual ao Word real quando você
+  // arrasta em vez de escolher no menu Margens).
+  const setCustomMargin = (side, cm) => {
+    const textMin = 2; // largura mínima da área de texto, em cm
+    const other = side === "left" ? effMarginRight : effMarginLeft;
+    const clamped = Math.max(0.2, Math.min(cm, pageWidthCm - other - textMin));
+    const rounded = Math.round(clamped * 100) / 100;
+    if (side === "left") { setMarginLeftCm(rounded); scheduleSave({ margin_left: rounded }); }
+    else { setMarginRightCm(rounded); scheduleSave({ margin_right: rounded }); }
   };
   const fitZoomToWidth = () => {
     const area = pageAreaRef.current;
@@ -14785,6 +15120,7 @@ function WordEditor({ doc, onClose, onSave }) {
       title: title.trim() || "Documento sem título",
       content: bodyRef.current?.innerHTML || "",
       page_size: pageSize, orientation, margins,
+      margin_left: marginLeftCm, margin_right: marginRightCm,
     });
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     onClose();
@@ -14796,7 +15132,7 @@ function WordEditor({ doc, onClose, onSave }) {
     if (file) fmt.insertImageFile(file);
   };
 
-  const currentDocForExport = () => ({ title, content: bodyRef.current?.innerHTML || "", page_size: pageSize, orientation, margins });
+  const currentDocForExport = () => ({ title, content: bodyRef.current?.innerHTML || "", page_size: pageSize, orientation, margins, margin_left: marginLeftCm, margin_right: marginRightCm });
 
   return (
     <div className="readerBack">
@@ -15094,10 +15430,13 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <label className="wordNumberField" data-tip="Recuar à Esquerda" data-tipdesc="Distância entre o parágrafo e a margem esquerda da página, em centímetros.">Recuar esquerda <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
+                <label className="wordNumberField" data-tip="Recuar à Esquerda" data-tipdesc="Distância entre o parágrafo e a margem esquerda da página, em centímetros.">Recuar esquerda <input type="number" step="0.5" min="0" max="10" value={fmt.paraIndent.left} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
               </div>
               <div className="wordRibbonRow">
-                <label className="wordNumberField" data-tip="Recuar à Direita" data-tipdesc="Distância entre o parágrafo e a margem direita da página, em centímetros.">Recuar direita <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
+                <label className="wordNumberField" data-tip="Recuar à Direita" data-tipdesc="Distância entre o parágrafo e a margem direita da página, em centímetros.">Recuar direita <input type="number" step="0.5" min="0" max="10" value={fmt.paraIndent.right} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
+              </div>
+              <div className="wordRibbonRow">
+                <label className="wordNumberField" data-tip="Recuo Especial" data-tipdesc="Positivo adianta a primeira linha; negativo cria um recuo deslocado (linhas seguintes mais recuadas que a primeira).">Recuo especial <input type="number" step="0.5" min="-5" max="10" value={fmt.paraIndent.firstLine} onChange={e => fmt.setFirstLineIndent(Number(e.target.value) || 0)}/> cm</label>
               </div>
               <span className="wordRibbonGroupLabel">Recuo</span>
             </div>
@@ -15161,11 +15500,34 @@ function WordEditor({ doc, onClose, onSave }) {
             </div>
           )}
           <div className="wordPageWrap" style={{ zoom: zoom / 100 }}>
-            {showRuler && viewMode === "print" && <div className={"wordRuler" + (orientation === "paisagem" ? " wordRuler-paisagem" : "") + (pageSize === "carta" ? " wordRuler-carta" : "")}/>}
-            <div className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}>
+            {showRuler && viewMode === "print" && (
+              <WordRuler
+                pageWidthCm={pageWidthCm}
+                widthClass={"wordRuler" + (orientation === "paisagem" ? " wordRuler-paisagem" : "") + (pageSize === "carta" ? " wordRuler-carta" : "")}
+                marginLeft={effMarginLeft}
+                marginRight={effMarginRight}
+                onMarginDrag={setCustomMargin}
+                paraIndent={fmt.paraIndent}
+                onIndentLeft={fmt.setParagraphIndent}
+                onIndentRight={fmt.setParagraphIndentRight}
+                onIndentFirstLine={fmt.setFirstLineIndent}
+                tabStops={fmt.tabStops}
+                tabType={fmt.tabType}
+                onCycleTabType={fmt.cycleTabType}
+                onAddTab={fmt.addTabStopAt}
+                onMoveTab={fmt.moveTabStop}
+                onCommitTabOrder={fmt.commitTabStopOrder}
+                onRemoveTab={fmt.removeTabStop}
+              />
+            )}
+            <div ref={pageRef} className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}>
               <div
                 ref={bodyRef}
                 className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "")}
+                style={{
+                  paddingLeft: marginLeftCm != null ? marginLeftCm + "cm" : undefined,
+                  paddingRight: marginRightCm != null ? marginRightCm + "cm" : undefined,
+                }}
                 contentEditable
                 suppressContentEditableWarning
                 spellCheck
@@ -15173,6 +15535,7 @@ function WordEditor({ doc, onClose, onSave }) {
                 onClick={fmt.handleBodyClick}
                 onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
                 onKeyUp={fmt.updateLinkBar}
+                onKeyDown={fmt.handleBodyKeyDown}
                 data-placeholder="Comece a digitar..."
               />
             </div>
