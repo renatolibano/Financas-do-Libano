@@ -25,7 +25,7 @@ import {
   Ruler, Printer, Replace, Table2, RectangleHorizontal, RectangleVertical,
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, SquareDashed, PanelTop, PanelBottom,
-  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook
+  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -14914,6 +14914,93 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     onChange();
   };
 
+  // ---- indicadores (Inserir > Indicadores) — marcador invisível ancorado
+  // no ponto do cursor; a lista de indicadores existentes é lida direto do
+  // DOM (querySelectorAll), sem precisar guardar estado à parte.
+  const insertBookmark = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const name = prompt("Nome do indicador:");
+    if (!name || !name.trim()) return;
+    el.focus();
+    const marker = document.createElement("span");
+    marker.className = "word-bookmark";
+    marker.id = "word-bookmark-" + Date.now().toString(36);
+    marker.dataset.bookmarkName = name.trim();
+    marker.setAttribute("contenteditable", "false");
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
+      const range = sel.getRangeAt(0).cloneRange();
+      range.collapse(true);
+      range.insertNode(marker);
+    } else {
+      el.appendChild(marker);
+    }
+    onChange();
+  };
+  const listBookmarks = () => Array.from(bodyRef.current?.querySelectorAll(".word-bookmark") || []).map(b => ({ id: b.id, name: b.dataset.bookmarkName }));
+  const goToBookmark = (id) => bodyRef.current?.querySelector("#" + id)?.scrollIntoView({ block: "center", behavior: "smooth" });
+
+  // ---- vídeo online (Inserir > Mídia) — aceita link do YouTube ou Vimeo e
+  // embute como iframe responsivo, num bloco não editável (mesmo padrão de
+  // cabeçalho/rodapé e quebra de página acima).
+  const insertVideoEmbed = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const url = prompt("Cole o link do vídeo (YouTube ou Vimeo):");
+    if (!url) return;
+    const yt = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/);
+    const vm = url.match(/vimeo\.com\/(\d+)/);
+    let embedUrl = "";
+    if (yt) embedUrl = `https://www.youtube.com/embed/${yt[1]}`;
+    else if (vm) embedUrl = `https://player.vimeo.com/video/${vm[1]}`;
+    else { alert("Link não reconhecido. Use um link do YouTube ou Vimeo."); return; }
+    el.focus();
+    const wrap = document.createElement("div");
+    wrap.className = "word-video-embed";
+    wrap.setAttribute("contenteditable", "false");
+    wrap.innerHTML = `<iframe src="${embedUrl}" loading="lazy" allowfullscreen></iframe>`;
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(wrap); }
+      else el.append(wrap, after);
+    } else {
+      el.append(wrap, after);
+    }
+    onChange();
+  };
+
+  // ---- equação (Inserir > Símbolos) — bloco editável em itálico, estilo
+  // matemático; sem um motor de fórmulas de verdade, o usuário digita a
+  // expressão livremente dentro do bloco, igual ao "modo de texto" do editor
+  // de equações do Word antes de virar notação profissional.
+  const insertEquation = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const box = document.createElement("span");
+    box.className = "word-equation";
+    box.setAttribute("contenteditable", "true");
+    box.textContent = "x = a + b";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(box);
+      const after = document.createRange();
+      after.setStartAfter(box);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+    } else {
+      el.appendChild(box);
+    }
+    onChange();
+  };
+
   const handleBodyClick = (e) => {
     const tocRefresh = e.target.closest?.(".word-toc-refresh");
     if (tocRefresh && bodyRef.current?.contains(tocRefresh)) {
@@ -14961,7 +15048,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     dictating, dictationSupported, toggleDictation,
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
     tabStops, tabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
-    insertTOC, insertFootnote,
+    insertTOC, insertFootnote, insertBookmark, listBookmarks, goToBookmark, insertVideoEmbed, insertEquation,
   };
 }
 
@@ -14977,6 +15064,83 @@ function WordTableDialog({ onClose, onConfirm }) {
         <div className="wordTableDialogActions">
           <button className="ghost" onClick={onClose}>Cancelar</button>
           <button className="primary" onClick={() => onConfirm(rows, cols)}>Inserir</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Desenho (Inserir > Ilustrações) — canvas simples de traço livre; ao
+// inserir, converte o desenho num PNG e reaproveita insertImageFile, o
+// mesmo caminho já usado para fotos escolhidas do computador.
+function WordDrawDialog({ onClose, onInsert }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef(null);
+  const [color, setColor] = useState("#1a1a1a");
+  const [size, setSize] = useState(3);
+
+  useEffect(() => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+  }, []);
+
+  const getPos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const p = e.touches ? e.touches[0] : e;
+    return { x: p.clientX - rect.left, y: p.clientY - rect.top };
+  };
+  const startDraw = (e) => { e.preventDefault(); drawingRef.current = true; lastPointRef.current = getPos(e); };
+  const draw = (e) => {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const ctx = canvasRef.current.getContext("2d");
+    const pos = getPos(e);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = size;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastPointRef.current = pos;
+  };
+  const endDraw = () => { drawingRef.current = false; };
+  const clearCanvas = () => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+  };
+  const handleInsert = () => {
+    canvasRef.current.toBlob((blob) => {
+      if (blob) onInsert(new File([blob], "desenho.png", { type: "image/png" }));
+    }, "image/png");
+  };
+
+  return (
+    <div className="readerBack wordTableDialogBack" onClick={onClose}>
+      <div className="wordTableDialog wordDrawDialog" onClick={e => e.stopPropagation()}>
+        <h3>Desenho</h3>
+        <canvas
+          ref={canvasRef}
+          width={420}
+          height={260}
+          className="wordDrawCanvas"
+          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
+          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+        />
+        <div className="wordDrawTools">
+          {WORD_TEXT_COLORS.map(c => (
+            <button key={c} className={"colorSwatch" + (color === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => setColor(c)}/>
+          ))}
+          <input type="range" min="1" max="12" value={size} onChange={e => setSize(Number(e.target.value))}/>
+          <button className="ghost" onClick={clearCanvas}><Eraser size={14}/> Limpar</button>
+        </div>
+        <div className="wordTableDialogActions">
+          <button className="ghost" onClick={onClose}>Cancelar</button>
+          <button className="primary" onClick={handleInsert}>Inserir</button>
         </div>
       </div>
     </div>
@@ -15111,6 +15275,10 @@ function WordEditor({ doc, onClose, onSave }) {
   const [sensitivityOpen, setSensitivityOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [addinsOpen, setAddinsOpen] = useState(false);
+  const [drawOpen, setDrawOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentPopover, setCommentPopover] = useState(null);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
   const [ribbonTip, setRibbonTip] = useState(null); // { label, desc, x, y } - tooltip estilo Word
   // Aba "Design" — guardadas dentro do próprio content (ver persistPageMeta),
@@ -15173,6 +15341,7 @@ function WordEditor({ doc, onClose, onSave }) {
     setPageColor(pageMetaEl?.dataset.pagecolor || "");
     setPageBorder(pageMetaEl?.dataset.pageborder || "none");
     setWatermarkText(pageMetaEl?.dataset.watermark || "");
+    try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
 
@@ -15221,6 +15390,55 @@ function WordEditor({ doc, onClose, onSave }) {
     const v = prompt("Texto da marca d'água:", watermarkText || "");
     if (v === null) return;
     applyWatermark(v.trim());
+  };
+
+  // ---- comentários (Inserir > Comentários) — a seleção vira um trecho
+  // marcado (span.word-comment-anchor) e o texto do comentário fica guardado
+  // no mesmo marcador de metadados da página (word-page-meta), junto de
+  // tema/marca d'água. Clicar no trecho marcado abre o popover pra ler/excluir.
+  const addComment = () => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.isCollapsed || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      alert("Selecione um texto antes de adicionar um comentário.");
+      return;
+    }
+    const text = prompt("Comentário:");
+    if (!text || !text.trim()) return;
+    const range = sel.getRangeAt(0);
+    const span = document.createElement("span");
+    span.className = "word-comment-anchor";
+    const cid = "c" + Date.now().toString(36);
+    span.dataset.cid = cid;
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+    } catch {
+      return;
+    }
+    sel.removeAllRanges();
+    const next = [...comments, { id: cid, text: text.trim() }];
+    setComments(next);
+    persistPageMeta({ comments: JSON.stringify(next) });
+  };
+  const openCommentPopover = (span) => {
+    const c = comments.find(x => x.id === span.dataset.cid);
+    if (!c) return;
+    const r = span.getBoundingClientRect();
+    setCommentPopover({ id: c.id, text: c.text, x: Math.min(Math.max(8, r.left), window.innerWidth - 260), y: r.bottom + 8 });
+  };
+  const deleteComment = (id) => {
+    const el = bodyRef.current;
+    const span = el?.querySelector(`.word-comment-anchor[data-cid="${id}"]`);
+    if (span) {
+      const parent = span.parentNode;
+      while (span.firstChild) parent.insertBefore(span.firstChild, span);
+      parent.removeChild(span);
+    }
+    const next = comments.filter(c => c.id !== id);
+    setComments(next);
+    persistPageMeta({ comments: JSON.stringify(next) });
+    setCommentPopover(null);
   };
   const currentTheme = WORD_THEMES.find(t => t.key === themeKey) || WORD_THEMES[0];
   const pageBorderStyle = (key) => {
@@ -15321,7 +15539,7 @@ function WordEditor({ doc, onClose, onSave }) {
         className={"readerModal wordModal readerModalWide" + (fullscreen ? " readerModalFull" : "")}
         onMouseOver={handleRibbonMouseOver}
         onMouseOut={handleRibbonMouseOut}
-        onMouseDown={dismissRibbonTip}
+        onMouseDown={(e) => { dismissRibbonTip(); if (!e.target.closest?.(".wordCommentPopover")) setCommentPopover(null); }}
       >
         <div className="readerHead">
           <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
@@ -15525,12 +15743,13 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow"><button data-tip="Tabela" data-tipdesc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Tabela</span>
+              <span className="wordRibbonGroupLabel">Tabelas</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button data-tip="Imagens" data-tipdesc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
+                <button data-tip="Imagem" data-tipdesc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
+                <button data-tip="Desenho" data-tipdesc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => setDrawOpen(true)}><PenTool size={15}/></button>
                 <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
               </div>
               <span className="wordRibbonGroupLabel">Ilustrações</span>
@@ -15539,6 +15758,32 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow"><button data-tip="Link (Ctrl+K)" data-tipdesc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Links</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Sumário</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" data-tip="Indicadores" data-tipdesc="Marca um ponto do documento com um nome, para localizá-lo rapidamente depois." onClick={() => setBookmarksOpen(o => !o)}><Bookmark size={15}/> <ChevronDown size={12}/></button>
+                {bookmarksOpen && <div className="wordDropdownMenu">
+                  <button onClick={() => { setBookmarksOpen(false); fmt.insertBookmark(); }}>+ Adicionar indicador aqui</button>
+                  {fmt.listBookmarks().map(b => <button key={b.id} onClick={() => { fmt.goToBookmark(b.id); setBookmarksOpen(false); }}>{b.name}</button>)}
+                </div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Indicadores</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Vídeo Online" data-tipdesc="Insere um vídeo do YouTube ou Vimeo a partir de um link." onClick={fmt.insertVideoEmbed}><Film size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Mídia</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Novo Comentário" data-tipdesc="Adiciona um comentário ao trecho de texto selecionado." onClick={fmt.addComment}><MessageSquarePlus size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Comentários</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
@@ -15567,16 +15812,21 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <div className="emojiWrap">
-                  <button data-tip="Emoji" data-tipdesc="Insere um emoji no ponto onde está o cursor." onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
-                  {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
-                </div>
+                <button data-tip="Equação" data-tipdesc="Insere um bloco de equação, editável como texto em itálico." onClick={fmt.insertEquation}><Omega size={15}/></button>
                 <div className="emojiWrap">
                   <button data-tip="Símbolo" data-tipdesc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={() => fmt.setSymbolOpen(o => !o)}><Sigma size={15}/></button>
                   {fmt.symbolOpen && <div className="emojiPopover">{WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}</div>}
                 </div>
               </div>
               <span className="wordRibbonGroupLabel">Símbolos</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="emojiWrap">
+                <button data-tip="Emoji" data-tipdesc="Insere um emoji no ponto onde está o cursor." onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
+                {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Emojis</span>
             </div>
           </>)}
 
@@ -15699,11 +15949,6 @@ function WordEditor({ doc, onClose, onSave }) {
 
           {ribbonTab === "references" && (<>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Sumário</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
               <div className="wordRibbonRow"><button data-tip="Inserir Nota de Rodapé" data-tipdesc="Insere uma referência numerada no texto e um espaço para a nota correspondente no fim do documento." onClick={fmt.insertFootnote}><Superscript size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Notas de Rodapé</span>
             </div>
@@ -15794,7 +16039,11 @@ function WordEditor({ doc, onClose, onSave }) {
                 suppressContentEditableWarning
                 spellCheck
                 onInput={handleBodyInput}
-                onClick={fmt.handleBodyClick}
+                onClick={(e) => {
+                  const anchor = e.target.closest?.(".word-comment-anchor");
+                  if (anchor && bodyRef.current?.contains(anchor)) { e.preventDefault(); openCommentPopover(anchor); return; }
+                  fmt.handleBodyClick(e);
+                }}
                 onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
                 onKeyUp={fmt.updateLinkBar}
                 onKeyDown={fmt.handleBodyKeyDown}
@@ -15814,6 +16063,20 @@ function WordEditor({ doc, onClose, onSave }) {
 
         {tableDialogOpen && (
           <WordTableDialog onClose={() => setTableDialogOpen(false)} onConfirm={(r, c) => { setTableDialogOpen(false); fmt.insertTable(r, c); }}/>
+        )}
+
+        {drawOpen && (
+          <WordDrawDialog onClose={() => setDrawOpen(false)} onInsert={(file) => { setDrawOpen(false); fmt.insertImageFile(file); }}/>
+        )}
+
+        {commentPopover && (
+          <div className="wordCommentPopover" style={{ left: commentPopover.x, top: commentPopover.y }} onClick={e => e.stopPropagation()}>
+            <p>{commentPopover.text}</p>
+            <div className="wordCommentPopoverActions">
+              <button className="ghost" onClick={() => setCommentPopover(null)}>Fechar</button>
+              <button className="danger" onClick={() => deleteComment(commentPopover.id)}><Trash2 size={13}/> Excluir</button>
+            </div>
+          </div>
         )}
 
         {ribbonTip && (
