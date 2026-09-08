@@ -1699,6 +1699,13 @@ h1{font-size:23px}
 /* Linhas de grade (View) */
 .wordPage.wordPage-grid{background-color:#fff;background-image:linear-gradient(#0000000f 1px,transparent 1px),linear-gradient(90deg,#0000000f 1px,transparent 1px);background-size:24px 24px}
 
+/* Tooltip estilo Word: nome da ferramenta + mini descrição, exibido após um
+   pequeno atraso ao passar o mouse sobre qualquer controle do editor. */
+.wordRibbonTooltip{position:fixed;z-index:5000;background:var(--bg-modal);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 32px #0008;padding:9px 12px;max-width:260px;pointer-events:none;animation:wordTipIn .1s ease-out}
+.wordRibbonTooltipTitle{font-size:12.5px;font-weight:700;color:var(--text-1);margin-bottom:3px;line-height:1.3}
+.wordRibbonTooltipDesc{font-size:11.5px;line-height:1.45;color:var(--text-2)}
+@keyframes wordTipIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+
 @media(max-width:760px){
   .wordRibbonGroupLabel{display:none}
   .wordRibbonGroup{min-width:auto;padding:0 5px}

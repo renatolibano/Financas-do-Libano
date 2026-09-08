@@ -38,6 +38,7 @@ import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
 import { idbGet, idbSet } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
+import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
@@ -467,7 +468,15 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // salvo uma vez, na montagem — depois disso "page" navega normalmente e
   // não volta a seguir esse valor até o app ser reaberto/recarregado.
   const [homePage, setHomePage] = usePersistentState("libano-home-page", "Visão Geral");
-  const [page,setPage] = useState(homePage);
+  // Lê a URL uma única vez, na montagem (ex.: alguém abriu/recarregou em
+  // "/notas/456") — se ela apontar pra uma página conhecida, o app abre
+  // direto nela em vez de cair na página inicial das Configurações.
+  const initialRouteRef = useRef();
+  if (initialRouteRef.current === undefined) {
+    initialRouteRef.current = parseRoute(window.location.pathname);
+  }
+  const initialRoute = initialRouteRef.current;
+  const [page,setPage] = useState(initialRoute?.page || homePage);
   // Abas já abertas nesta sessão do app. Usado para adiar (useEntity opts.enabled)
   // a primeira busca das tabelas de abas "pesadas" (Filmes e Séries, Jogos, Treino)
   // até a pessoa realmente entrar nelas, em vez de baixar tudo já na abertura do app.
@@ -475,7 +484,84 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   useEffect(() => {
     setVisitedPages((prev) => (prev.has(page) ? prev : new Set(prev).add(page)));
   }, [page]);
-  const [openNoteId,setOpenNoteId] = useState(null);
+  const [openNoteId,setOpenNoteId] = useState(initialRoute?.page === "Notas" ? initialRoute.itemId : null);
+  // Id da nota que está de fato aberta agora (ver onOpenChange em <Notes>),
+  // só pra manter a URL certa — diferente de openNoteId, que é só o "gatilho"
+  // de abertura consumido pelo próprio Notes.
+  const [activeNoteUrlId, setActiveNoteUrlId] = useState(initialRoute?.page === "Notas" ? initialRoute.itemId : null);
+  // Incrementado quando o usuário aperta "voltar" do navegador saindo de uma
+  // nota aberta pra lista de Notas — sinal pro <Notes> fechar o editor.
+  const [notesCloseSignal, setNotesCloseSignal] = useState(0);
+
+  // Mesmo esquema (gatilho de abertura + id ativo pra URL + sinal de
+  // fechamento) pras 3 estantes de Livros (Lendo/Lidos/Para Ler — todas usam
+  // <BookShelf>, então compartilham esse estado, já que só uma delas fica
+  // montada por vez) e pro Word.
+  const BOOK_PAGES = ["Livros Lendo", "Livros Lidos", "Livros Para Ler"];
+  const [bookOpenTrigger, setBookOpenTrigger] = useState(BOOK_PAGES.includes(initialRoute?.page) ? initialRoute.itemId : null);
+  const [activeBookUrlId, setActiveBookUrlId] = useState(BOOK_PAGES.includes(initialRoute?.page) ? initialRoute.itemId : null);
+  const [bookCloseSignal, setBookCloseSignal] = useState(0);
+
+  const [wordOpenTrigger, setWordOpenTrigger] = useState(initialRoute?.page === "Word" ? initialRoute.itemId : null);
+  const [activeWordUrlId, setActiveWordUrlId] = useState(initialRoute?.page === "Word" ? initialRoute.itemId : null);
+  const [wordCloseSignal, setWordCloseSignal] = useState(0);
+
+  // Mesmo esquema pro Leitor de PDF (PDF aberto no leitor), Flashcards
+  // (lista sendo estudada) e Treino (treino em execução no player).
+  const [readerOpenTrigger, setReaderOpenTrigger] = useState(initialRoute?.page === "Leitor de PDF" ? initialRoute.itemId : null);
+  const [activeReaderUrlId, setActiveReaderUrlId] = useState(initialRoute?.page === "Leitor de PDF" ? initialRoute.itemId : null);
+  const [readerCloseSignal, setReaderCloseSignal] = useState(0);
+
+  const [flashcardsOpenTrigger, setFlashcardsOpenTrigger] = useState(initialRoute?.page === "Flashcards" ? initialRoute.itemId : null);
+  const [activeFlashcardsUrlId, setActiveFlashcardsUrlId] = useState(initialRoute?.page === "Flashcards" ? initialRoute.itemId : null);
+  const [flashcardsCloseSignal, setFlashcardsCloseSignal] = useState(0);
+
+  const [treinoOpenTrigger, setTreinoOpenTrigger] = useState(initialRoute?.page === "Treino" ? initialRoute.itemId : null);
+  const [activeTreinoUrlId, setActiveTreinoUrlId] = useState(initialRoute?.page === "Treino" ? initialRoute.itemId : null);
+  const [treinoCloseSignal, setTreinoCloseSignal] = useState(0);
+
+  // Mantém a URL igual ao que está sendo mostrado. Só troca de URL quando o
+  // caminho calculado é diferente do atual, pra não empilhar entradas de
+  // histórico à toa a cada re-render.
+  useEffect(() => {
+    const itemId = page === "Notas" ? activeNoteUrlId
+      : BOOK_PAGES.includes(page) ? activeBookUrlId
+      : page === "Word" ? activeWordUrlId
+      : page === "Leitor de PDF" ? activeReaderUrlId
+      : page === "Flashcards" ? activeFlashcardsUrlId
+      : page === "Treino" ? activeTreinoUrlId
+      : null;
+    const path = buildPath(page, itemId);
+    if (window.location.pathname !== path) {
+      window.history.pushState({ page, itemId }, "", path);
+    }
+  }, [page, activeNoteUrlId, activeBookUrlId, activeWordUrlId, activeReaderUrlId, activeFlashcardsUrlId, activeTreinoUrlId]);
+
+  // Botão voltar/avançar do navegador: relê a URL e ajusta o estado do app
+  // pra bater com ela.
+  useEffect(() => {
+    const onPopState = () => {
+      const route = parseRoute(window.location.pathname);
+      const nextPage = route?.page || homePage;
+      setPage(nextPage);
+      if (nextPage === "Notas") {
+        if (route?.itemId) setOpenNoteId(route.itemId); else setNotesCloseSignal((s) => s + 1);
+      } else if (BOOK_PAGES.includes(nextPage)) {
+        if (route?.itemId) setBookOpenTrigger(route.itemId); else setBookCloseSignal((s) => s + 1);
+      } else if (nextPage === "Word") {
+        if (route?.itemId) setWordOpenTrigger(route.itemId); else setWordCloseSignal((s) => s + 1);
+      } else if (nextPage === "Leitor de PDF") {
+        if (route?.itemId) setReaderOpenTrigger(route.itemId); else setReaderCloseSignal((s) => s + 1);
+      } else if (nextPage === "Flashcards") {
+        if (route?.itemId) setFlashcardsOpenTrigger(route.itemId); else setFlashcardsCloseSignal((s) => s + 1);
+      } else if (nextPage === "Treino") {
+        if (route?.itemId) setTreinoOpenTrigger(route.itemId); else setTreinoCloseSignal((s) => s + 1);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homePage]);
   const [mobileOpen,setMobileOpen] = useState(false);
   // Em telas touch o navegador dispara mouseenter/mouseleave "fantasmas" no primeiro toque,
   // o que conflitava com o botão de abrir/fechar. Só reagimos ao hover em dispositivos que de fato têm mouse.
@@ -1141,17 +1227,17 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Lembretes Comuns" && <CommonReminders entity={reminders}/>}
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
-      {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)}/>}
+      {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
       {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats}/>}
-      {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
-      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
-      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups}/>}
+      {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
+      {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
+      {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
-      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session}/>}
+      {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session} openItemId={flashcardsOpenTrigger} onConsumeOpenItem={()=>setFlashcardsOpenTrigger(null)} onOpenChange={setActiveFlashcardsUrlId} closeSignal={flashcardsCloseSignal}/>}
       {page==="Nivelamento" && <Nivelamento/>}
-      {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals}/>}
-      {page==="Word" && <WordDocs entity={wordDocs}/>}
-      {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session}/>}
+      {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
+      {page==="Word" && <WordDocs entity={wordDocs} openDocId={wordOpenTrigger} onConsumeOpenDoc={()=>setWordOpenTrigger(null)} onOpenChange={setActiveWordUrlId} closeSignal={wordCloseSignal}/>}
+      {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session} openItemId={treinoOpenTrigger} onConsumeOpenItem={()=>setTreinoOpenTrigger(null)} onOpenChange={setActiveTreinoUrlId} closeSignal={treinoCloseSignal}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
@@ -3765,7 +3851,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   );
 }
 
-function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEntity }) {
+function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEntity, openItemId, onConsumeOpenItem, onOpenChange, closeSignal }) {
   const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const groups = groupsEntity.data;
@@ -3865,6 +3951,30 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
     }
     setReadingBook(null);
   };
+
+  // Avisa o App qual livro está de fato aberto agora, só pra manter a URL
+  // certa (ex.: /livros/lendo/abc123).
+  useEffect(() => {
+    onOpenChange?.(readingBook?.id || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readingBook]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de um livro aberto pra estante — fecha o leitor pra bater com a URL.
+  const skipBookCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipBookCloseSignal.current) { skipBookCloseSignal.current = false; return; }
+    handleCloseReader();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
+  // Deep link / reload (ex.: abriu direto em /livros/lendo/abc123): acha o
+  // livro na lista e abre, quando ela já tiver carregado.
+  useEffect(() => {
+    if (!openItemId) return;
+    const book = data.find(b => b.id === openItemId);
+    if (book) handleOpen(book);
+    onConsumeOpenItem?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openItemId, data]);
 
   const handleDelete = async (book) => {
     if (!confirm(`Excluir "${book.title}"? Isso também apaga o PDF.`)) return;
@@ -6591,7 +6701,7 @@ function NewPdfDialog({ onClose, onCreate, creating }) {
 
 // ---------- Estante de PDFs de estudo ----------
 
-function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }) {
+function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals, openItemId, onConsumeOpenItem, onOpenChange, closeSignal }) {
   const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data, add, remove, update, cloud, reorder, fetchFull } = entity;
   const groups = groupsEntity.data;
@@ -6679,6 +6789,30 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals }
     setOpeningPdfId(null);
     setReadingPdf(full || pdfDoc);
   };
+
+  // Avisa o App qual PDF está de fato aberto agora, só pra manter a URL certa
+  // (ex.: /leitor-de-pdf/abc123).
+  useEffect(() => {
+    onOpenChange?.(readingPdf?.id || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readingPdf]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de um PDF aberto pra estante — fecha o leitor pra bater com a URL.
+  const skipReaderCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipReaderCloseSignal.current) { skipReaderCloseSignal.current = false; return; }
+    setReadingPdf(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
+  // Deep link / reload (ex.: abriu direto em /leitor-de-pdf/abc123): acha o
+  // PDF na lista e abre, quando ela já tiver carregado.
+  useEffect(() => {
+    if (!openItemId) return;
+    const pdfDoc = data.find(p => p.id === openItemId);
+    if (pdfDoc) handleOpen(pdfDoc);
+    onConsumeOpenItem?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openItemId, data]);
 
   const onProgress = (id, page) => {
     clearTimeout(progressTimer.current);
@@ -8624,7 +8758,7 @@ const workoutFmtValue = (ex) => {
   return `${Number(ex.value) || 0} repetições`;
 };
 
-function WorkoutShelf({ foldersEntity, exercisesEntity, session }) {
+function WorkoutShelf({ foldersEntity, exercisesEntity, session, openItemId, onConsumeOpenItem, onOpenChange, closeSignal }) {
   const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
   const { data: exercises, add: addExercise, remove: removeExercise, update: updateExercise, reorder: reorderExercises } = exercisesEntity;
 
@@ -8636,6 +8770,30 @@ function WorkoutShelf({ foldersEntity, exercisesEntity, session }) {
 
   const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
   const visibleExercises = exercises.filter(e => e.folder_id === openFolderId);
+
+  // Avisa o App qual treino está de fato em execução agora, só pra manter a
+  // URL certa (ex.: /treino/abc123).
+  useEffect(() => {
+    onOpenChange?.(playerFolderId || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerFolderId]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de um treino em execução pra estante — fecha o player pra bater com a URL.
+  const skipPlayerCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipPlayerCloseSignal.current) { skipPlayerCloseSignal.current = false; return; }
+    setPlayerFolderId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
+  // Deep link / reload (ex.: abriu direto em /treino/abc123): acha a pasta
+  // de treino e já inicia o player, quando ela já tiver carregado.
+  useEffect(() => {
+    if (!openItemId) return;
+    const folder = folders.find(f => f.id === openItemId);
+    if (folder) setPlayerFolderId(openItemId);
+    onConsumeOpenItem?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openItemId, folders]);
 
   const handleSaveFolder = (name) => {
     if (folderModal === "new") addFolder({ id: crypto.randomUUID(), name, cover_image: null });
@@ -10376,7 +10534,7 @@ function FlashcardTile({ card, onDelete }) {
 const rid = () => Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 const shuffleArr = (arr) => { const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
 
-function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, session }) {
+function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, session, openItemId, onConsumeOpenItem, onOpenChange, closeSignal }) {
   const { data: pdfCards, remove: removePdfCard } = entity;
   const { data: lists, add: addList, remove: removeList, update: updateList, fetchFull: fetchFullList } = listsEntity;
   const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
@@ -10420,6 +10578,30 @@ function StudyFlashcards({ entity, listsEntity, foldersEntity, studyGoals, sessi
       setOpeningListId(null);
     }
   };
+
+  // Avisa o App qual lista está de fato sendo estudada agora, só pra manter
+  // a URL certa (ex.: /flashcards/abc123).
+  useEffect(() => {
+    onOpenChange?.(viewingListId || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingListId]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de uma lista sendo estudada pra estante — fecha o estudo pra bater com a URL.
+  const skipFlashcardsCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipFlashcardsCloseSignal.current) { skipFlashcardsCloseSignal.current = false; return; }
+    setViewingListId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
+  // Deep link / reload (ex.: abriu direto em /flashcards/abc123): acha a
+  // lista e já abre pra estudo, quando ela já tiver carregado.
+  useEffect(() => {
+    if (!openItemId) return;
+    const list = lists.find(l => l.id === openItemId);
+    if (list) openListToStudy(openItemId);
+    onConsumeOpenItem?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openItemId, lists]);
 
   const confirmDeleteList = (id) => { setOpenMenuId(null); if (confirm("Excluir esta lista de cartões?")) removeList(id); };
   const confirmDeleteFolder = (id) => {
@@ -13168,11 +13350,25 @@ function Recurring({entity,transactions}){
 
 const NOTE_TRASH_DAYS = 30; // itens na lixeira somem sozinhos depois desse prazo
 
-function Notes({entity, openNoteId, onConsumeOpenNote}){
+function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal}){
   const { data, add, remove, update, reorder, fetchFull, cloud } = entity;
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeNote, setActiveNote] = useState(null);
   const [openingNoteId, setOpeningNoteId] = useState(null);
+  // Avisa o App qual nota está de fato aberta agora, só pra manter a URL
+  // certa (ex.: /notas/456) — não afeta a lógica de edição em si.
+  useEffect(() => {
+    onOpenChange?.(activeNote?.id || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNote]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de uma nota pra lista — fecha o editor pra bater com a URL.
+  const skipCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipCloseSignal.current) { skipCloseSignal.current = false; return; }
+    setActiveNote(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
   const [creating, setCreating] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [view, setView] = useState("notas"); // "notas" | "lixeira"
@@ -13527,7 +13723,7 @@ function NoteEditor({ note, onClose, onSave }) {
 // "Word" (Área de Estudos) — estante de documentos, no mesmo padrão de
 // Notas: listagem enxuta (sem o HTML inteiro) + fetchFull() só ao abrir.
 
-function WordDocs({ entity }) {
+function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSignal }) {
   const { data, add, remove, update, fetchFull, cloud } = entity;
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeDoc, setActiveDoc] = useState(null);
@@ -13541,6 +13737,30 @@ function WordDocs({ entity }) {
     setOpeningId(null);
     setActiveDoc(full);
   };
+
+  // Avisa o App qual documento está de fato aberto agora, só pra manter a
+  // URL certa (ex.: /word/abc123).
+  useEffect(() => {
+    onOpenChange?.(activeDoc?.id || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc]);
+  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
+  // de um documento aberto pra lista — fecha o editor pra bater com a URL.
+  const skipWordCloseSignal = useRef(true);
+  useEffect(() => {
+    if (skipWordCloseSignal.current) { skipWordCloseSignal.current = false; return; }
+    setActiveDoc(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSignal]);
+  // Deep link / reload (ex.: abriu direto em /word/abc123): acha o
+  // documento na lista e abre, quando ela já tiver carregado.
+  useEffect(() => {
+    if (!openDocId) return;
+    const doc = data.find(d => d.id === openDocId);
+    if (doc) openDoc(doc);
+    onConsumeOpenDoc?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openDocId, data]);
 
   const createDoc = async () => {
     setCreating(true);
@@ -14464,13 +14684,41 @@ function WordEditor({ doc, onClose, onSave }) {
   const [sensitivityOpen, setSensitivityOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
+  const [ribbonTip, setRibbonTip] = useState(null); // { label, desc, x, y } - tooltip estilo Word
 
   const bodyRef = useRef(null);
   const modalRef = useRef(null);
   const imageInputRef = useRef(null);
   const saveTimer = useRef(null);
   const pageAreaRef = useRef(null);
+  const ribbonTipTimer = useRef(null);
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+
+  // Tooltip estilo Word: nome da ferramenta + mini descrição, aparecendo com
+  // um pequeno atraso ao passar o mouse (igual ao comportamento do Word de verdade).
+  // Funciona por delegação: qualquer elemento com data-tip (e opcionalmente
+  // data-tipdesc) dentro do modal do editor ganha o tooltip automaticamente.
+  const handleRibbonMouseOver = (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) return;
+    if (ribbonTip?.el === el) return;
+    clearTimeout(ribbonTipTimer.current);
+    const label = el.getAttribute("data-tip");
+    const desc = el.getAttribute("data-tipdesc") || "";
+    ribbonTipTimer.current = setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      const x = Math.min(r.left, window.innerWidth - 280);
+      setRibbonTip({ el, label, desc, x: Math.max(8, x), y: r.bottom + 8 });
+    }, 500);
+  };
+  const handleRibbonMouseOut = (e) => {
+    const el = e.target.closest("[data-tip]");
+    if (!el) return;
+    if (el.contains(e.relatedTarget)) return;
+    clearTimeout(ribbonTipTimer.current);
+    setRibbonTip(null);
+  };
+  const dismissRibbonTip = () => { clearTimeout(ribbonTipTimer.current); setRibbonTip(null); };
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.innerHTML = doc.content || "";
@@ -14552,7 +14800,13 @@ function WordEditor({ doc, onClose, onSave }) {
 
   return (
     <div className="readerBack">
-      <div ref={modalRef} className={"readerModal wordModal readerModalWide" + (fullscreen ? " readerModalFull" : "")}>
+      <div
+        ref={modalRef}
+        className={"readerModal wordModal readerModalWide" + (fullscreen ? " readerModalFull" : "")}
+        onMouseOver={handleRibbonMouseOver}
+        onMouseOut={handleRibbonMouseOut}
+        onMouseDown={dismissRibbonTip}
+      >
         <div className="readerHead">
           <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
           <div className="readerHeadActions">
@@ -14565,8 +14819,8 @@ function WordEditor({ doc, onClose, onSave }) {
                 </div>
               )}
             </div>
-            <button title="Imprimir" onClick={() => window.print()}><Printer size={16}/></button>
-            <button title={fullscreen ? "Sair da tela cheia" : "Tela cheia"} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
+            <button data-tip="Imprimir" data-tipdesc="Imprimir este documento ou salvá-lo como PDF pela caixa de impressão do navegador." onClick={() => window.print()}><Printer size={16}/></button>
+            <button data-tip={fullscreen ? "Sair da tela cheia" : "Tela cheia"} data-tipdesc={fullscreen ? "Retorna o editor ao tamanho normal da janela." : "Expande o editor para ocupar toda a tela, sem distrações."} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
             <button onClick={handleClose}><X/></button>
           </div>
         </div>
@@ -14582,10 +14836,10 @@ function WordEditor({ doc, onClose, onSave }) {
           {ribbonTab === "home" && (<>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Recortar" onClick={() => fmt.exec("cut")}><Scissors size={15}/></button>
-                <button title="Copiar" onClick={() => fmt.exec("copy")}><Copy size={15}/></button>
-                <button title="Colar" onClick={() => fmt.exec("paste")}><ClipboardPaste size={15}/></button>
-                <button title="Pincel de formatação" className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={15}/></button>
+                <button data-tip="Recortar (Ctrl+X)" data-tipdesc="Remove a seleção e a guarda na área de transferência, para colar em outro lugar." onClick={() => fmt.exec("cut")}><Scissors size={15}/></button>
+                <button data-tip="Copiar (Ctrl+C)" data-tipdesc="Copia a seleção para a área de transferência, mantendo o original no lugar." onClick={() => fmt.exec("copy")}><Copy size={15}/></button>
+                <button data-tip="Colar (Ctrl+V)" data-tipdesc="Insere o conteúdo da área de transferência no ponto onde está o cursor." onClick={() => fmt.exec("paste")}><ClipboardPaste size={15}/></button>
+                <button data-tip="Pincel de Formatação" data-tipdesc="Copia a formatação de um trecho de texto e aplica em outro. Clique em um texto formatado, depois selecione o texto que vai receber a mesma formatação." className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Área de Transferência</span>
             </div>
@@ -14593,25 +14847,25 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" onClick={() => { fmt.setFontOpen(o => !o); fmt.setSizeOpen(false); }}><Type size={13}/> Fonte <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Fonte" data-tipdesc="Escolha a família tipográfica aplicada ao texto selecionado." onClick={() => { fmt.setFontOpen(o => !o); fmt.setSizeOpen(false); }}><Type size={13}/> Fonte <ChevronDown size={12}/></button>
                   {fmt.fontOpen && <div className="wordDropdownMenu">{WORD_FONTS.map(f => <button key={f} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}</div>}
                 </div>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" onClick={() => { fmt.setSizeOpen(o => !o); fmt.setFontOpen(false); }}>Tamanho <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Tamanho da Fonte" data-tipdesc="Define o tamanho do texto selecionado, em pontos." onClick={() => { fmt.setSizeOpen(o => !o); fmt.setFontOpen(false); }}>Tamanho <ChevronDown size={12}/></button>
                   {fmt.sizeOpen && <div className="wordDropdownMenu wordSizeMenu">{WORD_SIZES.map(s => <button key={s} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}</div>}
                 </div>
-                <button title="Aumentar fonte" className="wordTextBtn" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
-                <button title="Diminuir fonte" className="wordTextBtn" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
+                <button data-tip="Aumentar Fonte (Ctrl+Shift+>)" data-tipdesc="Aumenta o tamanho do texto selecionado em um passo." className="wordTextBtn" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
+                <button data-tip="Diminuir Fonte (Ctrl+Shift+<)" data-tipdesc="Diminui o tamanho do texto selecionado em um passo." className="wordTextBtn" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
               </div>
               <div className="wordRibbonRow">
-                <button title="Negrito" onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
-                <button title="Itálico" onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
-                <button title="Sublinhado" onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
-                <button title="Tachado" onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
-                <button title="Subscrito" onClick={() => fmt.exec("subscript")}><Subscript size={15}/></button>
-                <button title="Sobrescrito" onClick={() => fmt.exec("superscript")}><Superscript size={15}/></button>
+                <button data-tip="Negrito (Ctrl+B)" data-tipdesc="Deixa o texto selecionado em negrito." onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
+                <button data-tip="Itálico (Ctrl+I)" data-tipdesc="Deixa o texto selecionado em itálico." onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
+                <button data-tip="Sublinhado (Ctrl+U)" data-tipdesc="Sublinha o texto selecionado." onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
+                <button data-tip="Tachado" data-tipdesc="Desenha uma linha sobre o texto selecionado, indicando exclusão." onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
+                <button data-tip="Subscrito (Ctrl+=)" data-tipdesc="Escreve o texto selecionado abaixo da linha de base, em tamanho menor." onClick={() => fmt.exec("subscript")}><Subscript size={15}/></button>
+                <button data-tip="Sobrescrito (Ctrl+Shift+=)" data-tipdesc="Escreve o texto selecionado acima da linha de base, em tamanho menor." onClick={() => fmt.exec("superscript")}><Superscript size={15}/></button>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" title="Maiúsculas e minúsculas" onClick={() => fmt.setCaseOpen(o => !o)}><CaseSensitive size={15}/> <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Maiúsculas e Minúsculas" data-tipdesc="Altera a capitalização do texto selecionado: frase, minúsculas, MAIÚSCULAS, Cada Palavra ou iNVERTER." onClick={() => fmt.setCaseOpen(o => !o)}><CaseSensitive size={15}/> <ChevronDown size={12}/></button>
                   {fmt.caseOpen && <div className="wordDropdownMenu">
                     <button onClick={() => fmt.applyChangeCase("sentence")}>Primeira letra da frase em maiúscula</button>
                     <button onClick={() => fmt.applyChangeCase("lower")}>minúsculas</button>
@@ -14621,49 +14875,49 @@ function WordEditor({ doc, onClose, onSave }) {
                   </div>}
                 </div>
                 <div className="emojiWrap">
-                  <button title="Cor de realce" onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={15}/></button>
+                  <button data-tip="Cor de Realce do Texto" data-tipdesc="Pinta o fundo do texto selecionado com uma cor, como um marca-texto." onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={15}/></button>
                   {fmt.hiliteOpen && <div className="colorPopover">{NOTE_HILITE_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyHilite(c)}/>)}</div>}
                 </div>
                 <div className="emojiWrap">
-                  <button title="Cor da fonte" onClick={() => { fmt.setColorOpen(o => !o); fmt.setHiliteOpen(false); }}><Palette size={15}/></button>
+                  <button data-tip="Cor da Fonte" data-tipdesc="Altera a cor do texto selecionado." onClick={() => { fmt.setColorOpen(o => !o); fmt.setHiliteOpen(false); }}><Palette size={15}/></button>
                   {fmt.colorOpen && <div className="colorPopover">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => fmt.applyTextColor(c)}/>)}</div>}
                 </div>
-                <button title="Limpar formatação" onClick={fmt.clearFormatting}><Eraser size={15}/></button>
+                <button data-tip="Limpar Toda a Formatação" data-tipdesc="Remove todas as formatações do texto selecionado, deixando apenas texto simples." onClick={fmt.clearFormatting}><Eraser size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Fonte</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <button title="Lista com marcadores" onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
-                <button title="Lista numerada" onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
-                <button title="Lista de vários níveis" onClick={fmt.applyMultilevelList}><ListTree size={15}/></button>
-                <button title="Diminuir recuo" onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
-                <button title="Aumentar recuo" onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
+                <button data-tip="Marcadores" data-tipdesc="Cria uma lista com marcadores (pontos) para o parágrafo atual." onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
+                <button data-tip="Numeração" data-tipdesc="Cria uma lista numerada para o parágrafo atual." onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
+                <button data-tip="Lista de Vários Níveis" data-tipdesc="Cria uma lista com níveis de hierarquia, como um sumário ou tópicos aninhados." onClick={fmt.applyMultilevelList}><ListTree size={15}/></button>
+                <button data-tip="Diminuir Recuo" data-tipdesc="Move o parágrafo para mais perto da margem." onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
+                <button data-tip="Aumentar Recuo" data-tipdesc="Move o parágrafo para mais longe da margem." onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" title="Classificar" onClick={() => fmt.setSortOpen(o => !o)}><ArrowDown size={13}/> <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Classificar" data-tipdesc="Organiza os parágrafos selecionados em ordem alfabética, crescente ou decrescente." onClick={() => fmt.setSortOpen(o => !o)}><ArrowDown size={13}/> <ChevronDown size={12}/></button>
                   {fmt.sortOpen && <div className="wordDropdownMenu">
                     <button onClick={() => fmt.sortBlocks("asc")}>Classificar A → Z</button>
                     <button onClick={() => fmt.sortBlocks("desc")}>Classificar Z → A</button>
                   </div>}
                 </div>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" title="Espaçamento entre linhas" onClick={() => fmt.setLineOpen(o => !o)}><WrapText size={14}/> <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Espaçamento entre Linhas e Parágrafos" data-tipdesc="Controla a distância vertical entre as linhas de texto." onClick={() => fmt.setLineOpen(o => !o)}><WrapText size={14}/> <ChevronDown size={12}/></button>
                   {fmt.lineOpen && <div className="wordDropdownMenu">{WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}</div>}
                 </div>
-                <button title="Mostrar tudo (marcas de parágrafo)" className={showMarks ? "active" : ""} onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
+                <button data-tip="Mostrar Tudo (Ctrl+*)" data-tipdesc="Exibe marcas de formatação ocultas, como parágrafos e espaços." className={showMarks ? "active" : ""} onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
               </div>
               <div className="wordRibbonRow">
-                <button title="Alinhar à esquerda" onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
-                <button title="Centralizar" onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
-                <button title="Alinhar à direita" onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
-                <button title="Justificar" onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
+                <button data-tip="Alinhar Texto à Esquerda (Ctrl+Q)" data-tipdesc="Alinha o texto pela margem esquerda." onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
+                <button data-tip="Centralizar (Ctrl+E)" data-tipdesc="Centraliza o texto entre as margens." onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
+                <button data-tip="Alinhar Texto à Direita (Ctrl+G)" data-tipdesc="Alinha o texto pela margem direita." onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
+                <button data-tip="Justificar (Ctrl+J)" data-tipdesc="Distribui o texto uniformemente entre as margens. O texto justificado proporciona bordas limpas e nítidas ao documento, criando uma aparência mais elegante." onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
                 <div className="emojiWrap">
-                  <button title="Sombreamento" onClick={() => { fmt.setShadingOpen(o => !o); fmt.setBorderOpen(false); }}><PaintRoller size={15}/></button>
+                  <button data-tip="Sombreamento" data-tipdesc="Pinta o fundo do parágrafo ou da célula selecionada com uma cor." onClick={() => { fmt.setShadingOpen(o => !o); fmt.setBorderOpen(false); }}><PaintRoller size={15}/></button>
                   {fmt.shadingOpen && <div className="colorPopover">{WORD_SHADING_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyShading(c)}/>)}</div>}
                 </div>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" title="Bordas" onClick={() => { fmt.setBorderOpen(o => !o); fmt.setShadingOpen(false); }}><Frame size={14}/> <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Bordas" data-tipdesc="Adiciona ou remove bordas ao redor do texto ou parágrafo selecionado." onClick={() => { fmt.setBorderOpen(o => !o); fmt.setShadingOpen(false); }}><Frame size={14}/> <ChevronDown size={12}/></button>
                   {fmt.borderOpen && <div className="wordDropdownMenu">{WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}</div>}
                 </div>
               </div>
@@ -14672,37 +14926,37 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow wordStylesGallery">
-                <button title="Normal" onClick={() => fmt.applyHeading("P")}><Pilcrow size={15}/></button>
-                <button title="Sem Espaçamento" className="wordStyleTextBtn" onClick={fmt.applyNoSpacing}>Sem Espaçamento</button>
-                <button title="Título" className="wordStyleTextBtn wordStyleTitleBtn" onClick={() => fmt.applyParagraphStyle("title")}>Título</button>
-                <button title="Subtítulo" className="wordStyleTextBtn wordStyleSubtitleBtn" onClick={() => fmt.applyParagraphStyle("subtitle")}>Subtítulo</button>
-                <button title="Título 1" onClick={() => fmt.applyHeading("H1")}><Heading1 size={15}/></button>
-                <button title="Título 2" onClick={() => fmt.applyHeading("H2")}><Heading2 size={15}/></button>
-                <button title="Título 3" onClick={() => fmt.applyHeading("H3")}><Heading3 size={15}/></button>
-                <button title="Citação" onClick={() => fmt.applyHeading("BLOCKQUOTE")}><Quote size={15}/></button>
+                <button data-tip="Normal" data-tipdesc="Aplica o estilo de parágrafo padrão, sem títulos nem espaçamentos especiais." onClick={() => fmt.applyHeading("P")}><Pilcrow size={15}/></button>
+                <button data-tip="Sem Espaçamento" data-tipdesc="Aplica um estilo de parágrafo sem espaço extra antes ou depois das linhas." className="wordStyleTextBtn" onClick={fmt.applyNoSpacing}>Sem Espaçamento</button>
+                <button data-tip="Título" data-tipdesc="Aplica o estilo de título principal do documento, com destaque visual maior." className="wordStyleTextBtn wordStyleTitleBtn" onClick={() => fmt.applyParagraphStyle("title")}>Título</button>
+                <button data-tip="Subtítulo" data-tipdesc="Aplica o estilo de subtítulo, usado logo abaixo do título principal." className="wordStyleTextBtn wordStyleSubtitleBtn" onClick={() => fmt.applyParagraphStyle("subtitle")}>Subtítulo</button>
+                <button data-tip="Título 1" data-tipdesc="Aplica o estilo de título de nível 1, usado para as seções principais do documento." onClick={() => fmt.applyHeading("H1")}><Heading1 size={15}/></button>
+                <button data-tip="Título 2" data-tipdesc="Aplica o estilo de título de nível 2, usado para subseções." onClick={() => fmt.applyHeading("H2")}><Heading2 size={15}/></button>
+                <button data-tip="Título 3" data-tipdesc="Aplica o estilo de título de nível 3, usado para subdivisões menores." onClick={() => fmt.applyHeading("H3")}><Heading3 size={15}/></button>
+                <button data-tip="Citação" data-tipdesc="Aplica o estilo de citação em bloco, destacando o trecho selecionado do restante do texto." onClick={() => fmt.applyHeading("BLOCKQUOTE")}><Quote size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Estilos</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Localizar" onClick={() => fmt.setFindOpen(o => !o)}><Search size={15}/></button>
-                <button title="Substituir" onClick={() => fmt.setFindOpen(true)}><Replace size={15}/></button>
-                <button title="Selecionar tudo" onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
+                <button data-tip="Localizar (Ctrl+F)" data-tipdesc="Procura uma palavra ou trecho de texto no documento." onClick={() => fmt.setFindOpen(o => !o)}><Search size={15}/></button>
+                <button data-tip="Substituir (Ctrl+H)" data-tipdesc="Procura um texto no documento e o substitui por outro." onClick={() => fmt.setFindOpen(true)}><Replace size={15}/></button>
+                <button data-tip="Selecionar Tudo (Ctrl+A)" data-tipdesc="Seleciona todo o conteúdo do documento." onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Edição</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title={fmt.dictationSupported ? "Ditar" : "Ditado não suportado neste navegador"} className={fmt.dictating ? "active" : ""} onClick={fmt.toggleDictation}><Mic size={15}/></button>
+                <button data-tip={fmt.dictationSupported ? "Ditar" : "Ditado não suportado neste navegador"} data-tipdesc={fmt.dictationSupported ? "Converte sua fala em texto no ponto onde está o cursor, usando o microfone." : "Este navegador não oferece suporte a reconhecimento de voz."} className={fmt.dictating ? "active" : ""} onClick={fmt.toggleDictation}><Mic size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Voz</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" title="Confidencialidade" onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
+                <button className="wordDropdownBtn" data-tip="Confidencialidade" data-tipdesc="Classifica o documento quanto ao nível de sensibilidade da informação que ele contém." onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
                 {sensitivityOpen && <div className="wordDropdownMenu">
                   {SENSITIVITY_LABELS.map(l => <button key={l} className={sensitivityLabel === l ? "active" : ""} onClick={() => { setSensitivityLabel(l); setSensitivityOpen(false); }}>{l}</button>)}
                 </div>}
@@ -14712,7 +14966,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" title="Editor" onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
+                <button className="wordDropdownBtn" data-tip="Editor" data-tipdesc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
                 {editorOpen && (() => {
                   const text = bodyRef.current?.innerText || "";
                   const doubleSpaces = (text.match(/ {2,}/g) || []).length;
@@ -14734,34 +14988,34 @@ function WordEditor({ doc, onClose, onSave }) {
 
           {ribbonTab === "insert" && (<>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button title="Quebra de página" onClick={fmt.insertPageBreak}><FileType size={15}/></button></div>
+              <div className="wordRibbonRow"><button data-tip="Quebra de Página (Ctrl+Enter)" data-tipdesc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}><FileType size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Páginas</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button title="Inserir tabela" onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button></div>
+              <div className="wordRibbonRow"><button data-tip="Tabela" data-tipdesc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Tabela</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Inserir imagem" onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
+                <button data-tip="Imagens" data-tipdesc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
                 <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
               </div>
               <span className="wordRibbonGroupLabel">Ilustrações</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button title="Inserir link" onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button></div>
+              <div className="wordRibbonRow"><button data-tip="Link (Ctrl+K)" data-tipdesc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Links</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Cabeçalho" onClick={() => fmt.insertHeaderFooterBand("header")}><PanelTop size={15}/></button>
-                <button title="Rodapé" onClick={() => fmt.insertHeaderFooterBand("footer")}><PanelBottom size={15}/></button>
+                <button data-tip="Cabeçalho" data-tipdesc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("header")}><PanelTop size={15}/></button>
+                <button data-tip="Rodapé" data-tipdesc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("footer")}><PanelBottom size={15}/></button>
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" title="Número de página" onClick={() => fmt.setPageNumOpen(o => !o)}><FileDigit size={14}/> <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Número de Página" data-tipdesc="Insere a numeração automática das páginas no cabeçalho ou no rodapé." onClick={() => fmt.setPageNumOpen(o => !o)}><FileDigit size={14}/> <ChevronDown size={12}/></button>
                   {fmt.pageNumOpen && <div className="wordDropdownMenu">
                     <button onClick={() => fmt.insertPageNumber("header")}>Início da página (cabeçalho)</button>
                     <button onClick={() => fmt.insertPageNumber("footer")}>Fim da página (rodapé)</button>
@@ -14773,9 +15027,9 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <button title="Caixa de texto" onClick={fmt.insertTextBox}><SquareDashed size={15}/></button>
-                <button title="Letra capitular" onClick={fmt.toggleDropCap}><CaseUpper size={15}/></button>
-                <button title="Data e hora" onClick={fmt.insertDateTime}><CalendarDays size={15}/></button>
+                <button data-tip="Caixa de Texto" data-tipdesc="Insere uma caixa de texto que pode ser posicionada livremente na página." onClick={fmt.insertTextBox}><SquareDashed size={15}/></button>
+                <button data-tip="Letra Capitular" data-tipdesc="Aumenta e destaca a primeira letra do parágrafo, como no início de um capítulo." onClick={fmt.toggleDropCap}><CaseUpper size={15}/></button>
+                <button data-tip="Data e Hora" data-tipdesc="Insere a data e a hora atuais no ponto onde está o cursor." onClick={fmt.insertDateTime}><CalendarDays size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Texto</span>
             </div>
@@ -14783,11 +15037,11 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
                 <div className="emojiWrap">
-                  <button title="Emoji/Símbolo" onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
+                  <button data-tip="Emoji" data-tipdesc="Insere um emoji no ponto onde está o cursor." onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
                   {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
                 </div>
                 <div className="emojiWrap">
-                  <button title="Símbolo" onClick={() => fmt.setSymbolOpen(o => !o)}><Sigma size={15}/></button>
+                  <button data-tip="Símbolo" data-tipdesc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={() => fmt.setSymbolOpen(o => !o)}><Sigma size={15}/></button>
                   {fmt.symbolOpen && <div className="emojiPopover">{WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}</div>}
                 </div>
               </div>
@@ -14799,7 +15053,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" onClick={() => fmt.setMarginsOpen(o => !o)}>Margens <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Margens" data-tipdesc="Define o espaço em branco entre o texto e a borda da página." onClick={() => fmt.setMarginsOpen(o => !o)}>Margens <ChevronDown size={12}/></button>
                   {fmt.marginsOpen && <div className="wordDropdownMenu">
                     {["estreita", "normal", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => { changePageSetting("margins", m); fmt.setMarginsOpen(false); }}>{m[0].toUpperCase() + m.slice(1)}</button>)}
                   </div>}
@@ -14810,16 +15064,16 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Retrato" className={orientation === "retrato" ? "active" : ""} onClick={() => changePageSetting("orientation", "retrato")}><RectangleVertical size={15}/></button>
-                <button title="Paisagem" className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}><RectangleHorizontal size={15}/></button>
+                <button data-tip="Retrato" data-tipdesc="Orienta a página na vertical, mais alta do que larga." className={orientation === "retrato" ? "active" : ""} onClick={() => changePageSetting("orientation", "retrato")}><RectangleVertical size={15}/></button>
+                <button data-tip="Paisagem" data-tipdesc="Orienta a página na horizontal, mais larga do que alta." className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}><RectangleHorizontal size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Orientação</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="A4" className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4</button>
-                <button title="Carta" className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta</button>
+                <button data-tip="A4" data-tipdesc="Define o tamanho da página como A4 (21 x 29,7 cm), o padrão mais usado no Brasil." className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4</button>
+                <button data-tip="Carta" data-tipdesc="Define o tamanho da página como Carta (21,6 x 27,9 cm), padrão comum nos Estados Unidos." className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta</button>
               </div>
               <span className="wordRibbonGroupLabel">Tamanho</span>
             </div>
@@ -14827,7 +15081,7 @@ function WordEditor({ doc, onClose, onSave }) {
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
                 <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" onClick={() => fmt.setColumnsOpen(o => !o)}><Columns2 size={13}/> Colunas <ChevronDown size={12}/></button>
+                  <button className="wordDropdownBtn" data-tip="Colunas" data-tipdesc="Divide o texto do documento em duas ou mais colunas, como em um jornal." onClick={() => fmt.setColumnsOpen(o => !o)}><Columns2 size={13}/> Colunas <ChevronDown size={12}/></button>
                   {fmt.columnsOpen && <div className="wordDropdownMenu">
                     <button onClick={() => fmt.applyColumns(1)}>Uma</button>
                     <button onClick={() => fmt.applyColumns(2)}>Duas</button>
@@ -14840,20 +15094,20 @@ function WordEditor({ doc, onClose, onSave }) {
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <label className="wordNumberField" title="Recuo à esquerda">Recuar esquerda <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
+                <label className="wordNumberField" data-tip="Recuar à Esquerda" data-tipdesc="Distância entre o parágrafo e a margem esquerda da página, em centímetros.">Recuar esquerda <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
               </div>
               <div className="wordRibbonRow">
-                <label className="wordNumberField" title="Recuo à direita">Recuar direita <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
+                <label className="wordNumberField" data-tip="Recuar à Direita" data-tipdesc="Distância entre o parágrafo e a margem direita da página, em centímetros.">Recuar direita <input type="number" step="0.5" min="0" max="10" defaultValue={0} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
               </div>
               <span className="wordRibbonGroupLabel">Recuo</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <label className="wordNumberField" title="Espaçamento antes do parágrafo">Antes <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacingBefore(Number(e.target.value) || 0)}/> pt</label>
+                <label className="wordNumberField" data-tip="Espaçamento Antes" data-tipdesc="Espaço em branco adicionado acima do parágrafo, em pontos." >Antes <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacingBefore(Number(e.target.value) || 0)}/> pt</label>
               </div>
               <div className="wordRibbonRow">
-                <label className="wordNumberField" title="Espaçamento depois do parágrafo">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
+                <label className="wordNumberField" data-tip="Espaçamento Depois" data-tipdesc="Espaço em branco adicionado abaixo do parágrafo, em pontos.">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
               </div>
               <span className="wordRibbonGroupLabel">Espaçamento</span>
             </div>
@@ -14862,30 +15116,30 @@ function WordEditor({ doc, onClose, onSave }) {
           {ribbonTab === "view" && (<>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Layout de Impressão" className={viewMode === "print" ? "active" : ""} onClick={() => setViewMode("print")}><FileText size={15}/></button>
-                <button title="Rascunho" className={viewMode === "draft" ? "active" : ""} onClick={() => setViewMode("draft")}><ScrollText size={15}/></button>
+                <button data-tip="Layout de Impressão" data-tipdesc="Mostra o documento como ele ficará quando impresso, com as páginas separadas." className={viewMode === "print" ? "active" : ""} onClick={() => setViewMode("print")}><FileText size={15}/></button>
+                <button data-tip="Rascunho" data-tipdesc="Mostra o texto em fluxo contínuo, sem quebras de página, ideal para digitar rápido." className={viewMode === "draft" ? "active" : ""} onClick={() => setViewMode("draft")}><ScrollText size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Modos de Exibição</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button title="Régua" className={showRuler ? "active" : ""} onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
-                <button title="Linhas de grade" className={showGrid ? "active" : ""} onClick={() => setShowGrid(g => !g)}><Grid3x3 size={15}/></button>
+                <button data-tip="Régua" data-tipdesc="Mostra ou oculta a régua no topo da página, usada para ajustar margens e recuos." className={showRuler ? "active" : ""} onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
+                <button data-tip="Linhas de Grade" data-tipdesc="Mostra ou oculta linhas de grade que ajudam a alinhar objetos na página." className={showGrid ? "active" : ""} onClick={() => setShowGrid(g => !g)}><Grid3x3 size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Mostrar</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
-                <button title="Diminuir zoom" onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={15}/></button>
+                <button data-tip="Diminuir Zoom" data-tipdesc="Reduz o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={15}/></button>
                 <span className="wordZoomValue">{zoom}%</span>
-                <button title="Aumentar zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={15}/></button>
+                <button data-tip="Aumentar Zoom" data-tipdesc="Aumenta o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={15}/></button>
               </div>
               <div className="wordRibbonRow">
-                <button className="wordTextBtn" title="Voltar para 100%" onClick={() => setZoom(100)}>100%</button>
-                <button className="wordTextBtn" title="Largura da página" onClick={fitZoomToWidth}>Largura</button>
-                <button className="wordTextBtn" title="Uma página" onClick={fitZoomToPage}>Página inteira</button>
+                <button className="wordTextBtn" data-tip="100%" data-tipdesc="Retorna o zoom para o tamanho normal do documento." onClick={() => setZoom(100)}>100%</button>
+                <button className="wordTextBtn" data-tip="Largura da Página" data-tipdesc="Ajusta o zoom para que a largura da página preencha a janela." onClick={fitZoomToWidth}>Largura</button>
+                <button className="wordTextBtn" data-tip="Uma Página" data-tipdesc="Ajusta o zoom para exibir a página inteira na janela." onClick={fitZoomToPage}>Página inteira</button>
               </div>
               <span className="wordRibbonGroupLabel">Zoom</span>
             </div>
@@ -14898,8 +15152,8 @@ function WordEditor({ doc, onClose, onSave }) {
               <Search size={13}/>
               <input placeholder="Localizar" value={fmt.findQuery} onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }}/>
               <span className="wordFindCount">{fmt.findMatches.length ? `${fmt.findIndex + 1}/${fmt.findMatches.length}` : "0/0"}</span>
-              <button title="Anterior" onClick={fmt.findPrev}><ChevronDown size={13} style={{ transform: "rotate(180deg)" }}/></button>
-              <button title="Próximo" onClick={fmt.findNext}><ChevronDown size={13}/></button>
+              <button data-tip="Anterior" data-tipdesc="Vai para a ocorrência anterior do termo buscado." onClick={fmt.findPrev}><ChevronDown size={13} style={{ transform: "rotate(180deg)" }}/></button>
+              <button data-tip="Próximo" data-tipdesc="Vai para a próxima ocorrência do termo buscado." onClick={fmt.findNext}><ChevronDown size={13}/></button>
               <input placeholder="Substituir por" value={fmt.replaceValue} onChange={e => fmt.setReplaceValue(e.target.value)}/>
               <button className="ghost" onClick={fmt.replaceCurrent}>Substituir</button>
               <button className="ghost" onClick={fmt.replaceAll}>Substituir tudo</button>
@@ -14935,6 +15189,13 @@ function WordEditor({ doc, onClose, onSave }) {
 
         {tableDialogOpen && (
           <WordTableDialog onClose={() => setTableDialogOpen(false)} onConfirm={(r, c) => { setTableDialogOpen(false); fmt.insertTable(r, c); }}/>
+        )}
+
+        {ribbonTip && (
+          <div className="wordRibbonTooltip" style={{ left: ribbonTip.x, top: ribbonTip.y }}>
+            <div className="wordRibbonTooltipTitle">{ribbonTip.label}</div>
+            {ribbonTip.desc && <div className="wordRibbonTooltipDesc">{ribbonTip.desc}</div>}
+          </div>
         )}
       </div>
     </div>
