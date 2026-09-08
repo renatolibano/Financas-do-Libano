@@ -142,7 +142,22 @@ function parseBlocks(html) {
   };
 
   Array.from(container.children).forEach((el) => {
+    if (el.classList?.contains("word-page-meta")) return; // marcador invisível (tema/marca d'água/cor/borda), não é conteúdo
     if (el.classList?.contains("word-page-break")) { blocks.push({ type: "pagebreak" }); return; }
+    if (el.classList?.contains("word-toc")) {
+      blocks.push({ type: "heading", level: 2, align: "left", runs: [{ text: "Sumário" }] });
+      Array.from(el.querySelectorAll(".word-toc-entry")).forEach((a) => {
+        blocks.push({ type: "paragraph", align: "left", runs: [{ text: a.textContent || "" }] });
+      });
+      return;
+    }
+    if (el.classList?.contains("word-footnotes")) {
+      Array.from(el.querySelectorAll(".word-footnotes-list > li")).forEach((li, i) => {
+        const num = li.dataset.fn || String(i + 1);
+        blocks.push({ type: "paragraph", align: "left", runs: [{ text: `${num}. ${li.textContent || ""}`, fontSizePt: 9 }] });
+      });
+      return;
+    }
     if (el.classList?.contains("checklist-item")) {
       blocks.push({
         type: "checklist",

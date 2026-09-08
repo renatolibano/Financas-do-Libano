@@ -25,7 +25,7 @@ import {
   Ruler, Printer, Replace, Table2, RectangleHorizontal, RectangleVertical,
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, SquareDashed, PanelTop, PanelBottom,
-  Frame, PaintRoller, Sigma, FileDigit, ScrollText
+  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -13913,6 +13913,25 @@ const WORD_SYMBOLS = [
 // "Confidencialidade" do Word/Microsoft 365 (apenas rótulo local, sem
 // nenhuma verificação ou envio a servidor).
 const SENSITIVITY_LABELS = ["Nenhum", "Pessoal", "Geral", "Confidencial", "Altamente confidencial"];
+// Aba "Design" — temas de cor (aplicados como var(--word-theme-accent) nos
+// títulos do documento), cor de fundo da página, bordas de página e marca
+// d'água. "app" é o padrão e usa a própria paleta do app (var(--accent));
+// as demais são variações fixas, do jeito que o Word oferece uma galeria.
+const WORD_THEMES = [
+  { key: "app", label: "Padrão do app", accent: "var(--accent)" },
+  { key: "azul", label: "Azul", accent: "#2f6fed" },
+  { key: "verde", label: "Verde", accent: "#1f9d55" },
+  { key: "grafite", label: "Grafite", accent: "#3a3f4b" },
+  { key: "vinho", label: "Vinho", accent: "#8a1f3d" },
+];
+const WORD_PAGE_COLORS = ["", "#fdf6e3", "#eef6ff", "#eafaf0", "#fff6e8", "#f7ecff"];
+const WORD_PAGE_BORDERS = [
+  { key: "none", label: "Nenhuma" },
+  { key: "simples", label: "Simples" },
+  { key: "dupla", label: "Dupla" },
+  { key: "sombreada", label: "Sombreada" },
+];
+const WORD_WATERMARK_PRESETS = ["CONFIDENCIAL", "RASCUNHO", "URGENTE"];
 
 function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const [colorOpen, setColorOpen] = useState(false);
@@ -14803,13 +14822,122 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     onChange();
   };
 
+  // ---- sumário automático (Referências > Sumário) — lê os títulos
+  // H1/H2/H3 do documento e gera uma lista de links internos; clicar num
+  // item rola até o título. O mesmo botão da faixa serve pra inserir e pra
+  // atualizar: se já existe um sumário, só regenera o conteúdo dele.
+  const collectHeadings = () => {
+    const el = bodyRef.current;
+    if (!el) return [];
+    return Array.from(el.querySelectorAll(":scope > h1, :scope > h2, :scope > h3"));
+  };
+  const insertTOC = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const headings = collectHeadings();
+    headings.forEach((h, i) => { if (!h.id) h.id = "word-heading-" + Date.now().toString(36) + i; });
+    const buildBody = () => headings.length
+      ? headings.map(h => {
+          const level = h.tagName === "H1" ? 1 : h.tagName === "H2" ? 2 : 3;
+          return `<a class="word-toc-entry word-toc-level${level}" href="#${h.id}">${h.textContent || "(sem texto)"}</a>`;
+        }).join("")
+      : '<p class="word-toc-empty">Nenhum título encontrado. Aplique Título 1, 2 ou 3 a algum parágrafo para o sumário aparecer aqui.</p>';
+
+    let toc = el.querySelector(":scope > .word-toc");
+    if (toc) {
+      const bodyEl = toc.querySelector(".word-toc-body");
+      if (bodyEl) bodyEl.innerHTML = buildBody();
+      onChange();
+      return;
+    }
+    toc = document.createElement("div");
+    toc.className = "word-toc";
+    toc.setAttribute("contenteditable", "false");
+    toc.innerHTML = `<div class="word-toc-head"><b>Sumário</b><button type="button" class="word-toc-refresh">Atualizar sumário</button></div><div class="word-toc-body">${buildBody()}</div>`;
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(toc); }
+      else el.append(toc, after);
+    } else {
+      el.append(toc, after);
+    }
+    onChange();
+  };
+
+  // ---- nota de rodapé (Referências > Notas de Rodapé) — insere uma
+  // referência numerada no cursor e cria/reaproveita uma lista de notas no
+  // fim do documento (o editor não pagina de verdade, então elas ficam
+  // agrupadas ao final em vez de "por página", mesma simplificação já usada
+  // em cabeçalho/rodapé). Numeração é sequencial pela ordem de inserção;
+  // excluir uma nota não renumera as demais.
+  const insertFootnote = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    const num = el.querySelectorAll(".word-footnote-ref").length + 1;
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    const ref = document.createElement("sup");
+    ref.className = "word-footnote-ref";
+    ref.setAttribute("contenteditable", "false");
+    ref.dataset.fn = String(num);
+    ref.textContent = String(num);
+    range.insertNode(ref);
+    const afterRef = document.createRange();
+    afterRef.setStartAfter(ref);
+    afterRef.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(afterRef);
+
+    let box = el.querySelector(":scope > .word-footnotes");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "word-footnotes";
+      box.innerHTML = '<hr class="word-footnotes-rule"/><ol class="word-footnotes-list"></ol>';
+      el.appendChild(box);
+    }
+    const li = document.createElement("li");
+    li.dataset.fn = String(num);
+    box.querySelector(".word-footnotes-list").appendChild(li);
+
+    const toNote = document.createRange();
+    toNote.selectNodeContents(li);
+    toNote.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(toNote);
+    onChange();
+  };
+
   const handleBodyClick = (e) => {
+    const tocRefresh = e.target.closest?.(".word-toc-refresh");
+    if (tocRefresh && bodyRef.current?.contains(tocRefresh)) {
+      e.preventDefault();
+      insertTOC();
+      return;
+    }
+    const fnRef = e.target.closest?.(".word-footnote-ref");
+    if (fnRef && bodyRef.current?.contains(fnRef)) {
+      e.preventDefault();
+      bodyRef.current.querySelector(`.word-footnotes li[data-fn="${fnRef.dataset.fn}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
     const link = e.target.closest?.("a");
     if (link && bodyRef.current?.contains(link)) {
+      const href = link.getAttribute("href");
+      if (href && href.startsWith("#")) {
+        e.preventDefault();
+        bodyRef.current.querySelector(href)?.scrollIntoView({ block: "center", behavior: "smooth" });
+        return;
+      }
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) {
         e.preventDefault();
-        const href = link.getAttribute("href");
         if (href) window.open(href, "_blank", "noopener,noreferrer");
       }
     }
@@ -14833,6 +14961,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     dictating, dictationSupported, toggleDictation,
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
     tabStops, tabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
+    insertTOC, insertFootnote,
   };
 }
 
@@ -14983,6 +15112,16 @@ function WordEditor({ doc, onClose, onSave }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
   const [ribbonTip, setRibbonTip] = useState(null); // { label, desc, x, y } - tooltip estilo Word
+  // Aba "Design" — guardadas dentro do próprio content (ver persistPageMeta),
+  // sem precisar de coluna nova no banco.
+  const [themeKey, setThemeKey] = useState("app");
+  const [pageColor, setPageColor] = useState("");
+  const [pageBorder, setPageBorder] = useState("none");
+  const [watermarkText, setWatermarkText] = useState("");
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [watermarkOpen, setWatermarkOpen] = useState(false);
+  const [pageColorOpen, setPageColorOpen] = useState(false);
+  const [pageBorderOpen, setPageBorderOpen] = useState(false);
 
   const bodyRef = useRef(null);
   const modalRef = useRef(null);
@@ -15028,6 +15167,11 @@ function WordEditor({ doc, onClose, onSave }) {
     setMarginLeftCm(doc.margin_left ?? null);
     setMarginRightCm(doc.margin_right ?? null);
     setWordCount(countWords(doc.content || ""));
+    const pageMetaEl = bodyRef.current?.querySelector(":scope > .word-page-meta");
+    setThemeKey(pageMetaEl?.dataset.theme || "app");
+    setPageColor(pageMetaEl?.dataset.pagecolor || "");
+    setPageBorder(pageMetaEl?.dataset.pageborder || "none");
+    setWatermarkText(pageMetaEl?.dataset.watermark || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
 
@@ -15048,6 +15192,41 @@ function WordEditor({ doc, onClose, onSave }) {
     const html = bodyRef.current?.innerHTML || "";
     setWordCount(countWords(html));
     scheduleSave({ content: html });
+  };
+
+  // ---- aba "Design" — grava tema/marca d'água/cor e borda de página num
+  // marcador invisível (contenteditable="false", display:none) no início do
+  // próprio content, do mesmo jeito que cabeçalho/rodapé já guardam estado
+  // dentro do documento. Assim persiste no banco sem precisar de coluna
+  // nova nem de nenhuma chamada extra ao servidor.
+  const persistPageMeta = (patch) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    let metaEl = el.querySelector(":scope > .word-page-meta");
+    if (!metaEl) {
+      metaEl = document.createElement("div");
+      metaEl.className = "word-page-meta";
+      metaEl.setAttribute("contenteditable", "false");
+      el.insertBefore(metaEl, el.firstChild);
+    }
+    Object.entries(patch).forEach(([k, v]) => { metaEl.dataset[k] = v || ""; });
+    handleBodyInput();
+  };
+  const applyTheme = (key) => { setThemeKey(key); persistPageMeta({ theme: key }); setThemeOpen(false); };
+  const applyPageColor = (hex) => { setPageColor(hex); persistPageMeta({ pagecolor: hex }); setPageColorOpen(false); };
+  const applyPageBorder = (key) => { setPageBorder(key); persistPageMeta({ pageborder: key }); setPageBorderOpen(false); };
+  const applyWatermark = (text) => { setWatermarkText(text); persistPageMeta({ watermark: text }); setWatermarkOpen(false); };
+  const applyCustomWatermark = () => {
+    const v = prompt("Texto da marca d'água:", watermarkText || "");
+    if (v === null) return;
+    applyWatermark(v.trim());
+  };
+  const currentTheme = WORD_THEMES.find(t => t.key === themeKey) || WORD_THEMES[0];
+  const pageBorderStyle = (key) => {
+    if (key === "simples") return { border: "1.5px solid var(--accent)" };
+    if (key === "dupla") return { border: "5px double var(--accent)" };
+    if (key === "sombreada") return { border: "1.5px solid var(--accent)", boxShadow: "0 0 0 6px var(--accent-soft-bg, rgba(0,0,0,.06))" };
+    return {};
   };
 
   const PAGE_DIMS = {
@@ -15164,7 +15343,9 @@ function WordEditor({ doc, onClose, onSave }) {
         <div className="wordRibbonTabs">
           <button className={ribbonTab === "home" ? "active" : ""} onClick={() => setRibbonTab("home")}>Página Inicial</button>
           <button className={ribbonTab === "insert" ? "active" : ""} onClick={() => setRibbonTab("insert")}>Inserir</button>
+          <button className={ribbonTab === "design" ? "active" : ""} onClick={() => setRibbonTab("design")}>Design</button>
           <button className={ribbonTab === "layout" ? "active" : ""} onClick={() => setRibbonTab("layout")}>Layout</button>
+          <button className={ribbonTab === "references" ? "active" : ""} onClick={() => setRibbonTab("references")}>Referências</button>
           <button className={ribbonTab === "view" ? "active" : ""} onClick={() => setRibbonTab("view")}>Exibir</button>
         </div>
 
@@ -15385,6 +15566,56 @@ function WordEditor({ doc, onClose, onSave }) {
             </div>
           </>)}
 
+          {ribbonTab === "design" && (<>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" data-tip="Temas" data-tipdesc="Aplica um conjunto de cores ao documento, usado nos títulos e destaques." onClick={() => { setThemeOpen(o => !o); setWatermarkOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}>
+                  <SwatchBook size={14}/> {currentTheme.label} <ChevronDown size={12}/>
+                </button>
+                {themeOpen && <div className="wordDropdownMenu wordThemeMenu">
+                  {WORD_THEMES.map(t => (
+                    <button key={t.key} className={themeKey === t.key ? "active" : ""} onClick={() => applyTheme(t.key)}>
+                      <span className="wordThemeSwatch" style={{ background: t.accent }}/> {t.label}
+                    </button>
+                  ))}
+                </div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Temas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" data-tip="Marca d'Água" data-tipdesc="Insere um texto sobreposto e transparente atrás do conteúdo da página, como 'CONFIDENCIAL' ou 'RASCUNHO'." onClick={() => { setWatermarkOpen(o => !o); setThemeOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}>
+                  <Droplets size={14}/> <ChevronDown size={12}/>
+                </button>
+                {watermarkOpen && <div className="wordDropdownMenu">
+                  <button className={!watermarkText ? "active" : ""} onClick={() => applyWatermark("")}>Sem marca d'água</button>
+                  {WORD_WATERMARK_PRESETS.map(w => <button key={w} className={watermarkText === w ? "active" : ""} onClick={() => applyWatermark(w)}>{w}</button>)}
+                  <button onClick={applyCustomWatermark}>Personalizada...</button>
+                </div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Marca d'Água</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="emojiWrap">
+                <button data-tip="Cor da Página" data-tipdesc="Preenche o fundo da página com uma cor." onClick={() => { setPageColorOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageBorderOpen(false); }}><PaintBucket size={15}/></button>
+                {pageColorOpen && <div className="colorPopover">{WORD_PAGE_COLORS.map(c => <button key={c || "none"} className={"colorSwatch" + (!c ? " colorSwatchNone" : "")} style={{ background: c || undefined }} onClick={() => applyPageColor(c)}/>)}</div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Cor da Página</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordDropdownWrap">
+                <button className="wordDropdownBtn" data-tip="Bordas de Página" data-tipdesc="Adiciona uma borda decorativa ao redor de toda a página." onClick={() => { setPageBorderOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageColorOpen(false); }}><Frame size={13}/> <ChevronDown size={12}/></button>
+                {pageBorderOpen && <div className="wordDropdownMenu">
+                  {WORD_PAGE_BORDERS.map(b => <button key={b.key} className={pageBorder === b.key ? "active" : ""} onClick={() => applyPageBorder(b.key)}>{b.label}</button>)}
+                </div>}
+              </div>
+              <span className="wordRibbonGroupLabel">Bordas de Página</span>
+            </div>
+          </>)}
+
           {ribbonTab === "layout" && (<>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
@@ -15449,6 +15680,18 @@ function WordEditor({ doc, onClose, onSave }) {
                 <label className="wordNumberField" data-tip="Espaçamento Depois" data-tipdesc="Espaço em branco adicionado abaixo do parágrafo, em pontos.">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
               </div>
               <span className="wordRibbonGroupLabel">Espaçamento</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "references" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Sumário</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Inserir Nota de Rodapé" data-tipdesc="Insere uma referência numerada no texto e um espaço para a nota correspondente no fim do documento." onClick={fmt.insertFootnote}><Superscript size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Notas de Rodapé</span>
             </div>
           </>)}
 
@@ -15520,7 +15763,12 @@ function WordEditor({ doc, onClose, onSave }) {
                 onRemoveTab={fmt.removeTabStop}
               />
             )}
-            <div ref={pageRef} className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}>
+            <div
+              ref={pageRef}
+              className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}
+              style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...pageBorderStyle(pageBorder) }}
+            >
+              {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
               <div
                 ref={bodyRef}
                 className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "")}
