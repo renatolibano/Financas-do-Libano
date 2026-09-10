@@ -519,8 +519,8 @@ h1{font-size:23px}
 .whiteboardBlack{background:#0b0b0c}
 .whiteboardSvg{width:100%;height:100%;display:block;transition:box-shadow .2s ease}
 .whiteboardSvg.flash{box-shadow:inset 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent)}
-.whiteboardTextInput{background:transparent;border:1px dashed currentColor;border-radius:4px;padding:2px 5px;font:inherit;resize:none;outline:none;box-sizing:border-box;overflow:hidden;overflow-wrap:anywhere;white-space:pre-wrap}
-.whiteboardTextLabel{white-space:pre-wrap;line-height:1.25;font-weight:600;cursor:default;padding:2px 5px;box-sizing:border-box;overflow-wrap:anywhere;overflow:hidden}
+.whiteboardTextInput{background:transparent;border:none;padding:2px 5px;font:inherit;resize:none;outline:none;box-sizing:border-box;overflow:hidden;white-space:pre}
+.whiteboardTextLabel{white-space:pre;line-height:1.25;font-weight:600;cursor:default;padding:2px 5px;box-sizing:border-box;overflow:hidden}
 .whiteboardNav{justify-content:space-between}
 
 .pdfPasteHint{width:100%;margin:2px 0 0;font-size:11.5px;color:var(--text-3);opacity:.85;transition:opacity .2s ease,color .2s ease}
@@ -693,11 +693,9 @@ h1{font-size:23px}
   box-shadow:0 0 0 1px rgba(255,255,255,.9);
   background:rgba(255,255,255,.12);
 }
-.pdfTextAnn{position:absolute;z-index:4;white-space:pre-wrap;line-height:1.25;cursor:default;font-weight:600;box-sizing:border-box}
-.pdfTextAnn textarea{background:#fffbe6cc;color:#1f2937;border:1px dashed #0007;border-radius:4px;padding:2px 5px;font:inherit;font-size:inherit;width:100%;resize:none;outline:none;box-sizing:border-box;overflow:hidden;overflow-wrap:anywhere;white-space:pre-wrap}
-.pdfTextAnnLabel{width:100%;padding:2px 5px;box-sizing:border-box;overflow-wrap:anywhere;white-space:pre-wrap;overflow:hidden}
-.textAnnResizeHandle{position:absolute;top:0;right:-6px;width:11px;height:100%;cursor:ew-resize;z-index:7}
-.textAnnResizeHandle::after{content:"";position:absolute;top:50%;right:3px;width:4px;height:22px;transform:translateY(-50%);border-radius:2px;background:var(--accent)}
+.pdfTextAnn{position:absolute;z-index:4;white-space:pre;line-height:1.25;cursor:default;font-weight:600;box-sizing:border-box}
+.pdfTextAnn textarea{background:transparent;color:inherit;border:none;padding:2px 5px;font:inherit;font-size:inherit;resize:none;outline:none;box-sizing:border-box;overflow:hidden;white-space:pre}
+.pdfTextAnnLabel{padding:2px 5px;box-sizing:border-box;white-space:pre;overflow:hidden}
 .textAnnToolbar{position:absolute;bottom:100%;left:0;display:flex;gap:4px;margin-bottom:3px;z-index:6}
 .textAnnToolbar button{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:5px;border:1px solid var(--border);background:var(--card-bg,#1c222b);color:var(--text-1);cursor:pointer}
 .textAnnToolbar button.active{background:var(--accent);border-color:var(--accent);color:var(--accent-text-on)}
@@ -1554,6 +1552,32 @@ h1{font-size:23px}
 .wordRibbonTabs button{padding:9px 14px;font-size:12.5px;font-weight:700;color:var(--text-2);border-bottom:2px solid transparent;white-space:nowrap}
 .wordRibbonTabs button:hover{color:var(--text-1)}
 .wordRibbonTabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+.wordFileTab{background:var(--accent);color:var(--accent-text-on)!important;border-radius:4px 4px 0 0;margin:0 2px}
+.wordFileTab:hover,.wordFileTab.active{background:var(--accent);color:var(--accent-text-on)!important;filter:brightness(1.08)}
+.wordUndoRedoGroup{display:flex;align-items:center;gap:2px;flex:0 0 auto;margin:0 8px}
+.wordUndoRedoGroup button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:var(--text-2)}
+.wordUndoRedoGroup button:hover{background:var(--bg-surface-3);color:var(--accent)}
+
+/* Aba "Arquivo" — tela cheia estilo Backstage do Word, cobrindo ribbon +
+   página enquanto aberta (mesmo padrão do .wordExportMenu pra cores). */
+.wordBackstage{position:absolute;inset:0;z-index:15;display:flex;background:var(--bg-reader-modal)}
+.wordBackstageNav{width:230px;flex:0 0 auto;background:var(--bg-reader-toolbar);border-right:1px solid var(--border-soft);display:flex;flex-direction:column;padding:10px 0;overflow-y:auto}
+.wordBackstageNav button{display:flex;align-items:center;gap:10px;padding:11px 20px;font-size:13px;color:var(--text-2);text-align:left;white-space:nowrap}
+.wordBackstageNav button:hover{background:var(--bg-hover-2);color:var(--text-1)}
+.wordBackstageNav button.active{background:var(--accent-soft-bg);color:var(--accent);font-weight:700}
+.wordBackstageNav button.danger{color:#ff9d9d;margin-top:auto}
+.wordBackstageBack{font-weight:700!important;color:var(--text-1)!important;border-bottom:1px solid var(--border-soft);margin-bottom:6px;padding-bottom:14px!important}
+.wordBackstagePanel{flex:1;overflow-y:auto;padding:28px 34px;max-width:520px}
+.wordBackstagePanel h3{font-size:18px;margin-bottom:16px}
+.wordBackstageHint{font-size:12.5px;color:var(--text-3);margin-bottom:14px}
+.wordBackstageInfoRow{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border-soft);font-size:13px}
+.wordBackstageInfoRow span{color:var(--text-3)}
+.wordBackstageInfoRow b{color:var(--text-1);text-align:right}
+.wordBackstageSavedTip{display:flex;align-items:center;gap:6px;color:var(--accent);font-size:12.5px;margin-top:14px}
+.wordBackstageBig{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border-soft);margin-bottom:8px;text-align:left;color:var(--text-1)}
+.wordBackstageBig:hover{background:var(--bg-hover-2);border-color:var(--accent)}
+.wordBackstageBig b{display:block;font-size:13.5px}
+.wordBackstageBig span{display:block;font-size:11.5px;color:var(--text-3);margin-top:2px}
 
 .wordRibbon{display:flex;flex-wrap:wrap;row-gap:8px;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border-soft);background:var(--bg-reader-toolbar);overflow:visible}
 .wordRibbonGroup{display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 10px;min-width:60px}
@@ -1581,6 +1605,15 @@ h1{font-size:23px}
 .wordDropdownMenu button{padding:7px 9px;border-radius:6px;text-align:left;font-size:12.5px;color:var(--text-1)}
 .wordDropdownMenu button:hover{background:var(--bg-hover-2)}
 .wordDropdownMenu button.active{color:var(--accent);font-weight:700}
+.wordDropdownEmpty{padding:7px 9px;font-size:12px;color:var(--text-3)}
+
+.wordRecipientsDialog{width:420px}
+.wordCompareDialog{width:560px}
+.wordCompareResult{max-height:360px;overflow-y:auto;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:8px;padding:14px;font-size:13px;line-height:1.7;white-space:pre-wrap}
+.wordCompareResult .word-ins{color:#1a7f37;text-decoration:underline;background:#e6f6ea}
+.wordCompareResult .word-del{color:#c0392b;text-decoration:line-through;background:#fbe9e7}
+.wordRecipientsTextarea{width:100%;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:8px;padding:10px;color:var(--text-1);font-family:inherit;font-size:12.5px;resize:vertical}
+.wordRichBody .word-mergefield{background:#e0ecff;color:#1d4ed8;border-radius:3px;padding:0 2px;cursor:default}
 .wordSizeMenu{min-width:76px;flex-direction:row;flex-wrap:wrap;max-width:170px}
 .wordSizeMenu button{flex:0 0 auto;padding:6px 8px}
 
@@ -1592,6 +1625,19 @@ h1{font-size:23px}
 .wordFindBar>button.ghost{width:auto;padding:0 8px;font-size:11.5px}
 
 .wordPageArea{position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
+.wordPageAreaRow{display:flex;overflow:hidden;min-height:0}
+.wordNavPane{width:220px;flex:0 0 auto;background:var(--bg-reader-toolbar);border-right:1px solid var(--border-soft);display:flex;flex-direction:column;overflow:hidden}
+.wordNavPaneTabs{display:flex;align-items:center;border-bottom:1px solid var(--border-soft);flex:0 0 auto}
+.wordNavPaneTabs button{flex:1;padding:9px 4px;font-size:12px;font-weight:700;color:var(--text-3);border-bottom:2px solid transparent}
+.wordNavPaneTabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+.wordNavPaneClose{flex:0 0 auto!important;padding:9px 10px!important}
+.wordNavPaneList{overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:2px}
+.wordNavPaneItem{padding:8px 9px;border-radius:7px;text-align:left;font-size:12.5px;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wordNavPaneItem:hover{background:var(--bg-hover-2)}
+.wordNavPaneItem-lvl2{padding-left:20px;font-size:12px;color:var(--text-2)}
+.wordNavPaneItem-lvl3{padding-left:32px;font-size:11.5px;color:var(--text-3)}
+.wordNavPaneSearch{display:flex;align-items:center;gap:6px;padding:8px 9px;color:var(--text-3)}
+.wordNavPaneSearch input{flex:1;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:7px;padding:6px 8px;color:var(--text-1);font-size:12.5px}
 .wordPageWrap{display:flex;flex-direction:column;align-items:center}
 .wordRulerBar{display:flex;align-items:stretch;flex:0 0 auto;margin-bottom:2px;user-select:none}
 .wordRulerCorner{width:22px;height:22px;flex:0 0 auto;margin-right:1px;border:none;border-radius:2px 0 0 2px;background:#c9c2ab;box-shadow:0 2px 6px #0004;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
@@ -1647,13 +1693,39 @@ h1{font-size:23px}
 .wordRichBody p,.wordRichBody div{margin:0 0 6px}
 .wordRichBody table.word-table{border-collapse:collapse;width:100%;margin:10px 0}
 .wordRichBody table.word-table td{border:1px solid #b9bec7;padding:6px 8px;min-width:40px;vertical-align:top}
+.wordRichBody table.word-table th{border:1px solid #b9bec7;padding:6px 8px;min-width:40px;vertical-align:top;font-weight:700}
+.wordRichBody table.word-table-noborder td,.wordRichBody table.word-table-noborder th{border-color:transparent}
+.wordRichBody table.word-table-fixed{table-layout:fixed}
+.wordRichBody table.word-table-repeatheader tr:first-child td,.wordRichBody table.word-table-repeatheader tr:first-child th{font-weight:700}
+.wordRichBody .word-envelope{position:relative;border:1px dashed #b9bec7;border-radius:6px;padding:18px;min-height:160px;margin:14px 0}
+.wordRichBody .word-envelope-return{font-size:11px;color:#6b7280}
+.wordRichBody .word-envelope-to{margin-top:46px;margin-left:auto;width:60%;font-size:13px;line-height:1.5}
+.wordRichBody table.word-label-sheet td{width:33.33%;height:70px;border:1px dashed #b9bec7;padding:8px;font-size:11.5px;vertical-align:top}
+.wordRichBody table.word-table-striped tr:nth-child(even) td{background:#f3f4f6}
+.wordRichBody table.word-table-strong td,.wordRichBody table.word-table-strong th{border:2px solid #6b7280}
+.wordRichBody table.word-table-strong tr:first-child td,.wordRichBody table.word-table-strong tr:first-child th{background:#e5e7eb;font-weight:700}
+.wordRichBody .word-cell-active{outline:2px solid var(--accent);outline-offset:-2px}
+.wordRichBody img.word-img-selected{outline:2px solid var(--accent);outline-offset:2px}
+.wordRichBody img.word-img-bordered{border:3px solid #444}
+.wordContextTab{background:var(--accent-soft-bg);color:var(--accent)!important;border-radius:4px 4px 0 0;margin:0 2px}
+.wordContextTab:hover,.wordContextTab.active{filter:brightness(1.08)}
 .wordRichBody img{max-width:100%;height:auto;display:block;margin:8px 0}
 .wordRichBody .word-page-break{position:relative;margin:22px 0;border-top:1px dashed #b9bec7;text-align:center;user-select:none}
 .wordRichBody .word-page-break span{position:relative;top:-9px;background:#fff;padding:0 8px;font-size:10px;color:#9aa0ab;text-transform:uppercase;letter-spacing:.05em}
+.wordRichBody .word-section-break{border-top:2px double #5b9dff}
+.wordRichBody .word-section-break span{color:#3766c9;font-weight:700}
 .wordRichBody mark.word-find-hit{background:#ffe066;color:inherit}
 .wordRichBody mark.word-find-hit-active{background:#ff9d3d}
 
 .wordStatusBar{display:flex;align-items:center;gap:14px;padding:7px 16px;border-top:1px solid var(--border-soft);background:var(--bg-reader-toolbar);font-size:11px;color:var(--text-3)}
+.wordStatusBadge{display:flex;align-items:center;gap:4px;color:var(--accent);font-weight:700}
+.wordStatusDivider{width:1px;height:14px;background:var(--border-soft)}
+.wordStatusViewBtn{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--text-3)}
+.wordStatusViewBtn:hover{background:var(--bg-surface-3);color:var(--text-1)}
+.wordStatusViewBtn.active{color:var(--accent)}
+.wordStatusZoomBtn{width:20px;height:20px;border-radius:5px;display:grid;place-items:center;color:var(--text-3)}
+.wordStatusZoomBtn:hover{background:var(--bg-surface-3);color:var(--text-1)}
+.wordStatusZoomSlider{width:80px;accent-color:var(--accent)}
 .wordStatusSpacer{flex:1}
 
 .wordExportWrap{position:relative}
@@ -1666,7 +1738,7 @@ h1{font-size:23px}
 
 @media print{
   body *{display:none!important}
-  .readerBack,.wordModal,.wordPageArea,.wordPageWrap,.wordPage,.wordPage *{display:revert!important}
+  .readerBack,.wordModal,.wordPageAreaRow,.wordPageArea,.wordPageWrap,.wordPage,.wordPage *{display:revert!important}
   .readerBack{display:block!important;position:static!important;inset:auto!important;background:none!important;backdrop-filter:none!important;padding:0!important;height:auto!important}
   .wordModal{display:block!important;position:static!important;width:auto!important;height:auto!important;max-height:none!important;border:none!important;box-shadow:none!important;background:none!important;overflow:visible!important}
   .readerHead,.wordRibbonTabs,.wordRibbon,.wordStatusBar,.wordFindBar,.wordRuler,.wordRulerBar,.noteLinkBarBtn,.noteLinkPopover{display:none!important}
@@ -1680,11 +1752,32 @@ h1{font-size:23px}
 .wordTableDialog input{width:70px;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:7px;padding:6px 8px;color:var(--text-1)}
 .wordDrawDialog{width:auto}
 .wordDrawCanvas{border-radius:8px;border:1px solid var(--border-soft);cursor:crosshair;touch-action:none}
+.wordCropDialog{width:auto}
+.wordCropArea{position:relative;user-select:none;border-radius:8px;overflow:hidden}
+.wordCropImg{display:block;user-select:none;pointer-events:none}
+.wordCropRect{position:absolute;border:2px solid #5b9dff;box-shadow:0 0 0 2000px rgba(0,0,0,.45);cursor:move}
+.wordCropHandle{position:absolute;width:12px;height:12px;background:#5b9dff;border:2px solid #fff;border-radius:50%}
+.wordCropHandle-nw{left:-7px;top:-7px;cursor:nwse-resize}
+.wordCropHandle-ne{right:-7px;top:-7px;cursor:nesw-resize}
+.wordCropHandle-sw{left:-7px;bottom:-7px;cursor:nesw-resize}
+.wordCropHandle-se{right:-7px;bottom:-7px;cursor:nwse-resize}
+.wordDrawCanvas-select{cursor:default}
+.wordDrawCanvas-eraser{cursor:cell}
 .wordDrawTools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.wordDrawToolRow{display:flex;align-items:center;gap:2px;margin-bottom:2px}
+.wordDrawToolBtn{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;color:var(--text-2)}
+.wordDrawToolBtn:hover{background:var(--bg-hover-2)}
+.wordDrawToolBtn.active{background:var(--accent-soft-bg);color:var(--accent)}
 .colorSwatchActive{outline:2px solid var(--accent);outline-offset:2px}
 .wordCommentPopover{position:fixed;z-index:5000;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;box-shadow:0 20px 60px #000a;padding:12px;width:220px}
 .wordCommentPopover p{margin:0 0 10px;font-size:12.5px;color:var(--text-1);line-height:1.4}
 .wordCommentPopoverActions{display:flex;justify-content:flex-end;gap:8px}
+
+.wordTranslatePopover{position:fixed;z-index:5000;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;box-shadow:0 20px 60px #000a;padding:10px;width:260px}
+.wordTranslatePopoverHead{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--text-2);margin-bottom:8px}
+.wordTranslateOptions{display:flex;flex-direction:column;gap:2px}
+.wordTranslateOptions button{padding:7px 9px;border-radius:7px;text-align:left;font-size:13px;color:var(--text-1)}
+.wordTranslateOptions button:hover{background:var(--bg-hover-2)}
 .wordTableDialogActions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
 
 /* Pincel de formatação — cursor de "aplicar formato" enquanto ativo */
@@ -1804,3 +1897,22 @@ h1{font-size:23px}
 .wordRichBody .word-equation{font-family:"Cambria Math","Times New Roman",serif;font-style:italic;padding:1px 5px;border-radius:3px}
 .wordRichBody .word-equation:hover,.wordRichBody .word-equation:focus{background:#f0f3fb;outline:none}
 .wordRichBody .word-comment-anchor{background:#fff3b0;cursor:pointer;border-bottom:2px solid #f2c94c}
+.wordRichBody .word-shape{display:inline-block;vertical-align:middle;line-height:0}
+.wordRichBody .word-shape.word-shape-selected{outline:2px dashed var(--accent);outline-offset:3px}
+.wordRichBody .word-wordart{font-weight:800;font-size:26px;display:inline-block;line-height:1.1;padding:0 2px}
+.wordRichBody .word-wordart-classic{color:#1d4ed8}
+.wordRichBody .word-wordart-outline{color:transparent;-webkit-text-stroke:2px #1a1a1a}
+.wordRichBody .word-wordart-shadow{color:#1a1a1a;text-shadow:3px 3px 0 #94a3b8}
+.wordRichBody .word-wordart-gold{color:#b45309;text-shadow:1px 1px 0 #fde68a}
+.wordRichBody .word-wordart-red{color:#dc2626;text-shadow:2px 2px 0 #fecaca}
+.wordRichBody .word-smartart{display:flex;gap:10px;align-items:center;margin:14px 0;padding:6px}
+.wordRichBody .word-smartart-lista{flex-direction:column;align-items:stretch}
+.wordRichBody .word-smartart-hierarquia{flex-direction:column;align-items:center}
+.wordRichBody .word-smartart-row{display:flex;gap:10px;justify-content:center;width:100%}
+.wordRichBody .word-smartart-box{background:#eef4ff;border:2px solid #5b9dff;border-radius:8px;padding:10px 14px;font-weight:600;color:#1a1a1a;text-align:center;flex:1;min-width:80px}
+.wordRichBody .word-smartart-top{max-width:220px}
+.wordRichBody .word-smartart-arrow{font-size:20px;color:#5b9dff;font-weight:800}
+.wordRichBody .word-ins{color:#1a7f37;text-decoration:underline}
+.wordRichBody .word-del{color:#c0392b;text-decoration:line-through}
+.wordRichBody.wordHideChanges .word-del{display:none}
+.wordRichBody.wordHideChanges .word-ins{color:inherit;text-decoration:none}

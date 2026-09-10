@@ -8,7 +8,7 @@ import {
   Cake, BookOpen, BookMarked, BookCheck, ChevronRight, ChevronDown, MoreVertical,
   Bold, Italic, Underline, AlignCenter, List, ListOrdered, CheckSquare, Smile, Target, PiggyBank, Repeat2,
   GraduationCap, Layers, BarChart3, FileText, Settings, Sun, Moon,
-  ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw, ThumbsUp, ThumbsDown,
+  ClipboardList, Dumbbell, Star, Flag, Brain, Hourglass, CheckCircle2, Filter, Pencil, RotateCcw, RotateCw, ThumbsUp, ThumbsDown,
   Download, Search, ZoomIn, ZoomOut, Maximize2, Minimize2, Bookmark, ArrowRight, Folder, FolderPlus, ImagePlus,
   ChevronLeft, Check, Zap, Lightbulb, LayoutGrid, Sparkles, Trophy,
   PenTool, Eraser, Highlighter, Undo2, Redo2, MousePointer2, Type, Square, Circle, Minus, ArrowUpRight, Eye, EyeOff,
@@ -24,8 +24,9 @@ import {
   Strikethrough, Subscript, Superscript, Indent, IndentIncrease, IndentDecrease,
   Ruler, Printer, Replace, Table2, RectangleHorizontal, RectangleVertical,
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
-  Paintbrush, CaseSensitive, CaseUpper, Columns2, SquareDashed, PanelTop, PanelBottom,
-  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega
+  Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
+  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
+  Share2, Info
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -72,7 +73,7 @@ import {
 } from "./lib/notifications";
 import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell, HandwritingPad } from "./components/shared";
 import { LanguagePicker } from "./components/languagePicker";
-import { languageName } from "./lib/languages";
+import { LANGUAGES, languageName } from "./lib/languages";
 import { speak, ttsSupported } from "./lib/tts";
 import { fetchTranslationSuggestions } from "./lib/translate";
 import { uploadFlashcardImage, deleteFlashcardImage } from "./lib/flashcardImages";
@@ -4937,6 +4938,12 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // teclado e caneta (o texto reconhecido vai sendo somado ali).
   const [handwritingId, setHandwritingId] = useState(null);
   const [pendingTextDraft, setPendingTextDraft] = useState(null);
+  // Rascunho de texto em modo livre: existe só enquanto está sendo digitado
+  // e ainda não vira anotação de verdade. Se ficar vazio ao perder o foco,
+  // é descartado sem nunca ter entrado em "drawings" — assim não sobra
+  // anotação fantasma com placeholder em lugar nenhum.
+  const [newTextDraft, setNewTextDraft] = useState(null);
+  const activeTextareaRef = useRef(null);
   const [exporting, setExporting] = useState(false);
   const [pastePulse, setPastePulse] = useState(false);
   const [basePageSize, setBasePageSize] = useState({ width: 0, height: 0 });
@@ -4973,6 +4980,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // nesta sessão do cronômetro, pra cada um apitar só uma vez.
   const hourBeepsFiredRef = useRef(new Set());
   const finalStretchBeepFiredRef = useRef(false);
+  const finalFiveBeepFiredRef = useRef(false);
   // Aviso visual que acompanha o apito de hora passada / 30 min finais: some
   // sozinho depois de alguns segundos, não precisa de nenhuma ação da pessoa.
   const [timerToast, setTimerToast] = useState(null);
@@ -5442,17 +5450,14 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   };
 
   const addTextAnnotation = (x, y) => {
-    const id = crypto.randomUUID();
-    const ann = { id, type: "text", x, y, fontSize: 16, color, content: "", width: 220, height: Math.round(16 * 1.6) + 14 };
-    commitAnnotation(ann);
     setPendingTextDraft(null);
     setHandwritingId(null);
-    setEditingTextId(id);
-    // Sem isso a ferramenta continua em "text": a caixa recém-criada fica com
-    // pointer-events desligado (só liga com tool==="select"), então o clique
-    // no botão "escrever à mão" atravessa a caixa e cai na camada de desenho,
-    // que interpreta como um novo toque com a ferramenta texto — criando
-    // outra caixa em vez de abrir o painel de caneta.
+    setEditingTextId(null);
+    setNewTextDraft({ id: crypto.randomUUID(), x, y });
+    // Sem isso a ferramenta continua em "text": o clique no botão de quebrar
+    // linha/escrever à mão atravessaria o texto e cairia na camada de
+    // desenho, que interpreta como um novo toque com a ferramenta texto —
+    // criando outro rascunho em vez de usar o botão.
     setTool("select");
   };
 
@@ -5469,6 +5474,48 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
       scheduleDrawingsSave(nextAll);
       return nextAll;
     });
+  };
+
+  // Confirma (ou descarta) o rascunho de texto livre. Só vira anotação de
+  // verdade — e só então entra no histórico de undo — se algo foi escrito.
+  const commitNewTextDraft = (value, width, height) => {
+    const draft = newTextDraft;
+    setNewTextDraft(null);
+    setPendingTextDraft(null);
+    setHandwritingId(null);
+    if (!draft || !value.trim()) return;
+    commitAnnotation({ id: draft.id, type: "text", x: draft.x, y: draft.y, fontSize: 16, color, content: value, width, height });
+  };
+
+  // Mede o texto do próprio textarea (via scrollWidth/scrollHeight) pra
+  // caber exatamente no conteúdo, sem quebrar linha sozinho — a única forma
+  // de pular linha é o botão dedicado.
+  const autoSizeFreeTextarea = (ta, fontSize) => {
+    if (!ta) return { width: 220, height: Math.round(fontSize * 1.6) + 14 };
+    const minW = Math.round(fontSize * 0.9) + 14;
+    const minH = Math.round(fontSize * 1.6) + 14;
+    ta.style.width = "2px";
+    ta.style.height = "auto";
+    const width = Math.max(minW, ta.scrollWidth + 4);
+    const height = Math.max(minH, ta.scrollHeight + 2);
+    ta.style.width = width + "px";
+    ta.style.height = height + "px";
+    return { width, height };
+  };
+
+  // Enter nunca quebra linha sozinho — só o botão "quebrar linha" faz isso.
+  const handleFreeTextKeyDown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); return; }
+    if (e.key === "Escape") { e.preventDefault(); e.target.blur(); }
+  };
+
+  const insertLineBreakAt = (ta) => {
+    if (!ta) return;
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + "\n" + ta.value.slice(end);
+    ta.selectionStart = ta.selectionEnd = start + 1;
+    ta.focus();
   };
 
   const eraseRadiusAt = (x, y) => {
@@ -5979,8 +6026,9 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   }, [timerDone]);
 
   // Apita uma vez a cada hora de prova que já passou, e uma vez ao entrar nos
-  // últimos 30 minutos — mesmo com o cronômetro oculto, pra dar uma noção de
-  // como o tempo está passando sem precisar olhar os números.
+  // últimos 30 minutos e nos últimos 5 minutos — mesmo com o cronômetro
+  // oculto, pra dar uma noção de como o tempo está passando sem precisar
+  // olhar os números.
   useEffect(() => {
     if (!timerRunning || timerLeft <= 0) return;
     const elapsed = timerTotalInput - timerLeft;
@@ -5995,6 +6043,11 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
       playTimerBeep();
       showTimerToast("Faltam 30 minutos");
     }
+    if (timerLeft === 300 && timerTotalInput > 300 && !finalFiveBeepFiredRef.current) {
+      finalFiveBeepFiredRef.current = true;
+      playTimerBeep();
+      showTimerToast("Faltam 5 minutos");
+    }
   }, [timerLeft, timerRunning]);
 
   const timerTotalInput = timerH * 3600 + timerM * 60 + timerS;
@@ -6002,6 +6055,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
     if (timerTotalInput <= 0) return;
     hourBeepsFiredRef.current = new Set();
     finalStretchBeepFiredRef.current = false;
+    finalFiveBeepFiredRef.current = false;
     setTimerDone(false);
     setTimerLeft(timerTotalInput);
     timerEndAtRef.current = Date.now() + timerTotalInput * 1000;
@@ -6371,13 +6425,11 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   const aHeight = a.height ?? aMinH;
                   const autoGrowPdfTextarea = (ta) => {
                     if (!ta) return;
-                    ta.style.height = "auto";
-                    const newH = Math.max(aMinH, ta.scrollHeight + 2);
-                    ta.style.height = newH + "px";
-                    if (newH !== aHeight) {
+                    const { width: newW, height: newH } = autoSizeFreeTextarea(ta, a.fontSize);
+                    if (newW !== aWidth || newH !== aHeight) {
                       setDrawings(prev => {
                         const list = prev[pageNum] || [];
-                        const next = list.map(x => x.id === a.id ? { ...x, height: newH } : x);
+                        const next = list.map(x => x.id === a.id ? { ...x, width: newW, height: newH } : x);
                         const nextAll = { ...prev, [pageNum]: next };
                         scheduleDrawingsSave(nextAll);
                         return nextAll;
@@ -6391,7 +6443,6 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                     style={{
                       left: (a.x/basePageSize.width*100)+"%",
                       top: (a.y/basePageSize.height*100)+"%",
-                      width: (aWidth/basePageSize.width*100)+"%",
                       fontSize: (a.fontSize/basePageSize.height*100)+"vh",
                       color: a.color,
                       pointerEvents: (penMode && tool==="select") || editingTextId===a.id ? "auto" : "none",
@@ -6401,6 +6452,10 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   >
                     {editingTextId===a.id && (
                       <div className="textAnnToolbar" onPointerDown={e=>e.stopPropagation()}>
+                        <button type="button" title="Quebrar linha"
+                          onPointerDown={(e)=>{ e.preventDefault(); const ta=activeTextareaRef.current; if(!ta) return; insertLineBreakAt(ta); autoGrowPdfTextarea(ta); }}>
+                          <Pilcrow size={13}/>
+                        </button>
                         <button type="button" title={handwritingId===a.id?"Voltar pro teclado":"Escrever à mão e converter"}
                           className={handwritingId===a.id?"active":""}
                           onClick={()=>{
@@ -6424,23 +6479,39 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                                 setHandwritingId(null);
                               }}
                             />
-                          : <textarea autoFocus ref={autoGrowPdfTextarea} defaultValue={pendingTextDraft ?? a.content}
-                              style={{ height: aHeight + "px" }}
+                          : <textarea autoFocus ref={(ta)=>{ activeTextareaRef.current=ta; autoGrowPdfTextarea(ta); }} defaultValue={pendingTextDraft ?? a.content}
+                              style={{ width: aWidth + "px", height: aHeight + "px" }}
                               onInput={(e)=>autoGrowPdfTextarea(e.target)}
+                              onKeyDown={handleFreeTextKeyDown}
                               onBlur={(e)=>commitTextEdit(a.id, e.target.value)} onPointerDown={e=>e.stopPropagation()}/>)
-                      : <div className="pdfTextAnnLabel" style={{ height: aHeight + "px" }}>{a.content || (penMode ? "Toque duas vezes para escrever" : "")}</div>}
-                    {editingTextId===a.id && handwritingId!==a.id && (
-                      <div className="textAnnResizeHandle"
-                        onPointerDown={(e)=>{
-                          e.stopPropagation(); e.preventDefault();
-                          const { x } = toPageCoords(e.clientX, e.clientY);
-                          textResizeAnnRef.current = { id: a.id, startX: x, startWidth: aWidth };
-                        }}
-                      />
-                    )}
+                      : <div className="pdfTextAnnLabel" style={{ width: aWidth + "px", height: aHeight + "px" }}>{a.content || (penMode ? "Toque duas vezes para escrever" : "")}</div>}
                   </div>
                   );
                 })}
+                {annotationsVisible && basePageSize.width>0 && newTextDraft && (
+                  <div
+                    className="pdfTextAnn editing"
+                    style={{
+                      left: (newTextDraft.x/basePageSize.width*100)+"%",
+                      top: (newTextDraft.y/basePageSize.height*100)+"%",
+                      fontSize: (16/basePageSize.height*100)+"vh",
+                      color,
+                      pointerEvents: "auto",
+                    }}
+                  >
+                    <div className="textAnnToolbar" onPointerDown={e=>e.stopPropagation()}>
+                      <button type="button" title="Quebrar linha"
+                        onPointerDown={(e)=>{ e.preventDefault(); const ta=activeTextareaRef.current; if(!ta) return; insertLineBreakAt(ta); autoSizeFreeTextarea(ta, 16); }}>
+                        <Pilcrow size={13}/>
+                      </button>
+                    </div>
+                    <textarea autoFocus ref={(ta)=>{ activeTextareaRef.current=ta; autoSizeFreeTextarea(ta, 16); }}
+                      onInput={(e)=>autoSizeFreeTextarea(e.target, 16)}
+                      onKeyDown={handleFreeTextKeyDown}
+                      onBlur={(e)=>{ const w=parseInt(e.target.style.width)||220; const h=parseInt(e.target.style.height)||(Math.round(16*1.6)+14); commitNewTextDraft(e.target.value, w, h); }}
+                      onPointerDown={e=>e.stopPropagation()}/>
+                  </div>
+                )}
                 {penMode && tool==="select" && selectedAnnId && basePageSize.width>0 && (() => {
                   const ann = (drawings[pageNum]||[]).find(a=>a.id===selectedAnnId);
                   if (!ann) return null;
@@ -7419,6 +7490,11 @@ function Whiteboard({ board, onClose, onSave }) {
   const [editingTextId, setEditingTextId] = useState(null);
   const [handwritingId, setHandwritingId] = useState(null);
   const [pendingTextDraft, setPendingTextDraft] = useState(null);
+  // Rascunho de texto em modo livre: existe só enquanto está sendo digitado
+  // e ainda não vira elemento de verdade. Se ficar vazio ao perder o foco,
+  // é descartado sem nunca ter entrado em "elements".
+  const [newTextDraft, setNewTextDraft] = useState(null);
+  const activeTextareaRef = useRef(null);
   const [liveEl, setLiveEl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [flash, setFlash] = useState(false);
@@ -7630,14 +7706,14 @@ function Whiteboard({ board, onClose, onSave }) {
   };
 
   const addTextElement = (x, y) => {
-    const id = crypto.randomUUID();
-    commitElement({ id, type: "text", x, y, fontSize: 18, color, content: "", width: 220, height: Math.round(18 * 1.6) + 14 });
     setPendingTextDraft(null);
     setHandwritingId(null);
-    setEditingTextId(id);
+    setEditingTextId(null);
+    setNewTextDraft({ id: crypto.randomUUID(), x, y });
     // Idem ao leitor de PDF: sem trocar pra "select" aqui, um clique no botão
-    // "escrever à mão" (dentro do foreignObject) borbulha pro pointerdown do
-    // <svg>, que ainda está em modo "text" e cria outro elemento de texto.
+    // de quebrar linha/escrever à mão (dentro do foreignObject) borbulha pro
+    // pointerdown do <svg>, que ainda está em modo "text" e cria outro
+    // rascunho em vez de usar o botão.
     setTool("select");
   };
   const commitTextEdit = (id, value) => {
@@ -7645,6 +7721,48 @@ function Whiteboard({ board, onClose, onSave }) {
     setHandwritingId(null);
     setPendingTextDraft(null);
     setElements(prev => value.trim() ? prev.map(a => a.id === id ? { ...a, content: value } : a) : prev.filter(a => a.id !== id));
+  };
+
+  // Confirma (ou descarta) o rascunho de texto livre. Só vira elemento de
+  // verdade — e só então entra no histórico de undo — se algo foi escrito.
+  const commitNewTextDraft = (value, width, height) => {
+    const draft = newTextDraft;
+    setNewTextDraft(null);
+    setPendingTextDraft(null);
+    setHandwritingId(null);
+    if (!draft || !value.trim()) return;
+    commitElement({ id: draft.id, type: "text", x: draft.x, y: draft.y, fontSize: 18, color, content: value, width, height });
+  };
+
+  // Mede o texto do próprio textarea (via scrollWidth/scrollHeight) pra
+  // caber exatamente no conteúdo, sem quebrar linha sozinho — a única forma
+  // de pular linha é o botão dedicado.
+  const autoSizeFreeTextarea = (ta, fontSize) => {
+    if (!ta) return { width: 220, height: Math.round(fontSize * 1.6) + 14 };
+    const minW = Math.round(fontSize * 0.9) + 14;
+    const minH = Math.round(fontSize * 1.6) + 14;
+    ta.style.width = "2px";
+    ta.style.height = "auto";
+    const width = Math.max(minW, ta.scrollWidth + 4);
+    const height = Math.max(minH, ta.scrollHeight + 2);
+    ta.style.width = width + "px";
+    ta.style.height = height + "px";
+    return { width, height };
+  };
+
+  // Enter nunca quebra linha sozinho — só o botão "quebrar linha" faz isso.
+  const handleFreeTextKeyDown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); return; }
+    if (e.key === "Escape") { e.preventDefault(); e.target.blur(); }
+  };
+
+  const insertLineBreakAt = (ta) => {
+    if (!ta) return;
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + "\n" + ta.value.slice(end);
+    ta.selectionStart = ta.selectionEnd = start + 1;
+    ta.focus();
   };
 
   const eraseRadiusAt = (x, y) => {
@@ -8288,11 +8406,9 @@ function Whiteboard({ board, onClose, onSave }) {
                   const elHeight = el.height ?? elMinH;
                   const autoGrowWhiteboardTextarea = (ta) => {
                     if (!ta) return;
-                    ta.style.height = "auto";
-                    const newH = Math.max(elMinH, ta.scrollHeight + 2);
-                    ta.style.height = newH + "px";
-                    if (newH !== elHeight) {
-                      setElements(prev => prev.map(a => a.id === el.id ? { ...a, height: newH } : a));
+                    const { width: newW, height: newH } = autoSizeFreeTextarea(ta, el.fontSize);
+                    if (newW !== elWidth || newH !== elHeight) {
+                      setElements(prev => prev.map(a => a.id === el.id ? { ...a, width: newW, height: newH } : a));
                     }
                   };
                   return (
@@ -8303,6 +8419,10 @@ function Whiteboard({ board, onClose, onSave }) {
                   >
                     {editingTextId === el.id && (
                       <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
+                        <button type="button" title="Quebrar linha"
+                          onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); autoGrowWhiteboardTextarea(ta); }}>
+                          <Pilcrow size={13}/>
+                        </button>
                         <button type="button" title={handwritingId === el.id ? "Voltar pro teclado" : "Escrever à mão e converter"}
                           className={handwritingId === el.id ? "active" : ""}
                           onClick={() => {
@@ -8328,11 +8448,12 @@ function Whiteboard({ board, onClose, onSave }) {
                     ) : editingTextId === el.id ? (
                       <textarea
                         autoFocus
-                        ref={autoGrowWhiteboardTextarea}
+                        ref={ta => { activeTextareaRef.current = ta; autoGrowWhiteboardTextarea(ta); }}
                         defaultValue={pendingTextDraft ?? el.content}
                         className="whiteboardTextInput"
                         style={{ color: el.color, fontSize: el.fontSize, width: elWidth + "px", height: elHeight + "px" }}
                         onInput={e => autoGrowWhiteboardTextarea(e.target)}
+                        onKeyDown={handleFreeTextKeyDown}
                         onBlur={e => commitTextEdit(el.id, e.target.value)}
                         onPointerDown={e => e.stopPropagation()}
                       />
@@ -8346,19 +8467,32 @@ function Whiteboard({ board, onClose, onSave }) {
                         {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
                       </div>
                     )}
-                    {editingTextId === el.id && handwritingId !== el.id && (
-                      <div className="textAnnResizeHandle"
-                        onPointerDown={e => {
-                          e.stopPropagation(); e.preventDefault();
-                          try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) {}
-                          const { x } = toWorld(e.clientX, e.clientY);
-                          textResizeRef.current = { id: el.id, startX: x, startWidth: elWidth };
-                        }}
-                      />
-                    )}
                   </foreignObject>
                   );
                 })}
+                {newTextDraft && (
+                  <foreignObject x={newTextDraft.x} y={newTextDraft.y}
+                    width={newTextDraft.width} height={newTextDraft.height}
+                    style={{ overflow: "visible" }}
+                  >
+                    <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
+                      <button type="button" title="Quebrar linha"
+                        onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(ta, 18) }); }}>
+                        <Pilcrow size={13}/>
+                      </button>
+                    </div>
+                    <textarea
+                      autoFocus
+                      ref={ta => { activeTextareaRef.current = ta; if (ta) setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(ta, 18) }); }}
+                      className="whiteboardTextInput"
+                      style={{ color, fontSize: 18, width: (newTextDraft.width) + "px", height: (newTextDraft.height) + "px" }}
+                      onInput={e => setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(e.target, 18) })}
+                      onKeyDown={handleFreeTextKeyDown}
+                      onBlur={e => { const w = parseInt(e.target.style.width) || 220; const h = parseInt(e.target.style.height) || (Math.round(18 * 1.6) + 14); commitNewTextDraft(e.target.value, w, h); }}
+                      onPointerDown={e => e.stopPropagation()}
+                    />
+                  </foreignObject>
+                )}
                 {selectedId && (() => {
                   const el = elements.find(a => a.id === selectedId);
                   if (!el) return null;
@@ -11839,7 +11973,31 @@ function stripHtml(html){
   if (!html) return "";
   const div = document.createElement("div");
   div.innerHTML = html;
+  div.querySelectorAll(".word-del").forEach(n => n.remove()); // texto excluído (Controlar Alterações do Word) não conta na prévia
   return div.textContent || div.innerText || "";
+}
+
+// Diff palavra-a-palavra clássico (maior subsequência comum), usado em
+// Revisão > Comparar Documentos. Puro JS, sem depender de nenhuma
+// biblioteca nova — o(n·m) é tranquilo pro tamanho de documento de estudo.
+function diffWords(a, b) {
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const result = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { result.push({ type: "same", text: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { result.push({ type: "del", text: a[i] }); i++; }
+    else { result.push({ type: "ins", text: b[j] }); j++; }
+  }
+  while (i < n) { result.push({ type: "del", text: a[i] }); i++; }
+  while (j < m) { result.push({ type: "ins", text: b[j] }); j++; }
+  return result;
 }
 
 
@@ -13803,6 +13961,14 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     await add({ title: (full.title || "Documento") + " (cópia)", content: full.content || "", preview: full.preview || "", page_size: full.page_size || "a4", orientation: full.orientation || "retrato", margins: full.margins || "normal" });
   };
 
+  // "Salvar como" a partir do próprio editor (aba Arquivo): salva um novo
+  // documento com o conteúdo atual (ainda não persistido) e abre ele em
+  // seguida, igual ao "Duplicar" da estante mas partindo do estado em tela.
+  const handleSaveAsFromEditor = async (title, content, meta) => {
+    const inserted = await add({ title, content, preview: stripHtml(content).trim().slice(0, 200), page_size: meta.page_size || "a4", orientation: meta.orientation || "retrato", margins: meta.margins || "normal" });
+    if (inserted) setActiveDoc(inserted);
+  };
+
   const handleDelete = async (doc) => {
     setOpenMenuId(null);
     if (!confirm(`Excluir "${doc.title}"? Essa ação não pode ser desfeita.`)) return;
@@ -13863,6 +14029,14 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
         <WordEditor
           doc={activeDoc}
           onClose={() => setActiveDoc(null)}
+          onNew={createDoc}
+          onSaveAs={handleSaveAsFromEditor}
+          docsList={data.filter(d => d.id !== activeDoc.id).map(d => ({ id: d.id, title: d.title }))}
+          onFetchDocContent={async (id) => {
+            const d = data.find(x => x.id === id);
+            const full = cloud ? (await fetchFull(id)) || d : d;
+            return full?.content || "";
+          }}
           onSave={(patch) => {
             const fullPatch = { ...patch, updated_at: new Date().toISOString() };
             // Mesma lógica de Notas: mantém "preview" (a coluna leve da
@@ -13945,6 +14119,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const [borderOpen, setBorderOpen] = useState(false);
   const [symbolOpen, setSymbolOpen] = useState(false);
   const [pageNumOpen, setPageNumOpen] = useState(false);
+  const [sectionBreakOpen, setSectionBreakOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [linkBar, setLinkBar] = useState(null);
   const [linkPopover, setLinkPopover] = useState(null);
@@ -14148,11 +14323,14 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
 
   // ---- cabeçalho / rodapé — faixa única (o editor não pagina de verdade em
   // várias folhas, então isso não se repete "por página" como no Word real;
-  // funciona como uma faixa fixa no topo/fim do documento) ----
-  const insertHeaderFooterBand = (kind) => {
+  // funciona como uma faixa fixa no topo/fim do documento). A variante
+  // "-first" é a versão só da primeira página — ter uma dessas presente no
+  // documento É o que significa "primeira página diferente" (sem precisar
+  // de uma marcação extra pra isso).
+  const insertHeaderFooterBand = (kind, variant) => {
     const el = bodyRef.current;
     if (!el) return;
-    const cls = kind === "header" ? "word-header-band" : "word-footer-band";
+    const cls = (kind === "header" ? "word-header-band" : "word-footer-band") + (variant === "first" ? "-first" : "");
     let band = el.querySelector("." + cls);
     if (band) {
       const r = document.createRange();
@@ -14167,17 +14345,35 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     }
     band = document.createElement("div");
     band.className = cls;
-    band.innerHTML = kind === "header" ? "<div>Cabeçalho</div>" : "<div>Rodapé</div>";
+    const label = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : (kind === "header" ? "Cabeçalho" : "Rodapé");
+    band.innerHTML = `<div>${label}</div>`;
     if (kind === "header") el.insertBefore(band, el.firstChild);
     else el.appendChild(band);
     onChange();
   };
 
+  // Alterna "primeira página com cabeçalho/rodapé diferente" (é um único
+  // controle no Word de verdade, afeta cabeçalho e rodapé juntos).
+  const togglePrimeiraPaginaDiferente = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const existing = el.querySelectorAll(".word-header-band-first, .word-footer-band-first");
+    if (existing.length) {
+      existing.forEach(n => n.remove());
+      onChange();
+      return;
+    }
+    insertHeaderFooterBand("header", "first");
+    insertHeaderFooterBand("footer", "first");
+  };
+
   // ---- número de página — como o editor não pagina de verdade em folhas
   // separadas (mesma observação de insertHeaderFooterBand acima), insere um
   // marcador de texto editável na faixa de cabeçalho/rodapé em vez de um
-  // campo dinâmico real.
-  const insertPageNumber = (where) => {
+  // campo dinâmico real — mas grava o formato escolhido (data-fmt), que a
+  // exportação pro .docx lê pra usar o campo de página de verdade do Word
+  // (atualiza sozinho), e o PDF usa pra numerar cada página de verdade.
+  const insertPageNumber = (where, format = "label") => {
     const el = bodyRef.current;
     if (!el) return;
     const cls = where === "header" ? "word-header-band" : "word-footer-band";
@@ -14193,7 +14389,8 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     const span = document.createElement("span");
     span.className = "word-pagenum";
     span.setAttribute("contenteditable", "false");
-    span.textContent = "Página 1";
+    span.dataset.fmt = format;
+    span.textContent = format === "simple" ? "1" : format === "labelof" ? "Página 1 de N" : "Página 1";
     inner.appendChild(document.createTextNode(" "));
     inner.appendChild(span);
     setPageNumOpen(false);
@@ -14497,6 +14694,41 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     r.collapse(true);
     sel.removeAllRanges();
     sel.addRange(r);
+    onChange();
+  };
+
+  // Quebra de seção — visualmente marcada e com o tipo gravado
+  // (data-section), pra dar o vocabulário/estrutura do documento. Na
+  // exportação, todas as variantes viram uma quebra de página de verdade;
+  // diferenciar layout de página por seção (colunas/orientação/margens
+  // diferentes a partir daqui) exigiria reestruturar a exportação pra
+  // seções independentes, o que não está feito ainda.
+  const insertSectionBreak = (kind) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const labels = { nextpage: "Quebra de seção (próxima página)", continuous: "Quebra de seção (contínua)", evenpage: "Quebra de seção (página par)", oddpage: "Quebra de seção (página ímpar)" };
+    const div = document.createElement("div");
+    div.className = "word-page-break word-section-break";
+    div.dataset.section = kind;
+    div.setAttribute("contenteditable", "false");
+    div.innerHTML = `<span>${labels[kind] || "Quebra de seção"}</span>`;
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(div); }
+      else el.append(div, after);
+    } else {
+      el.append(div, after);
+    }
+    const r = document.createRange();
+    r.setStart(after, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    setSectionBreakOpen(false);
     onChange();
   };
 
@@ -15034,14 +15266,14 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     exec, keepFocus, closeAllPopovers,
     colorOpen, setColorOpen, hiliteOpen, setHiliteOpen, emojiOpen, setEmojiOpen,
     fontOpen, setFontOpen, sizeOpen, setSizeOpen, lineOpen, setLineOpen, marginsOpen, setMarginsOpen,
-    shadingOpen, setShadingOpen, borderOpen, setBorderOpen, symbolOpen, setSymbolOpen, pageNumOpen, setPageNumOpen,
+    shadingOpen, setShadingOpen, borderOpen, setBorderOpen, symbolOpen, setSymbolOpen, pageNumOpen, setPageNumOpen, sectionBreakOpen, setSectionBreakOpen, insertSectionBreak,
     applyTextColor, applyHilite, applyFont, applyFontSize, applyHeading, clearFormatting, selectAll,
     insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertImageFile, applyLineHeight,
     findOpen, setFindOpen, findQuery, setFindQuery, replaceValue, setReplaceValue,
     findMatches, findIndex, runFind, findNext, findPrev, replaceCurrent, replaceAll, closeFind, resetFindHighlights,
     linkBar, linkPopover, setLinkPopover, openLinkPopover, confirmLink, removeLink, closeLinkPopover, updateLinkBar, handleBodyClick,
     painting, pickPaintFormat, applyPaintFormat, growShrinkFont,
-    caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber,
+    caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber, togglePrimeiraPaginaDiferente,
     columnsOpen, setColumnsOpen, applyColumns, setParagraphIndent, setParagraphIndentRight, setParagraphSpacing, setParagraphSpacingBefore,
     applyShading, applyBorder,
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
@@ -15073,70 +15305,314 @@ function WordTableDialog({ onClose, onConfirm }) {
 // Desenho (Inserir > Ilustrações) — canvas simples de traço livre; ao
 // inserir, converte o desenho num PNG e reaproveita insertImageFile, o
 // mesmo caminho já usado para fotos escolhidas do computador.
-function WordDrawDialog({ onClose, onInsert }) {
-  const canvasRef = useRef(null);
-  const drawingRef = useRef(false);
-  const lastPointRef = useRef(null);
-  const [color, setColor] = useState("#1a1a1a");
-  const [size, setSize] = useState(3);
+// Desenho (aba "Desenhar" / Inserir > Ilustrações) — canvas com traços de
+// verdade (cada traço é um objeto, não só pixels), pra Caneta/Marca-texto/
+// Borracha/Selecionar/Espessura/Cor/Régua funcionarem como ferramentas
+// reais, com desfazer próprio. Ao inserir, converte o desenho final num PNG
+// e reaproveita insertImageFile — o mesmo caminho já usado pra fotos do
+// computador.
+// Recortar imagem (Formato da Imagem > Recortar) — arrasta um retângulo
+// sobre a imagem e recorta de verdade num canvas (não é só um "crop" visual
+// por CSS; o arquivo final realmente vira só o pedaço escolhido).
+function WordCropDialog({ src, onClose, onApply }) {
+  const imgRef = useRef(null);
+  const dragRef = useRef(null);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0, natW: 0, natH: 0 });
+  const [rect, setRect] = useState(null);
 
   useEffect(() => {
-    const ctx = canvasRef.current.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-  }, []);
+    const im = new Image();
+    im.onload = () => {
+      const maxW = 460, maxH = 340;
+      const scale = Math.min(maxW / im.naturalWidth, maxH / im.naturalHeight, 1);
+      const w = Math.round(im.naturalWidth * scale), h = Math.round(im.naturalHeight * scale);
+      setImgSize({ w, h, natW: im.naturalWidth, natH: im.naturalHeight });
+      setRect({ x: Math.round(w * 0.1), y: Math.round(h * 0.1), w: Math.round(w * 0.8), h: Math.round(h * 0.8) });
+    };
+    im.src = src;
+  }, [src]);
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  const startDrag = (mode, corner) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { mode, corner, startX: e.clientX, startY: e.clientY, startRect: { ...rect } };
+    const move = (ev) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX, dy = ev.clientY - d.startY;
+      let { x, y, w, h } = d.startRect;
+      if (d.mode === "move") {
+        x = clamp(x + dx, 0, imgSize.w - w);
+        y = clamp(y + dy, 0, imgSize.h - h);
+      } else {
+        if (d.corner.includes("e")) w = clamp(w + dx, 20, imgSize.w - x);
+        if (d.corner.includes("s")) h = clamp(h + dy, 20, imgSize.h - y);
+        if (d.corner.includes("w")) { const nx = clamp(x + dx, 0, x + w - 20); w = w + (x - nx); x = nx; }
+        if (d.corner.includes("n")) { const ny = clamp(y + dy, 0, y + h - 20); h = h + (y - ny); y = ny; }
+      }
+      setRect({ x, y, w, h });
+    };
+    const up = () => { dragRef.current = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  const applyCrop = () => {
+    if (!rect || !imgSize.natW) return;
+    const scale = imgSize.natW / imgSize.w;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(rect.w * scale));
+    canvas.height = Math.max(1, Math.round(rect.h * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(imgRef.current, rect.x * scale, rect.y * scale, rect.w * scale, rect.h * scale, 0, 0, canvas.width, canvas.height);
+    onApply(canvas.toDataURL("image/png"));
+  };
+
+  return (
+    <div className="readerBack wordTableDialogBack" onClick={onClose}>
+      <div className="wordTableDialog wordCropDialog" onClick={e => e.stopPropagation()}>
+        <h3>Recortar Imagem</h3>
+        <p className="wordBackstageHint">Arraste os cantos pra ajustar a área, e o meio pra mover.</p>
+        {imgSize.w > 0 && (
+          <div className="wordCropArea" style={{ width: imgSize.w, height: imgSize.h }}>
+            <img ref={imgRef} src={src} width={imgSize.w} height={imgSize.h} draggable={false} className="wordCropImg" alt=""/>
+            {rect && (
+              <div className="wordCropRect" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} onMouseDown={startDrag("move")}>
+                {["nw", "ne", "sw", "se"].map(c => (
+                  <span key={c} className={"wordCropHandle wordCropHandle-" + c} onMouseDown={startDrag("resize", c)}/>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <div className="wordTableDialogActions">
+          <button className="ghost" onClick={onClose}>Cancelar</button>
+          <button className="primary" onClick={applyCrop}>Recortar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WordDrawDialog({ onClose, onInsert, defaultTool = "pen", defaultColor = "#1a1a1a", defaultSize = 3, defaultRuler = false }) {
+  const canvasRef = useRef(null);
+  const dragRef = useRef(null);
+  const [strokes, setStrokes] = useState([]);
+  const [liveStroke, setLiveStroke] = useState(null);
+  const [tool, setTool] = useState(defaultTool); // pen | highlighter | eraser | select
+  const [color, setColor] = useState(defaultColor);
+  const [size, setSize] = useState(defaultSize);
+  const [showRuler, setShowRuler] = useState(defaultRuler);
+  const [selectedId, setSelectedId] = useState(null);
+  const historyRef = useRef([]);
+  const redoRef = useRef([]);
 
   const getPos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const p = e.touches ? e.touches[0] : e;
     return { x: p.clientX - rect.left, y: p.clientY - rect.top };
   };
-  const startDraw = (e) => { e.preventDefault(); drawingRef.current = true; lastPointRef.current = getPos(e); };
-  const draw = (e) => {
-    if (!drawingRef.current) return;
+  const hitTest = (pos) => {
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      const s = strokes[i];
+      if (s.points.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < s.size / 2 + 6)) return s;
+    }
+    return null;
+  };
+  const eraseAt = (pos, removedIds) => {
+    setStrokes(prev => {
+      const hit = prev.find(s => s.points.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < s.size / 2 + 6));
+      if (!hit) return prev;
+      removedIds.add(hit.id);
+      return prev.filter(s => s.id !== hit.id);
+    });
+  };
+
+  const startDraw = (e) => {
     e.preventDefault();
-    const ctx = canvasRef.current.getContext("2d");
     const pos = getPos(e);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = size;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
-    ctx.lineTo(pos.x, pos.y);
-    ctx.stroke();
-    lastPointRef.current = pos;
+    if (tool === "select") {
+      const hit = hitTest(pos);
+      setSelectedId(hit?.id || null);
+      if (hit) dragRef.current = { mode: "move", last: pos, snapshot: strokes };
+      return;
+    }
+    if (tool === "eraser") {
+      dragRef.current = { mode: "erase", snapshot: strokes, removedIds: new Set() };
+      eraseAt(pos, dragRef.current.removedIds);
+      return;
+    }
+    dragRef.current = { mode: "draw" };
+    setLiveStroke({
+      id: Math.random().toString(36).slice(2), tool, color,
+      size: tool === "highlighter" ? size * 4 : size,
+      opacity: tool === "highlighter" ? 0.35 : 1,
+      points: [pos],
+    });
   };
-  const endDraw = () => { drawingRef.current = false; };
+  const moveDraw = (e) => {
+    const d = dragRef.current;
+    if (!d) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    if (d.mode === "draw") { setLiveStroke(s => (s ? { ...s, points: [...s.points, pos] } : s)); return; }
+    if (d.mode === "erase") { eraseAt(pos, d.removedIds); return; }
+    if (d.mode === "move" && selectedId) {
+      const dx = pos.x - d.last.x, dy = pos.y - d.last.y;
+      d.last = pos;
+      setStrokes(prev => prev.map(s => (s.id === selectedId ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) } : s)));
+    }
+  };
+  const endDraw = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    if (d.mode === "draw") {
+      if (liveStroke && liveStroke.points.length > 1) {
+        historyRef.current.push(strokes);
+        redoRef.current = [];
+        setStrokes(prev => [...prev, liveStroke]);
+      }
+      setLiveStroke(null);
+      return;
+    }
+    if ((d.mode === "erase" && d.removedIds.size) || d.mode === "move") {
+      historyRef.current.push(d.snapshot);
+      redoRef.current = [];
+    }
+  };
+
+  const undo = () => {
+    if (!historyRef.current.length) return;
+    redoRef.current.push(strokes);
+    setStrokes(historyRef.current.pop());
+    setSelectedId(null);
+  };
+  const redo = () => {
+    if (!redoRef.current.length) return;
+    historyRef.current.push(strokes);
+    setStrokes(redoRef.current.pop());
+    setSelectedId(null);
+  };
+  const deleteSelected = () => {
+    if (!selectedId) return;
+    historyRef.current.push(strokes);
+    redoRef.current = [];
+    setStrokes(prev => prev.filter(s => s.id !== selectedId));
+    setSelectedId(null);
+  };
   const clearCanvas = () => {
-    const ctx = canvasRef.current.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    if (!strokes.length) return;
+    historyRef.current.push(strokes);
+    redoRef.current = [];
+    setStrokes([]);
+    setSelectedId(null);
   };
+
+  const paintStrokes = (ctx, list) => {
+    list.forEach(s => {
+      ctx.globalAlpha = s.opacity ?? 1;
+      if (s.points.length < 2) {
+        ctx.beginPath();
+        ctx.fillStyle = s.color;
+        ctx.arc(s.points[0].x, s.points[0].y, s.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = s.size;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.moveTo(s.points[0].x, s.points[0].y);
+        s.points.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    });
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (showRuler) {
+      ctx.save();
+      ctx.strokeStyle = "#dbe3ea";
+      ctx.lineWidth = 1;
+      for (let x = 20; x < canvas.width; x += 20) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+      for (let y = 20; y < canvas.height; y += 20) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+      ctx.restore();
+    }
+    paintStrokes(ctx, liveStroke ? [...strokes, liveStroke] : strokes);
+    if (selectedId) {
+      const s = strokes.find(st => st.id === selectedId);
+      if (s) {
+        const xs = s.points.map(p => p.x), ys = s.points.map(p => p.y);
+        const minX = Math.min(...xs) - 6, maxX = Math.max(...xs) + 6, minY = Math.min(...ys) - 6, maxY = Math.max(...ys) + 6;
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = "#2563eb";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.restore();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strokes, liveStroke, selectedId, showRuler]);
+
   const handleInsert = () => {
-    canvasRef.current.toBlob((blob) => {
+    const off = document.createElement("canvas");
+    off.width = canvasRef.current.width;
+    off.height = canvasRef.current.height;
+    const ctx = off.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, off.width, off.height);
+    paintStrokes(ctx, strokes);
+    off.toBlob((blob) => {
       if (blob) onInsert(new File([blob], "desenho.png", { type: "image/png" }));
     }, "image/png");
   };
 
+  const TOOLS = [
+    { id: "pen", label: "Caneta", icon: PenTool },
+    { id: "highlighter", label: "Marca-texto", icon: Highlighter },
+    { id: "eraser", label: "Borracha", icon: Eraser },
+    { id: "select", label: "Selecionar", icon: MousePointer2 },
+  ];
+
   return (
     <div className="readerBack wordTableDialogBack" onClick={onClose}>
       <div className="wordTableDialog wordDrawDialog" onClick={e => e.stopPropagation()}>
-        <h3>Desenho</h3>
+        <h3>Desenhar</h3>
+        <div className="wordDrawToolRow">
+          {TOOLS.map(t => (
+            <button key={t.id} className={"wordDrawToolBtn" + (tool === t.id ? " active" : "")} data-tip={t.label} onClick={() => setTool(t.id)}><t.icon size={15}/></button>
+          ))}
+          <span className="wordRibbonDivider"/>
+          <button className="wordDrawToolBtn" data-tip="Desfazer" onClick={undo}><Undo2 size={15}/></button>
+          <button className="wordDrawToolBtn" data-tip="Refazer" onClick={redo}><Redo2 size={15}/></button>
+          <span className="wordRibbonDivider"/>
+          <button className={"wordDrawToolBtn" + (showRuler ? " active" : "")} data-tip="Régua" onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
+        </div>
         <canvas
           ref={canvasRef}
           width={420}
           height={260}
-          className="wordDrawCanvas"
-          onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw}
-          onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw}
+          className={"wordDrawCanvas wordDrawCanvas-" + tool}
+          onMouseDown={startDraw} onMouseMove={moveDraw} onMouseUp={endDraw} onMouseLeave={endDraw}
+          onTouchStart={startDraw} onTouchMove={moveDraw} onTouchEnd={endDraw}
         />
         <div className="wordDrawTools">
           {WORD_TEXT_COLORS.map(c => (
             <button key={c} className={"colorSwatch" + (color === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => setColor(c)}/>
           ))}
-          <input type="range" min="1" max="12" value={size} onChange={e => setSize(Number(e.target.value))}/>
-          <button className="ghost" onClick={clearCanvas}><Eraser size={14}/> Limpar</button>
+          <input type="range" min="1" max="12" value={size} onChange={e => setSize(Number(e.target.value))} data-tip="Espessura"/>
+          {selectedId && <button className="ghost" onClick={deleteSelected}><Trash2 size={14}/> Excluir traço</button>}
+          <button className="ghost" onClick={clearCanvas}><Eraser size={14}/> Limpar tudo</button>
         </div>
         <div className="wordTableDialogActions">
           <button className="ghost" onClick={onClose}>Cancelar</button>
@@ -15256,7 +15732,7 @@ function WordRuler({
   );
 }
 
-function WordEditor({ doc, onClose, onSave }) {
+function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDocContent }) {
   const [title, setTitle] = useState(doc.title || "");
   const [pageSize, setPageSize] = useState(doc.page_size || "a4");
   const [orientation, setOrientation] = useState(doc.orientation || "retrato");
@@ -15291,14 +15767,78 @@ function WordEditor({ doc, onClose, onSave }) {
   const [watermarkOpen, setWatermarkOpen] = useState(false);
   const [pageColorOpen, setPageColorOpen] = useState(false);
   const [pageBorderOpen, setPageBorderOpen] = useState(false);
+  // Aba "Arquivo" — tela cheia estilo Backstage do Word (Novo, Abrir, Salvar,
+  // Salvar como, Exportar, Imprimir, Compartilhar, Informações, Renomear,
+  // Configurações, Fechar), substituindo o ribbon inteiro enquanto aberta.
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [fileMenuSection, setFileMenuSection] = useState("info");
+  const [justSaved, setJustSaved] = useState(false);
+  // Aba "Revisão" — controlar alterações, proteção e idioma também ficam
+  // guardados no marcador invisível do conteúdo (persistPageMeta), igual ao
+  // tema/marca d'água da aba Design.
+  const [trackChanges, setTrackChanges] = useState(false);
+  const [showChangesMarkup, setShowChangesMarkup] = useState(true);
+  const [docLanguage, setDocLanguage] = useState(null);
+  const [docProtected, setDocProtected] = useState(false);
+  const [spellcheckOn, setSpellcheckOn] = useState(true);
+  const [wordCountDialogOpen, setWordCountDialogOpen] = useState(false);
+  const [reviewLangOpen, setReviewLangOpen] = useState(false);
+  const [compareDialogOpen, setCompareDialogOpen] = useState(false);
+  const [compareTargetId, setCompareTargetId] = useState("");
+  const [compareResult, setCompareResult] = useState(null); // "loading" | { diff, otherTitle } | null
+  const [acceptMenuOpen, setAcceptMenuOpen] = useState(false);
+  const [rejectMenuOpen, setRejectMenuOpen] = useState(false);
+  const [translatePopover, setTranslatePopover] = useState(null); // { range, x, y, suggestions, loading }
+  // Guias contextuais (aparecem só quando uma imagem ou tabela está selecionada,
+  // igual ao Word — "Formato da Imagem" / "Design da Tabela" + "Layout da Tabela").
+  const [selectedImg, setSelectedImg] = useState(null);
+  const [activeCell, setActiveCell] = useState(null);
+  const [tableSubTab, setTableSubTab] = useState("design"); // lembra a última sub-aba usada
+  // Aba "Correspondências" — lista de destinatários colada pelo usuário
+  // (CSV/TSV simples), também guardada no marcador invisível do documento.
+  const [recipients, setRecipients] = useState(null); // { headers: string[], rows: string[][] } | null
+  const [recipientsDialogOpen, setRecipientsDialogOpen] = useState(false);
+  const [recipientsDraft, setRecipientsDraft] = useState("");
+  const [insertFieldOpen, setInsertFieldOpen] = useState(false);
+  const [mergePreview, setMergePreview] = useState(false);
+  const [mergeIndex, setMergeIndex] = useState(0);
+  // Aba "Desenhar" — só define as ferramentas padrão com que a tela de
+  // desenho (WordDrawDialog) abre; o desenho em si continua sendo feito lá.
+  const [drawTool, setDrawTool] = useState("pen");
+  const [drawColor, setDrawColor] = useState("#1a1a1a");
+  const [drawSize, setDrawSize] = useState(3);
+  const [drawRuler, setDrawRuler] = useState(false);
+  // Formas / WordArt / SmartArt (Inserir > Ilustrações/Texto)
+  const [selectedShape, setSelectedShape] = useState(null);
+  const [cropDialogOpen, setCropDialogOpen] = useState(false);
+  const [shapesOpen, setShapesOpen] = useState(false);
+  const [wordArtOpen, setWordArtOpen] = useState(false);
+  const [smartArtOpen, setSmartArtOpen] = useState(false);
+  // Painel de Navegação (aba Exibir) — títulos (H1/H2/H3) e resultados de
+  // busca, os dois clicáveis pra pular direto pro trecho do documento.
+  const [navPaneOpen, setNavPaneOpen] = useState(false);
+  const [navPaneTab, setNavPaneTab] = useState("headings");
+  const [navHeadings, setNavHeadings] = useState([]);
 
   const bodyRef = useRef(null);
+  const titleInputRef = useRef(null);
   const modalRef = useRef(null);
   const imageInputRef = useRef(null);
   const saveTimer = useRef(null);
   const pageAreaRef = useRef(null);
   const pageRef = useRef(null);
   const ribbonTipTimer = useRef(null);
+  // Desfazer/Refazer reais (histórico próprio, não o undo nativo do
+  // contentEditable — esse é inconsistente entre navegadores e não cobre
+  // ações feitas via execCommand de formatação). Guarda snapshots do HTML;
+  // agrupa digitação contínua num único passo (commit só depois de uma
+  // pausa), do mesmo jeito que o Word agrupa.
+  const historyRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const historyBaselineRef = useRef(doc.content || "");
+  const historyTimer = useRef(null);
+  const HISTORY_LIMIT = 100;
+  const HISTORY_DEBOUNCE_MS = 500;
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
 
   // Tooltip estilo Word: nome da ferramenta + mini descrição, aparecendo com
@@ -15341,7 +15881,23 @@ function WordEditor({ doc, onClose, onSave }) {
     setPageColor(pageMetaEl?.dataset.pagecolor || "");
     setPageBorder(pageMetaEl?.dataset.pageborder || "none");
     setWatermarkText(pageMetaEl?.dataset.watermark || "");
+    setTrackChanges(pageMetaEl?.dataset.trackchanges === "1");
+    setShowChangesMarkup(pageMetaEl?.dataset.showchanges !== "0");
+    setDocLanguage(pageMetaEl?.dataset.lang || null);
+    setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
+    try { setRecipients(pageMetaEl?.dataset.recipients ? JSON.parse(pageMetaEl.dataset.recipients) : null); } catch { setRecipients(null); }
+    setMergePreview(false);
+    setMergeIndex(0);
+    historyRef.current = [];
+    redoStackRef.current = [];
+    historyBaselineRef.current = doc.content || "";
+    clearTimeout(historyTimer.current);
+    setSelectedImg(null);
+    setActiveCell(null);
+    setSelectedShape(null);
+    setCropDialogOpen(false);
+    refreshNavHeadings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
 
@@ -15362,6 +15918,107 @@ function WordEditor({ doc, onClose, onSave }) {
     const html = bodyRef.current?.innerHTML || "";
     setWordCount(countWords(html));
     scheduleSave({ content: html });
+    refreshNavHeadings();
+    clearTimeout(historyTimer.current);
+    historyTimer.current = setTimeout(commitHistoryCheckpoint, HISTORY_DEBOUNCE_MS);
+  };
+
+  // Painel de Navegação > Títulos — refeito a cada edição, igual à
+  // contagem de palavras logo acima.
+  const refreshNavHeadings = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const heads = Array.from(el.querySelectorAll("h1, h2, h3")).map(h => ({
+      el: h, level: h.tagName === "H1" ? 1 : h.tagName === "H2" ? 2 : 3, text: h.textContent.trim(),
+    }));
+    setNavHeadings(heads);
+  };
+  const jumpToHeading = (el) => { el.scrollIntoView({ block: "start", behavior: "smooth" }); };
+  // Constrói um trechinho de contexto ao redor do resultado da busca, já
+  // que o <mark> em si só guarda o texto encontrado, sem o que vem ao redor.
+  const matchSnippet = (mark) => {
+    const full = mark.parentElement?.textContent || mark.textContent || "";
+    const needle = mark.textContent || "";
+    const idx = full.indexOf(needle);
+    if (idx === -1) return needle;
+    const start = Math.max(0, idx - 20), end = Math.min(full.length, idx + needle.length + 20);
+    return (start > 0 ? "…" : "") + full.slice(start, end) + (end < full.length ? "…" : "");
+  };
+
+  // Fecha o "passo" de undo atual: empilha o estado anterior (baseline) e
+  // adota o HTML de agora como novo baseline. Chamado após uma pausa na
+  // digitação/formatação, então uma sequência de teclas vira um único
+  // "Ctrl+Z", como no Word — e limpa o redo, já que uma edição nova invalida
+  // o que tinha sido desfeito antes.
+  const commitHistoryCheckpoint = () => {
+    const html = bodyRef.current?.innerHTML || "";
+    if (html === historyBaselineRef.current) return;
+    historyRef.current.push(historyBaselineRef.current);
+    if (historyRef.current.length > HISTORY_LIMIT) historyRef.current.shift();
+    historyBaselineRef.current = html;
+    redoStackRef.current = [];
+  };
+
+  const placeCaretAtEnd = (el) => {
+    if (!el) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
+  const restoreHtml = (html) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setSelectedImg(null);
+    setActiveCell(null);
+    setSelectedShape(null);
+    el.innerHTML = html;
+    placeCaretAtEnd(el);
+    handleBodyInput();
+  };
+
+  const undo = () => {
+    clearTimeout(historyTimer.current);
+    const current = bodyRef.current?.innerHTML || "";
+    // Ainda há alterações não "fechadas" desde o último checkpoint (o
+    // usuário parou de digitar há menos de HISTORY_DEBOUNCE_MS) — o
+    // primeiro Ctrl+Z desfaz só isso, voltando ao baseline.
+    if (current !== historyBaselineRef.current) {
+      redoStackRef.current.push(current);
+      restoreHtml(historyBaselineRef.current);
+      return;
+    }
+    if (!historyRef.current.length) return;
+    redoStackRef.current.push(historyBaselineRef.current);
+    historyBaselineRef.current = historyRef.current.pop();
+    restoreHtml(historyBaselineRef.current);
+  };
+
+  const redo = () => {
+    clearTimeout(historyTimer.current);
+    if (!redoStackRef.current.length) return;
+    historyRef.current.push(historyBaselineRef.current);
+    historyBaselineRef.current = redoStackRef.current.pop();
+    restoreHtml(historyBaselineRef.current);
+  };
+
+  const handleEditorKeyDown = (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+      return;
+    }
+    if (mod && !e.altKey && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      redo();
+      return;
+    }
+    fmt.handleBodyKeyDown(e);
   };
 
   // ---- aba "Design" — grava tema/marca d'água/cor e borda de página num
@@ -15390,6 +16047,896 @@ function WordEditor({ doc, onClose, onSave }) {
     const v = prompt("Texto da marca d'água:", watermarkText || "");
     if (v === null) return;
     applyWatermark(v.trim());
+  };
+
+  // ---- aba "Correspondências" -------------------------------------------
+  const parseRecipientsCsv = (text) => {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return null;
+    const delim = lines[0].includes("\t") ? "\t" : ",";
+    const [headerLine, ...rowLines] = lines;
+    const headers = headerLine.split(delim).map(h => h.trim()).filter(Boolean);
+    if (!headers.length) return null;
+    const rows = rowLines.map(l => l.split(delim).map(c => c.trim()));
+    return { headers, rows };
+  };
+  const recipientsToCsv = (r) => !r ? "" : [r.headers.join(","), ...r.rows.map(row => row.join(","))].join("\n");
+  const openRecipientsDialog = () => { setRecipientsDraft(recipientsToCsv(recipients)); setRecipientsDialogOpen(true); };
+  const saveRecipients = () => {
+    const parsed = parseRecipientsCsv(recipientsDraft);
+    setRecipients(parsed);
+    persistPageMeta({ recipients: parsed ? JSON.stringify(parsed) : "" });
+    setMergePreview(false);
+    setMergeIndex(0);
+    setRecipientsDialogOpen(false);
+  };
+
+  const insertMergeField = (header) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount) return;
+    el.focus();
+    const span = document.createElement("span");
+    span.className = "word-mergefield";
+    span.contentEditable = "false";
+    span.dataset.field = header;
+    span.textContent = `«${header}»`;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(span);
+    range.setStartAfter(span);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setInsertFieldOpen(false);
+    handleBodyInput();
+  };
+
+  // "Visualizar Resultados": troca o texto exibido dos campos entre
+  // «Campo» (código) e o valor do destinatário atual, sem mexer no
+  // data-field (que guarda o nome de verdade do campo).
+  const refreshMergeFieldsDisplay = (preview, index) => {
+    const el = bodyRef.current;
+    if (!el || !recipients) return;
+    const row = recipients.rows[index] || [];
+    el.querySelectorAll(".word-mergefield").forEach(span => {
+      const field = span.dataset.field;
+      const col = recipients.headers.indexOf(field);
+      span.textContent = preview ? (col >= 0 ? (row[col] || "") : `«${field}»`) : `«${field}»`;
+    });
+  };
+  const toggleMergePreview = () => {
+    if (!recipients || !recipients.rows.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
+    const next = !mergePreview;
+    setMergePreview(next);
+    refreshMergeFieldsDisplay(next, mergeIndex);
+    handleBodyInput();
+  };
+  const navigateMergeRecord = (dir) => {
+    if (!recipients || !recipients.rows.length) return;
+    const next = (mergeIndex + dir + recipients.rows.length) % recipients.rows.length;
+    setMergeIndex(next);
+    if (mergePreview) { refreshMergeFieldsDisplay(true, next); handleBodyInput(); }
+  };
+
+  // "Concluir e Mesclar": gera um arquivo por destinatário, substituindo os
+  // campos pelo valor de cada linha (reaproveita downloadWordDocx/PDF, sem
+  // precisar de nenhuma biblioteca nova pra juntar tudo num zip).
+  const finishMerge = async (kind) => {
+    if (!recipients || !recipients.rows.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
+    if (!bodyRef.current?.querySelector(".word-mergefield")) { alert("Insira ao menos um campo de mesclagem no documento (Correspondências > Inserir Campo)."); return; }
+    for (let i = 0; i < recipients.rows.length; i++) {
+      const row = recipients.rows[i];
+      const div = document.createElement("div");
+      div.innerHTML = bodyRef.current.innerHTML;
+      div.querySelectorAll(".word-mergefield").forEach(span => {
+        const col = recipients.headers.indexOf(span.dataset.field);
+        span.replaceWith(document.createTextNode(col >= 0 ? (row[col] || "") : ""));
+      });
+      const nameCol = recipients.headers.findIndex(h => /nome|name/i.test(h));
+      const suffix = row[nameCol >= 0 ? nameCol : 0] || String(i + 1);
+      const merged = { title: `${title.trim() || "Documento"} - ${suffix}`, content: div.innerHTML, page_size: pageSize, orientation, margins, margin_left: marginLeftCm, margin_right: marginRightCm };
+      if (kind === "docx") downloadWordDocx(merged); else downloadWordPdf(merged);
+      // pequeno intervalo entre downloads — vários de uma vez, disparados no
+      // mesmo instante, costumam ser bloqueados pelo navegador.
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(res => setTimeout(res, 400));
+    }
+  };
+
+  // ---- Cartas / Envelopes / Etiquetas — modelos prontos pra começar uma
+  // mala direta, usando campo de mesclagem quando já há destinatários.
+  const mergeFieldSpanHtml = (header, placeholder) => header
+    ? `<span class="word-mergefield" contenteditable="false" data-field="${header}">«${header}»</span>`
+    : placeholder;
+  const guessField = (pattern) => recipients?.headers?.find(h => pattern.test(h)) || null;
+  const insertAtCursor = (html) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount) return;
+    el.focus();
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(range.createContextualFragment(html));
+    handleBodyInput();
+  };
+  const insertLetterTemplate = () => {
+    const nameField = guessField(/nome|name/i);
+    const addrField = guessField(/endere|address|cidade/i);
+    const name = mergeFieldSpanHtml(nameField, "[Nome do destinatário]");
+    insertAtCursor(`
+      <div style="text-align:right">${new Date().toLocaleDateString("pt-BR")}</div>
+      <div><br></div>
+      <div>${name}</div>
+      ${addrField ? `<div>${mergeFieldSpanHtml(addrField, "")}</div>` : ""}
+      <div><br></div>
+      <div>Prezado(a) ${name},</div>
+      <div><br></div>
+      <div>[Escreva aqui o corpo da carta.]</div>
+      <div><br></div>
+      <div>Atenciosamente,</div>
+      <div><br></div>
+      <div>[Seu nome]</div>
+    `);
+  };
+  const insertEnvelopeTemplate = () => {
+    const nameField = guessField(/nome|name/i);
+    const addrField = guessField(/endere|address|cidade/i);
+    insertAtCursor(`
+      <div class="word-envelope">
+        <div class="word-envelope-return">[Seu nome]<br>[Seu endereço]</div>
+        <div class="word-envelope-to">
+          ${mergeFieldSpanHtml(nameField, "[Nome do destinatário]")}<br>
+          ${mergeFieldSpanHtml(addrField, "[Endereço do destinatário]")}
+        </div>
+      </div>
+    `);
+  };
+  const insertLabelSheet = () => {
+    if (!recipients || !recipients.rows.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários) — as etiquetas já saem preenchidas, uma por destinatário."); return; }
+    const cols = 3;
+    const rowsCount = Math.ceil(recipients.rows.length / cols);
+    const esc = (s) => (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let rowsHtml = "";
+    for (let r = 0; r < rowsCount; r++) {
+      rowsHtml += "<tr>";
+      for (let c = 0; c < cols; c++) {
+        const row = recipients.rows[r * cols + c];
+        rowsHtml += `<td>${row ? row.map(esc).join("<br>") : ""}</td>`;
+      }
+      rowsHtml += "</tr>";
+    }
+    insertAtCursor(`<table class="word-table word-label-sheet">${rowsHtml}</table>`);
+  };
+
+  // ---- aba "Revisão" ---------------------------------------------------
+  const toggleTrackChanges = () => {
+    const next = !trackChanges;
+    setTrackChanges(next);
+    persistPageMeta({ trackchanges: next ? "1" : "" });
+  };
+  const toggleShowChangesMarkup = () => {
+    const next = !showChangesMarkup;
+    setShowChangesMarkup(next);
+    persistPageMeta({ showchanges: next ? "1" : "0" });
+  };
+  const applyDocLanguage = (code) => {
+    setDocLanguage(code);
+    persistPageMeta({ lang: code || "" });
+    setReviewLangOpen(false);
+  };
+  const toggleProtectDoc = () => {
+    if (!docProtected && !confirm("Bloquear a edição deste documento? Você pode desbloquear a qualquer momento pelo mesmo botão.")) return;
+    const next = !docProtected;
+    setDocProtected(next);
+    persistPageMeta({ protected: next ? "1" : "" });
+  };
+
+  // Encontra o <ins>/<del> de rastreamento mais próximo da seleção atual,
+  // usado por "Aceitar/Rejeitar esta alteração".
+  const closestChangeEl = () => {
+    const sel = window.getSelection();
+    const node = sel?.anchorNode;
+    if (!node || !bodyRef.current?.contains(node)) return null;
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    return el?.closest?.(".word-ins, .word-del") || null;
+  };
+  const unwrapEl = (el) => {
+    const parent = el.parentNode;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  };
+  const acceptChange = (el) => {
+    if (el.classList.contains("word-ins")) unwrapEl(el);
+    else el.remove();
+  };
+  const rejectChange = (el) => {
+    if (el.classList.contains("word-del")) unwrapEl(el);
+    else el.remove();
+  };
+  const acceptOneChange = () => {
+    const el = closestChangeEl();
+    if (!el) { alert("Coloque o cursor dentro de uma alteração marcada."); return; }
+    acceptChange(el);
+    handleBodyInput();
+    setAcceptMenuOpen(false);
+  };
+  const rejectOneChange = () => {
+    const el = closestChangeEl();
+    if (!el) { alert("Coloque o cursor dentro de uma alteração marcada."); return; }
+    rejectChange(el);
+    handleBodyInput();
+    setRejectMenuOpen(false);
+  };
+  const acceptAllChanges = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.querySelectorAll(".word-ins").forEach(unwrapEl);
+    el.querySelectorAll(".word-del").forEach(n => n.remove());
+    handleBodyInput();
+    setAcceptMenuOpen(false);
+  };
+  const rejectAllChanges = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.querySelectorAll(".word-del").forEach(unwrapEl);
+    el.querySelectorAll(".word-ins").forEach(n => n.remove());
+    handleBodyInput();
+    setRejectMenuOpen(false);
+  };
+
+  // Marca o caractere/trecho que seria removido em vez de apagá-lo de fato,
+  // exceto quando o próprio trecho já é uma inserção não aceita (aí some de
+  // verdade — desfazer sua própria digitação não é uma "alteração").
+  const trackedDelete = (forward) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) {
+      const insAncestor = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentElement?.closest(".word-ins")
+        : range.commonAncestorContainer.closest?.(".word-ins");
+      const wasFullyInsideIns = !!insAncestor;
+      const span = document.createElement("span");
+      span.className = "word-del";
+      try { span.appendChild(range.extractContents()); } catch { return; }
+      if (!wasFullyInsideIns) {
+        range.insertNode(span);
+      }
+      // Se estava dentro de uma inserção ainda não aceita, o trecho já saiu
+      // do documento com o extractContents() acima — não reinserimos nada,
+      // porque desfazer sua própria digitação não é uma "alteração".
+      sel.removeAllRanges();
+      const after = document.createRange();
+      after.setStartAfter(span.parentNode ? span : range.startContainer);
+      after.collapse(true);
+      sel.addRange(after);
+      handleBodyInput();
+      return;
+    }
+    // Seleção colapsada: expande um caractere na direção do backspace/delete.
+    const charRange = range.cloneRange();
+    try {
+      if (forward) charRange.setEnd(charRange.endContainer, Math.min(charRange.endOffset + 1, charRange.endContainer.length ?? charRange.endOffset + 1));
+      else charRange.setStart(charRange.startContainer, Math.max(charRange.startOffset - 1, 0));
+    } catch { return; }
+    if (charRange.collapsed) return;
+    const insAncestor = charRange.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? charRange.commonAncestorContainer.parentElement?.closest(".word-ins")
+      : charRange.commonAncestorContainer.closest?.(".word-ins");
+    if (insAncestor) {
+      charRange.deleteContents();
+      if (!insAncestor.textContent) unwrapEl(insAncestor);
+    } else {
+      const span = document.createElement("span");
+      span.className = "word-del";
+      span.appendChild(charRange.extractContents());
+      charRange.insertNode(span);
+      const after = document.createRange();
+      if (forward) after.setStartBefore(span); else after.setStartAfter(span);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+    }
+    handleBodyInput();
+  };
+
+  // Digitar com "Controlar Alterações" ligado: o 1º caractere de uma
+  // inserção nova abre um <ins>; os próximos, com o cursor já dentro dele,
+  // seguem digitando normalmente (o navegador insere dentro do próprio
+  // span), sem precisar interceptar cada tecla.
+  const trackedInsertChar = (ch) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) range.deleteContents();
+    const span = document.createElement("span");
+    span.className = "word-ins";
+    span.textContent = ch;
+    range.insertNode(span);
+    const after = document.createRange();
+    after.setStart(span.firstChild, span.firstChild.length);
+    after.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(after);
+  };
+  const caretInsSpan = () => {
+    const sel = window.getSelection();
+    const node = sel?.anchorNode;
+    if (!node || !bodyRef.current?.contains(node)) return null;
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    return el?.closest?.(".word-ins") || null;
+  };
+  const handleTrackedBeforeInput = (e) => {
+    if (!trackChanges) return;
+    const t = e.inputType || "";
+    if (t.startsWith("delete")) {
+      e.preventDefault();
+      trackedDelete(t === "deleteContentForward" || t === "deleteWordForward");
+      return;
+    }
+    if (t === "insertText" && e.data && !caretInsSpan()) {
+      e.preventDefault();
+      trackedInsertChar(e.data);
+      handleBodyInput();
+    }
+    // Outras entradas (colar, quebra de parágrafo, dentro de um <ins> já
+    // aberto, etc.) seguem o comportamento normal do editor.
+  };
+
+  // ---- tradução do trecho selecionado (aba Revisão > Traduzir), reusa a
+  // mesma edge function já usada nas sugestões de tradução dos flashcards.
+  const openTranslatePopover = async () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !bodyRef.current?.contains(sel.anchorNode)) {
+      alert("Selecione um trecho de texto para traduzir.");
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const text = range.toString().trim();
+    if (!text) return;
+    const r = range.getBoundingClientRect();
+    setTranslatePopover({ range, text, x: Math.min(Math.max(8, r.left), window.innerWidth - 280), y: r.bottom + 8, suggestions: [], loading: true });
+    const targetName = docLanguage && docLanguage !== "pt" ? languageName(docLanguage) : "English";
+    const suggestions = await fetchTranslationSuggestions(text, "Portuguese", targetName);
+    setTranslatePopover(p => (p ? { ...p, suggestions, loading: false } : p));
+  };
+  const applyTranslation = (text) => {
+    const el = bodyRef.current;
+    if (!el || !translatePopover) return;
+    el.focus();
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(translatePopover.range);
+    document.execCommand("insertText", false, text);
+    setTranslatePopover(null);
+    handleBodyInput();
+  };
+
+  // ---- Revisão > Comparar Documentos — diff palavra-a-palavra com outro
+  // documento Word já salvo (lista/conteúdo vêm de WordDocs via props).
+  const runCompare = async () => {
+    if (!compareTargetId) return;
+    setCompareResult("loading");
+    const otherContent = await onFetchDocContent?.(compareTargetId);
+    const otherTitle = docsList?.find(d => d.id === compareTargetId)?.title || "Documento sem título";
+    const tokenize = (t) => t.split(/(\s+)/).filter(Boolean);
+    const diff = diffWords(tokenize(stripHtml(bodyRef.current?.innerHTML || "")), tokenize(stripHtml(otherContent || "")));
+    setCompareResult({ diff, otherTitle });
+  };
+  const saveCompareAsDocument = () => {
+    if (!compareResult || compareResult === "loading") return;
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = compareResult.diff.map((part) => {
+      if (part.type === "del") return `<span class="word-del">${esc(part.text)}</span>`;
+      if (part.type === "ins") return `<span class="word-ins">${esc(part.text)}</span>`;
+      return esc(part.text);
+    }).join("");
+    onSaveAs?.(`Comparação: ${title.trim() || "Documento"} × ${compareResult.otherTitle}`, `<div>${html}</div>`, { page_size: pageSize, orientation, margins });
+    setCompareDialogOpen(false);
+    setCompareResult(null);
+  };
+
+  // ---- guias contextuais: destaca visualmente o elemento selecionado
+  // (a imagem/tabela em si não é controlada pelo React, então marcamos a
+  // classe direto no DOM sempre que a seleção muda).
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.querySelectorAll("img.word-img-selected").forEach(n => n.classList.remove("word-img-selected"));
+    if (selectedImg) selectedImg.classList.add("word-img-selected");
+  }, [selectedImg]);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.querySelectorAll(".word-cell-active").forEach(n => n.classList.remove("word-cell-active"));
+    if (activeCell) activeCell.classList.add("word-cell-active");
+  }, [activeCell]);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.querySelectorAll(".word-shape-selected").forEach(n => n.classList.remove("word-shape-selected"));
+    if (selectedShape) selectedShape.classList.add("word-shape-selected");
+  }, [selectedShape]);
+
+  // Se a imagem/tabela/forma some (por exemplo, foi excluída) enquanto a aba
+  // contextual dela está aberta, volta pra "Página Inicial".
+  useEffect(() => {
+    if (!selectedImg && ribbonTab === "pictureformat") setRibbonTab("home");
+    if (!activeCell && (ribbonTab === "tabledesign" || ribbonTab === "tablelayout")) setRibbonTab("home");
+    if (!selectedShape && ribbonTab === "shapeformat") setRibbonTab("home");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImg, activeCell, selectedShape]);
+
+  const handleContentSelectionClick = (e) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const shape = e.target.closest?.(".word-shape");
+    if (shape && el.contains(shape)) {
+      const isNew = selectedShape !== shape;
+      setSelectedShape(shape);
+      setSelectedImg(null);
+      setActiveCell(null);
+      if (isNew) setRibbonTab("shapeformat");
+      return;
+    }
+    if (e.target.tagName === "IMG" && el.contains(e.target)) {
+      const isNew = selectedImg !== e.target;
+      setSelectedImg(e.target);
+      setActiveCell(null);
+      setSelectedShape(null);
+      if (isNew) setRibbonTab("pictureformat");
+      return;
+    }
+    const cell = e.target.closest?.("td, th");
+    if (cell && el.contains(cell)) {
+      const isNewTable = !activeCell || activeCell.closest("table") !== cell.closest("table");
+      setActiveCell(cell);
+      setSelectedImg(null);
+      setSelectedShape(null);
+      if (isNewTable) setRibbonTab(tableSubTab === "layout" ? "tablelayout" : "tabledesign");
+      return;
+    }
+    setSelectedImg(null);
+    setActiveCell(null);
+    setSelectedShape(null);
+  };
+
+  // Igual ao clique, mas pra quando o cursor entra/sai de uma célula via
+  // teclado (setas) — assim a guia contextual da tabela segue o cursor.
+  const updateActiveCellFromCaret = () => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    const node = sel?.anchorNode;
+    if (!el || !node || !el.contains(node)) return;
+    const anchorEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    const cell = anchorEl?.closest?.("td, th");
+    if (cell) {
+      const isNewTable = !activeCell || activeCell.closest("table") !== cell.closest("table");
+      setActiveCell(cell);
+      if (isNewTable) setRibbonTab(tableSubTab === "layout" ? "tablelayout" : "tabledesign");
+    } else if (activeCell) {
+      setActiveCell(null);
+    }
+  };
+
+  // ---- Formato da Imagem ------------------------------------------------
+  const imgSetWrap = (mode) => { // "inline" | "left" | "right"
+    if (!selectedImg) return;
+    if (mode === "inline") { selectedImg.style.float = ""; selectedImg.style.margin = ""; }
+    else { selectedImg.style.float = mode; selectedImg.style.margin = mode === "left" ? "0 12px 8px 0" : "0 0 8px 12px"; }
+    handleBodyInput();
+  };
+  const imgSetAlign = (align) => { // imagem em linha própria: esquerda/centro/direita
+    if (!selectedImg) return;
+    selectedImg.style.float = "";
+    selectedImg.style.display = "block";
+    selectedImg.style.margin = align === "center" ? "0 auto" : align === "right" ? "0 0 0 auto" : "0 auto 0 0";
+    handleBodyInput();
+  };
+  const imgSetSize = (pct) => {
+    if (!selectedImg) return;
+    selectedImg.style.width = pct === "original" ? "" : pct + "%";
+    selectedImg.style.height = pct === "original" ? "" : "auto";
+    handleBodyInput();
+  };
+  const imgRotate = (deg) => {
+    if (!selectedImg) return;
+    const next = ((parseInt(selectedImg.dataset.rotate || "0", 10) + deg) % 360 + 360) % 360;
+    selectedImg.dataset.rotate = String(next);
+    selectedImg.style.transform = next ? `rotate(${next}deg)` : "";
+    handleBodyInput();
+  };
+  const imgToggleBorder = () => {
+    if (!selectedImg) return;
+    selectedImg.classList.toggle("word-img-bordered");
+    handleBodyInput();
+  };
+  const IMG_CORRECTIONS = {
+    none: "", claro: "brightness(1.25)", escuro: "brightness(0.8)", contraste: "contrast(1.4)", suave: "contrast(0.85) brightness(1.05)",
+  };
+  const imgSetCorrection = (key) => {
+    if (!selectedImg) return;
+    selectedImg.style.filter = IMG_CORRECTIONS[key] || "";
+    selectedImg.dataset.correction = key;
+    handleBodyInput();
+  };
+  const imgSetOpacity = (value) => {
+    if (!selectedImg) return;
+    selectedImg.style.opacity = value === "100" ? "" : String(Number(value) / 100);
+    handleBodyInput();
+  };
+  const imgApplyCrop = (dataUrl) => {
+    if (!selectedImg) return;
+    selectedImg.src = dataUrl;
+    selectedImg.style.width = "";
+    selectedImg.style.height = "";
+    setCropDialogOpen(false);
+    handleBodyInput();
+  };
+  // Remove pixels parecidos com a cor dos 4 cantos da imagem (funciona bem
+  // com fundo liso de uma cor só — não é separação de objeto por IA, é
+  // comparação de cor com tolerância).
+  const imgRemoveBackground = () => {
+    if (!selectedImg) return;
+    const im = new Image();
+    im.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = im.naturalWidth;
+      canvas.height = im.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(im, 0, 0);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const px = data.data;
+      const corners = [[0, 0], [canvas.width - 1, 0], [0, canvas.height - 1], [canvas.width - 1, canvas.height - 1]];
+      let r = 0, g = 0, b = 0;
+      corners.forEach(([x, y]) => { const i = (y * canvas.width + x) * 4; r += px[i]; g += px[i + 1]; b += px[i + 2]; });
+      r /= 4; g /= 4; b /= 4;
+      const tolerance = 42;
+      for (let i = 0; i < px.length; i += 4) {
+        const dr = px[i] - r, dg = px[i + 1] - g, db = px[i + 2] - b;
+        if (Math.sqrt(dr * dr + dg * dg + db * db) < tolerance) px[i + 3] = 0;
+      }
+      ctx.putImageData(data, 0, 0);
+      selectedImg.src = canvas.toDataURL("image/png");
+      handleBodyInput();
+    };
+    im.src = selectedImg.src;
+  };
+  const imgDelete = () => {
+    if (!selectedImg) return;
+    selectedImg.remove();
+    setSelectedImg(null);
+    handleBodyInput();
+  };
+
+  // ---- Formas -------------------------------------------------------------
+  const SHAPE_PRESETS = [
+    { id: "rect", label: "Rectângulo", box: [120, 90], svg: (f, s) => `<rect x="4" y="4" width="92" height="92" fill="${f}" stroke="${s}" stroke-width="3"/>` },
+    { id: "roundrect", label: "Retângulo Arredondado", box: [120, 90], svg: (f, s) => `<rect x="4" y="4" width="92" height="92" rx="16" ry="16" fill="${f}" stroke="${s}" stroke-width="3"/>` },
+    { id: "ellipse", label: "Elipse", box: [120, 90], svg: (f, s) => `<ellipse cx="50" cy="50" rx="46" ry="46" fill="${f}" stroke="${s}" stroke-width="3"/>` },
+    { id: "triangle", label: "Triângulo", box: [120, 100], svg: (f, s) => `<polygon points="50,4 96,96 4,96" fill="${f}" stroke="${s}" stroke-width="3"/>` },
+    { id: "arrow", label: "Seta", box: [160, 60], viewBox: "0 0 100 70", svg: (f, s) => `<polygon points="0,20 60,20 60,0 100,35 60,70 60,50 0,50" fill="${f}" stroke="${s}" stroke-width="2"/>` },
+    { id: "line", label: "Linha", box: [160, 40], viewBox: "0 0 100 70", svg: (f, s) => `<line x1="2" y1="35" x2="98" y2="35" stroke="${s}" stroke-width="4"/>` },
+    { id: "star", label: "Estrela", box: [120, 110], svg: (f, s) => `<polygon points="50,2 61,37 98,37 68,59 79,95 50,73 21,95 32,59 2,37 39,37" fill="${f}" stroke="${s}" stroke-width="2"/>` },
+  ];
+  const insertShape = (id) => {
+    const preset = SHAPE_PRESETS.find(p => p.id === id);
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!preset || !el || !sel || !sel.rangeCount) return;
+    el.focus();
+    const fill = "#5b9dff", stroke = "#1a1a1a";
+    const wrapper = document.createElement("span");
+    wrapper.className = "word-shape";
+    wrapper.contentEditable = "false";
+    wrapper.dataset.shape = id;
+    wrapper.dataset.fill = fill;
+    wrapper.dataset.stroke = stroke;
+    wrapper.style.width = preset.box[0] + "px";
+    wrapper.style.height = preset.box[1] + "px";
+    wrapper.innerHTML = `<svg viewBox="${preset.viewBox || "0 0 100 100"}" width="100%" height="100%" preserveAspectRatio="none">${preset.svg(fill, stroke)}</svg>`;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(wrapper);
+    range.setStartAfter(wrapper);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setShapesOpen(false);
+    handleBodyInput();
+  };
+  const shapeFillableEl = () => selectedShape?.querySelector("rect, ellipse, polygon");
+  const shapeSetFill = (color) => {
+    if (!selectedShape) return;
+    selectedShape.dataset.fill = color;
+    shapeFillableEl()?.setAttribute("fill", color);
+    handleBodyInput();
+  };
+  const shapeSetStroke = (color) => {
+    if (!selectedShape) return;
+    selectedShape.dataset.stroke = color;
+    selectedShape.querySelectorAll("rect, ellipse, polygon, line").forEach(n => n.setAttribute("stroke", color));
+    handleBodyInput();
+  };
+  const shapeSetWrap = (mode) => {
+    if (!selectedShape) return;
+    if (mode === "inline") { selectedShape.style.float = ""; selectedShape.style.margin = ""; }
+    else { selectedShape.style.float = mode; selectedShape.style.margin = mode === "left" ? "0 12px 8px 0" : "0 0 8px 12px"; }
+    handleBodyInput();
+  };
+  const shapeSetSize = (pct) => {
+    if (!selectedShape) return;
+    const base = SHAPE_PRESETS.find(p => p.id === selectedShape.dataset.shape)?.box || [120, 90];
+    const factor = pct === "original" ? 1 : pct / 100;
+    selectedShape.style.width = Math.round(base[0] * factor) + "px";
+    selectedShape.style.height = Math.round(base[1] * factor) + "px";
+    handleBodyInput();
+  };
+  const shapeRotate = (deg) => {
+    if (!selectedShape) return;
+    const next = ((parseInt(selectedShape.dataset.rotate || "0", 10) + deg) % 360 + 360) % 360;
+    selectedShape.dataset.rotate = String(next);
+    selectedShape.style.transform = next ? `rotate(${next}deg)` : "";
+    handleBodyInput();
+  };
+  const shapeDelete = () => {
+    if (!selectedShape) return;
+    selectedShape.remove();
+    setSelectedShape(null);
+    handleBodyInput();
+  };
+
+  // ---- WordArt (texto estilizado, continua sendo texto de verdade,
+  // editável como qualquer outro — só aplica uma classe de estilo visual) --
+  const WORDART_STYLES = [
+    { id: "classic", label: "Clássico", color: "#1d4ed8" },
+    { id: "outline", label: "Contorno", color: "#1a1a1a" },
+    { id: "shadow", label: "Sombra", color: "#1a1a1a" },
+    { id: "gold", label: "Dourado", color: "#b45309" },
+    { id: "red", label: "Vermelho", color: "#dc2626" },
+  ];
+  const insertWordArt = (styleId) => {
+    const text = prompt("Texto do WordArt:", "SEU TEXTO");
+    if (text === null || !text.trim()) return;
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount) return;
+    el.focus();
+    const preset = WORDART_STYLES.find(s => s.id === styleId);
+    const span = document.createElement("span");
+    span.className = "word-wordart word-wordart-" + styleId;
+    // além da classe (que cuida do efeito visual em tela — contorno/sombra),
+    // grava cor e peso da fonte como estilo inline pra exportação pro
+    // .docx/PDF (que só lê style inline) também sair colorida/em negrito.
+    // Exceção: no estilo "Contorno" a cor em tela é transparente (só o
+    // traço aparece) — não gravamos "color" inline pra não anular isso, e a
+    // exportação cai no preto padrão, já que .docx não tem texto "vazado".
+    if (styleId !== "outline") span.style.color = preset?.color || "#1a1a1a";
+    span.style.fontWeight = "800";
+    span.style.fontSize = "22px";
+    span.textContent = text.trim();
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(span);
+    range.setStartAfter(span);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setWordArtOpen(false);
+    handleBodyInput();
+  };
+
+  // ---- SmartArt (modelos prontos de diagrama; o texto de cada caixa é
+  // editável de verdade, mas a estrutura — quantas caixas, layout — é fixa;
+  // não há reorganização automática ao adicionar/remover itens, como no
+  // Word real) ---------------------------------------------------------
+  const SMARTART_TEMPLATES = {
+    lista: () => `<div class="word-smartart word-smartart-lista" contenteditable="false">
+        <div class="word-smartart-box" contenteditable="true">Primeiro item</div>
+        <div class="word-smartart-box" contenteditable="true">Segundo item</div>
+        <div class="word-smartart-box" contenteditable="true">Terceiro item</div>
+      </div>`,
+    processo: () => `<div class="word-smartart word-smartart-processo" contenteditable="false">
+        <div class="word-smartart-box" contenteditable="true">Etapa 1</div>
+        <span class="word-smartart-arrow">→</span>
+        <div class="word-smartart-box" contenteditable="true">Etapa 2</div>
+        <span class="word-smartart-arrow">→</span>
+        <div class="word-smartart-box" contenteditable="true">Etapa 3</div>
+      </div>`,
+    hierarquia: () => `<div class="word-smartart word-smartart-hierarquia" contenteditable="false">
+        <div class="word-smartart-box word-smartart-top" contenteditable="true">Nível 1</div>
+        <div class="word-smartart-row">
+          <div class="word-smartart-box" contenteditable="true">Nível 2a</div>
+          <div class="word-smartart-box" contenteditable="true">Nível 2b</div>
+          <div class="word-smartart-box" contenteditable="true">Nível 2c</div>
+        </div>
+      </div>`,
+  };
+  const insertSmartArt = (type) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    const build = SMARTART_TEMPLATES[type];
+    if (!el || !sel || !sel.rangeCount || !build) return;
+    el.focus();
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(range.createContextualFragment(build()));
+    setSmartArtOpen(false);
+    handleBodyInput();
+  };
+
+  // ---- Design/Layout da Tabela ------------------------------------------
+  const cellIndex = (cell) => Array.from(cell.parentNode.children).indexOf(cell);
+  const tableInsertRow = (below) => {
+    if (!activeCell) return;
+    const row = activeCell.parentNode;
+    const newRow = document.createElement("tr");
+    for (let i = 0; i < row.children.length; i++) { const td = document.createElement("td"); td.innerHTML = "<br>"; newRow.appendChild(td); }
+    below ? row.after(newRow) : row.before(newRow);
+    handleBodyInput();
+  };
+  const tableInsertCol = (right) => {
+    if (!activeCell) return;
+    const table = activeCell.closest("table");
+    const idx = cellIndex(activeCell);
+    Array.from(table.rows).forEach(row => {
+      const ref = row.children[idx];
+      const td = document.createElement(ref?.tagName === "TH" ? "th" : "td");
+      td.innerHTML = "<br>";
+      if (!ref) row.appendChild(td);
+      else right ? ref.after(td) : ref.before(td);
+    });
+    handleBodyInput();
+  };
+  const tableDeleteTable = () => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    table.remove();
+    setActiveCell(null);
+    handleBodyInput();
+  };
+  const tableDeleteRow = () => {
+    if (!activeCell) return;
+    const row = activeCell.parentNode;
+    const table = row.closest("table");
+    if (table.rows.length <= 1) return tableDeleteTable();
+    row.remove();
+    setActiveCell(null);
+    handleBodyInput();
+  };
+  const tableDeleteCol = () => {
+    if (!activeCell) return;
+    const table = activeCell.closest("table");
+    const idx = cellIndex(activeCell);
+    if (table.rows[0].children.length <= 1) return tableDeleteTable();
+    Array.from(table.rows).forEach(row => row.children[idx]?.remove());
+    setActiveCell(null);
+    handleBodyInput();
+  };
+  const tableMergeRight = () => {
+    if (!activeCell) return;
+    const next = activeCell.nextElementSibling;
+    if (!next || !["TD", "TH"].includes(next.tagName)) { alert("Não há célula à direita, na mesma linha, para mesclar."); return; }
+    const span = (parseInt(activeCell.getAttribute("colspan") || "1", 10)) + (parseInt(next.getAttribute("colspan") || "1", 10));
+    activeCell.setAttribute("colspan", String(span));
+    if (next.textContent.trim()) activeCell.innerHTML = activeCell.innerHTML.replace(/<br>\s*$/, "") + next.innerHTML;
+    next.remove();
+    handleBodyInput();
+  };
+  const tableSetVAlign = (v) => { if (activeCell) { activeCell.style.verticalAlign = v; handleBodyInput(); } };
+  const tableSetStyle = (style) => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    table.classList.remove("word-table-style-plain", "word-table-style-striped", "word-table-style-strong");
+    table.classList.add("word-table-style-" + style);
+    handleBodyInput();
+  };
+  const tableToggleBorders = () => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    table.classList.toggle("word-table-noborder");
+    handleBodyInput();
+  };
+  const tableSetShading = (color) => { if (activeCell) { activeCell.style.backgroundColor = color; handleBodyInput(); } };
+
+  // ---- tabelas avançadas: dividir célula, bordas por célula, largura
+  // automática, repetir cabeçalho, converter texto ↔ tabela -------------
+  const tableSplitCell = () => {
+    if (!activeCell) return;
+    const span = parseInt(activeCell.getAttribute("colspan") || "1", 10);
+    if (span <= 1) { alert("Esta célula não está mesclada — não há o que dividir."); return; }
+    activeCell.removeAttribute("colspan");
+    for (let i = 1; i < span; i++) {
+      const td = document.createElement(activeCell.tagName.toLowerCase());
+      td.innerHTML = "<br>";
+      activeCell.after(td);
+    }
+    handleBodyInput();
+  };
+  const cellBorderToggle = (side) => {
+    if (!activeCell) return;
+    const prop = "border" + side; // Top | Right | Bottom | Left
+    activeCell.style[prop] = activeCell.style[prop] ? "" : "2px solid #1a1a1a";
+    handleBodyInput();
+  };
+  const tableSetAutoFit = () => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    table.classList.remove("word-table-fixed");
+    Array.from(table.querySelectorAll("td, th")).forEach(c => { c.style.width = ""; });
+    handleBodyInput();
+  };
+  const tableToggleRepeatHeader = () => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    table.classList.toggle("word-table-repeatheader");
+    handleBodyInput();
+  };
+  const convertTextToTable = () => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.isCollapsed || !el.contains(sel.anchorNode)) { alert("Selecione o texto que quer converter em tabela primeiro (uma linha por linha da tabela, células separadas por vírgula ou tab)."); return; }
+    const range = sel.getRangeAt(0);
+    const lines = range.toString().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return;
+    const delim = lines[0].includes("\t") ? "\t" : ",";
+    const table = document.createElement("table");
+    table.className = "word-table";
+    lines.forEach(line => {
+      const tr = document.createElement("tr");
+      line.split(delim).forEach(val => { const td = document.createElement("td"); td.textContent = val.trim(); tr.appendChild(td); });
+      table.appendChild(tr);
+    });
+    range.deleteContents();
+    range.insertNode(table);
+    handleBodyInput();
+  };
+  const convertTableToText = () => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    const divs = Array.from(table.rows).map(row => {
+      const d = document.createElement("div");
+      d.textContent = Array.from(row.children).map(c => c.textContent.trim()).join(", ");
+      return d;
+    });
+    table.replaceWith(...divs);
+    setActiveCell(null);
+    handleBodyInput();
+  };
+
+  // Redimensionar coluna arrastando perto da borda direita de uma célula —
+  // ao arrastar, a tabela passa a ter largura fixa (como no Word, mexer
+  // manualmente na largura tira do modo "largura automática").
+  const colResizeRef = useRef(null);
+  const handleTableResizeMouseDown = (e) => {
+    const cell = e.target.closest?.("td, th");
+    if (!cell || !bodyRef.current?.contains(cell)) return;
+    const rect = cell.getBoundingClientRect();
+    if (rect.right - e.clientX > 8) return;
+    const table = cell.closest("table");
+    const idx = cellIndex(cell);
+    e.preventDefault();
+    table.classList.add("word-table-fixed");
+    colResizeRef.current = { table, idx, startX: e.clientX, startWidth: rect.width };
+    const move = (ev) => {
+      const d = colResizeRef.current;
+      if (!d) return;
+      const newWidth = Math.max(30, d.startWidth + (ev.clientX - d.startX));
+      Array.from(d.table.rows).forEach(row => { const c = row.children[d.idx]; if (c) c.style.width = newWidth + "px"; });
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      colResizeRef.current = null;
+      handleBodyInput();
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
   };
 
   // ---- comentários (Inserir > Comentários) — a seleção vira um trecho
@@ -15439,6 +16986,22 @@ function WordEditor({ doc, onClose, onSave }) {
     setComments(next);
     persistPageMeta({ comments: JSON.stringify(next) });
     setCommentPopover(null);
+  };
+  // Aba Revisão > Comentário anterior/próximo — navega pelos marcadores na
+  // ordem em que aparecem no documento (não na ordem de criação).
+  const navigateComment = (dir) => {
+    const el = bodyRef.current;
+    const anchors = el ? Array.from(el.querySelectorAll(".word-comment-anchor")) : [];
+    if (!anchors.length) { alert("Não há comentários neste documento."); return; }
+    let idx = commentPopover ? anchors.findIndex(a => a.dataset.cid === commentPopover.id) : -1;
+    idx = (idx + dir + anchors.length) % anchors.length;
+    const anchor = anchors[idx];
+    anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+    openCommentPopover(anchor);
+  };
+  const deleteCurrentComment = () => {
+    if (!commentPopover) { alert("Abra um comentário (clique nele no texto) para excluí-lo."); return; }
+    deleteComment(commentPopover.id);
   };
   const currentTheme = WORD_THEMES.find(t => t.key === themeKey) || WORD_THEMES[0];
   const pageBorderStyle = (key) => {
@@ -15512,17 +17075,57 @@ function WordEditor({ doc, onClose, onSave }) {
     setZoom(Math.max(50, Math.min(200, Math.round((avail / h) * 100))));
   };
 
-  const handleClose = () => {
+  // Patch completo do estado atual do documento — usado tanto pra fechar
+  // quanto pra "Salvar"/"Novo"/"Salvar como" na aba Arquivo, sem duplicar a
+  // montagem do objeto em cada ação.
+  const currentPatch = () => ({
+    title: title.trim() || "Documento sem título",
+    content: bodyRef.current?.innerHTML || "",
+    page_size: pageSize, orientation, margins,
+    margin_left: marginLeftCm, margin_right: marginRightCm,
+  });
+
+  const flushSave = () => {
     clearTimeout(saveTimer.current);
-    onSave({
-      title: title.trim() || "Documento sem título",
-      content: bodyRef.current?.innerHTML || "",
-      page_size: pageSize, orientation, margins,
-      margin_left: marginLeftCm, margin_right: marginRightCm,
-    });
+    onSave(currentPatch());
+  };
+
+  const handleClose = () => {
+    flushSave();
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     onClose();
   };
+
+  const closeFileMenu = () => setFileMenuOpen(false);
+  const openFileMenu = (section = "info") => { setFileMenuSection(section); setFileMenuOpen(true); };
+
+  const fileMenuNew = () => { flushSave(); onNew?.(); closeFileMenu(); };
+  const fileMenuSave = () => { flushSave(); setJustSaved(true); clearTimeout(saveTimer.current); setTimeout(() => setJustSaved(false), 1800); };
+  const fileMenuSaveAs = () => {
+    const suggested = (title.trim() || "Documento sem título") + " (cópia)";
+    const newTitle = prompt("Salvar como (novo documento):", suggested);
+    if (newTitle === null || !newTitle.trim()) return;
+    flushSave();
+    onSaveAs?.(newTitle.trim(), bodyRef.current?.innerHTML || "", { page_size: pageSize, orientation, margins });
+    closeFileMenu();
+  };
+  const fileMenuExport = (kind) => {
+    if (kind === "docx") downloadWordDocx(currentDocForExport());
+    else downloadWordPdf(currentDocForExport());
+  };
+  const fileMenuPrint = () => { closeFileMenu(); setTimeout(() => window.print(), 50); };
+  const fileMenuShare = async () => {
+    const text = stripHtml(bodyRef.current?.innerHTML || "").trim().slice(0, 500);
+    if (navigator.share) {
+      try { await navigator.share({ title: title.trim() || "Documento sem título", text }); }
+      catch { /* usuário cancelou o compartilhamento — nada a fazer */ }
+    } else {
+      try { await navigator.clipboard.writeText(text); alert("Este navegador não tem compartilhamento nativo. O texto do documento foi copiado."); }
+      catch { alert("Compartilhamento não é suportado neste navegador."); }
+    }
+  };
+  const fileMenuRename = () => { closeFileMenu(); setTimeout(() => titleInputRef.current?.select(), 50); };
+  const fileMenuSettings = () => { setRibbonTab("layout"); closeFileMenu(); };
 
   const handleImagePick = (e) => {
     const file = e.target.files?.[0];
@@ -15531,6 +17134,17 @@ function WordEditor({ doc, onClose, onSave }) {
   };
 
   const currentDocForExport = () => ({ title, content: bodyRef.current?.innerHTML || "", page_size: pageSize, orientation, margins, margin_left: marginLeftCm, margin_right: marginRightCm });
+
+  // Aba Revisão > Contagem de Palavras (diálogo completo, como no Word) —
+  // reaproveita o "words/chars" já mantido pela barra de status e só
+  // calcula parágrafos/caracteres-sem-espaço na hora de abrir o diálogo.
+  const wordCountStats = () => {
+    const div = document.createElement("div");
+    div.innerHTML = bodyRef.current?.innerHTML || "";
+    const text = div.textContent || "";
+    const paragraphs = Array.from(div.querySelectorAll("p, div, h1, h2, h3, li")).filter(n => (n.textContent || "").trim()).length;
+    return { ...wordCount, charsNoSpace: text.replace(/\s/g, "").length, paragraphs: paragraphs || (text.trim() ? 1 : 0) };
+  };
 
   return (
     <div className="readerBack">
@@ -15542,7 +17156,11 @@ function WordEditor({ doc, onClose, onSave }) {
         onMouseDown={(e) => { dismissRibbonTip(); if (!e.target.closest?.(".wordCommentPopover")) setCommentPopover(null); }}
       >
         <div className="readerHead">
-          <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
+          <div className="wordUndoRedoGroup">
+            <button data-tip="Desfazer" data-tipdesc="Desfaz a última alteração (Ctrl+Z)." onClick={undo}><Undo2 size={16}/></button>
+            <button data-tip="Refazer" data-tipdesc="Refaz a alteração desfeita (Ctrl+Y)." onClick={redo}><Redo2 size={16}/></button>
+          </div>
+          <input ref={titleInputRef} className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
           <div className="readerHeadActions">
             <div className="wordExportWrap">
               <button className="ghost" onClick={() => setExportOpen(o => !o)}><Download size={15}/> <span>Baixar</span></button>
@@ -15560,13 +17178,64 @@ function WordEditor({ doc, onClose, onSave }) {
         </div>
 
         <div className="wordRibbonTabs">
+          <button className={"wordFileTab" + (fileMenuOpen ? " active" : "")} onClick={() => openFileMenu("info")}>Arquivo</button>
           <button className={ribbonTab === "home" ? "active" : ""} onClick={() => setRibbonTab("home")}>Página Inicial</button>
           <button className={ribbonTab === "insert" ? "active" : ""} onClick={() => setRibbonTab("insert")}>Inserir</button>
+          <button className={ribbonTab === "draw" ? "active" : ""} onClick={() => setRibbonTab("draw")}>Desenhar</button>
           <button className={ribbonTab === "design" ? "active" : ""} onClick={() => setRibbonTab("design")}>Design</button>
           <button className={ribbonTab === "layout" ? "active" : ""} onClick={() => setRibbonTab("layout")}>Layout</button>
           <button className={ribbonTab === "references" ? "active" : ""} onClick={() => setRibbonTab("references")}>Referências</button>
+          <button className={ribbonTab === "mailings" ? "active" : ""} onClick={() => setRibbonTab("mailings")}>Correspondências</button>
+          <button className={ribbonTab === "review" ? "active" : ""} onClick={() => setRibbonTab("review")}>Revisão</button>
           <button className={ribbonTab === "view" ? "active" : ""} onClick={() => setRibbonTab("view")}>Exibir</button>
+          {selectedImg && (
+            <button className={"wordContextTab" + (ribbonTab === "pictureformat" ? " active" : "")} onClick={() => setRibbonTab("pictureformat")}>Formato da Imagem</button>
+          )}
+          {selectedShape && (
+            <button className={"wordContextTab" + (ribbonTab === "shapeformat" ? " active" : "")} onClick={() => setRibbonTab("shapeformat")}>Formato da Forma</button>
+          )}
+          {activeCell && (<>
+            <button className={"wordContextTab" + (ribbonTab === "tabledesign" ? " active" : "")} onClick={() => { setTableSubTab("design"); setRibbonTab("tabledesign"); }}>Design da Tabela</button>
+            <button className={"wordContextTab" + (ribbonTab === "tablelayout" ? " active" : "")} onClick={() => { setTableSubTab("layout"); setRibbonTab("tablelayout"); }}>Layout da Tabela</button>
+          </>)}
         </div>
+
+        {fileMenuOpen && (
+          <div className="wordBackstage">
+            <div className="wordBackstageNav">
+              <button className="wordBackstageBack" onClick={closeFileMenu}><ArrowLeft size={16}/> Voltar</button>
+              <button className={fileMenuSection === "info" ? "active" : ""} onClick={() => setFileMenuSection("info")}><Info size={15}/> Informações</button>
+              <button onClick={fileMenuNew}><Plus size={15}/> Novo</button>
+              <button onClick={handleClose}><Folder size={15}/> Abrir</button>
+              <button onClick={fileMenuSave}><Download size={15}/> Salvar</button>
+              <button className={fileMenuSection === "saveas" ? "active" : ""} onClick={fileMenuSaveAs}><FileDown size={15}/> Salvar como</button>
+              <button className={fileMenuSection === "export" ? "active" : ""} onClick={() => setFileMenuSection("export")}><FileType2 size={15}/> Exportar</button>
+              <button onClick={fileMenuPrint}><Printer size={15}/> Imprimir</button>
+              <button onClick={fileMenuShare}><Share2 size={15}/> Compartilhar</button>
+              <button onClick={fileMenuRename}><Pencil size={15}/> Renomear</button>
+              <button onClick={fileMenuSettings}><Settings size={15}/> Configurações</button>
+              <button className="danger" onClick={handleClose}><X size={15}/> Fechar documento</button>
+            </div>
+            <div className="wordBackstagePanel">
+              {fileMenuSection === "export" ? (<>
+                <h3>Exportar</h3>
+                <p className="wordBackstageHint">Baixa uma cópia deste documento no formato escolhido.</p>
+                <button className="wordBackstageBig" onClick={() => fileMenuExport("docx")}><FileType2 size={20}/> <div><b>Word (.docx)</b><span>Mantém formatação, tabelas e imagens.</span></div></button>
+                <button className="wordBackstageBig" onClick={() => fileMenuExport("pdf")}><FileDown size={20}/> <div><b>PDF</b><span>Pronto para leitura e impressão.</span></div></button>
+              </>) : (<>
+                <h3>Informações</h3>
+                <div className="wordBackstageInfoRow"><span>Título</span><b>{title.trim() || "Documento sem título"}</b></div>
+                <div className="wordBackstageInfoRow"><span>Palavras</span><b>{wordCount.words}</b></div>
+                <div className="wordBackstageInfoRow"><span>Caracteres</span><b>{wordCount.chars}</b></div>
+                <div className="wordBackstageInfoRow"><span>Tamanho da página</span><b>{pageSize === "carta" ? "Carta" : "A4"} · {orientation === "paisagem" ? "Paisagem" : "Retrato"}</b></div>
+                <div className="wordBackstageInfoRow"><span>Margens</span><b>{margins === "estreita" ? "Estreita" : margins === "larga" ? "Larga" : "Normal"}</b></div>
+                {doc.created_at && <div className="wordBackstageInfoRow"><span>Criado em</span><b>{new Date(doc.created_at).toLocaleString("pt-BR")}</b></div>}
+                {doc.updated_at && <div className="wordBackstageInfoRow"><span>Modificado em</span><b>{new Date(doc.updated_at).toLocaleString("pt-BR")}</b></div>}
+                {justSaved && <p className="wordBackstageSavedTip"><Check size={14}/> Documento salvo.</p>}
+              </>)}
+            </div>
+          </div>
+        )}
 
         <div className="wordRibbon" onMouseDown={fmt.keepFocus}>
           {ribbonTab === "home" && (<>
@@ -15737,12 +17406,26 @@ function WordEditor({ doc, onClose, onSave }) {
 
           {ribbonTab === "insert" && (<>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Quebra de Página (Ctrl+Enter)" data-tipdesc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}><FileType size={15}/></button></div>
+              <div className="wordRibbonRow">
+                <button data-tip="Quebra de Página (Ctrl+Enter)" data-tipdesc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}><FileType size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Quebra de Seção" data-tipdesc="Marca uma divisão de seção no documento (próxima página, contínua, página par ou ímpar)." onClick={() => fmt.setSectionBreakOpen(o => !o)}><Columns2 size={14}/> <ChevronDown size={12}/></button>
+                  {fmt.sectionBreakOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => fmt.insertSectionBreak("nextpage")}>Próxima Página</button>
+                    <button onClick={() => fmt.insertSectionBreak("continuous")}>Contínua</button>
+                    <button onClick={() => fmt.insertSectionBreak("evenpage")}>Página Par</button>
+                    <button onClick={() => fmt.insertSectionBreak("oddpage")}>Página Ímpar</button>
+                  </div>}
+                </div>
+              </div>
               <span className="wordRibbonGroupLabel">Páginas</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Tabela" data-tipdesc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button></div>
+              <div className="wordRibbonRow">
+                <button data-tip="Tabela" data-tipdesc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button>
+                <button data-tip="Converter Texto em Tabela" data-tipdesc="Transforma o texto selecionado numa tabela (uma linha por linha, células separadas por vírgula ou tab)." onClick={convertTextToTable}><Replace size={15}/></button>
+              </div>
               <span className="wordRibbonGroupLabel">Tabelas</span>
             </div>
             <span className="wordRibbonDivider"/>
@@ -15750,6 +17433,18 @@ function WordEditor({ doc, onClose, onSave }) {
               <div className="wordRibbonRow">
                 <button data-tip="Imagem" data-tipdesc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
                 <button data-tip="Desenho" data-tipdesc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => setDrawOpen(true)}><PenTool size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Formas" data-tipdesc="Insere uma forma (retângulo, elipse, seta...) que pode ser redimensionada e recolorida." onClick={() => setShapesOpen(o => !o)}><Square size={14}/> <ChevronDown size={12}/></button>
+                  {shapesOpen && <div className="wordDropdownMenu">{SHAPE_PRESETS.map(p => <button key={p.id} onClick={() => insertShape(p.id)}>{p.label}</button>)}</div>}
+                </div>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="SmartArt" data-tipdesc="Insere um diagrama pronto (lista, processo ou hierarquia) com texto editável em cada caixa." onClick={() => setSmartArtOpen(o => !o)}><ListTree size={14}/> <ChevronDown size={12}/></button>
+                  {smartArtOpen && <div className="wordDropdownMenu">
+                    <button onClick={() => insertSmartArt("lista")}>Lista</button>
+                    <button onClick={() => insertSmartArt("processo")}>Processo</button>
+                    <button onClick={() => insertSmartArt("hierarquia")}>Hierarquia</button>
+                  </div>}
+                </div>
                 <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
               </div>
               <span className="wordRibbonGroupLabel">Ilustrações</span>
@@ -15790,11 +17485,18 @@ function WordEditor({ doc, onClose, onSave }) {
               <div className="wordRibbonRow">
                 <button data-tip="Cabeçalho" data-tipdesc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("header")}><PanelTop size={15}/></button>
                 <button data-tip="Rodapé" data-tipdesc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("footer")}><PanelBottom size={15}/></button>
+                <button data-tip="Primeira Página Diferente" data-tipdesc="A primeira página passa a ter seu próprio cabeçalho e rodapé, separados do resto do documento." className={bodyRef.current?.querySelector(".word-header-band-first, .word-footer-band-first") ? "active" : ""} onClick={fmt.togglePrimeiraPaginaDiferente}><SquareDashed size={15}/></button>
                 <div className="wordDropdownWrap">
                   <button className="wordDropdownBtn" data-tip="Número de Página" data-tipdesc="Insere a numeração automática das páginas no cabeçalho ou no rodapé." onClick={() => fmt.setPageNumOpen(o => !o)}><FileDigit size={14}/> <ChevronDown size={12}/></button>
                   {fmt.pageNumOpen && <div className="wordDropdownMenu">
-                    <button onClick={() => fmt.insertPageNumber("header")}>Início da página (cabeçalho)</button>
-                    <button onClick={() => fmt.insertPageNumber("footer")}>Fim da página (rodapé)</button>
+                    <div className="wordDropdownEmpty">No cabeçalho</div>
+                    <button onClick={() => fmt.insertPageNumber("header", "simple")}>Só o número (1)</button>
+                    <button onClick={() => fmt.insertPageNumber("header", "label")}>"Página 1"</button>
+                    <button onClick={() => fmt.insertPageNumber("header", "labelof")}>"Página 1 de N"</button>
+                    <div className="wordDropdownEmpty">No rodapé</div>
+                    <button onClick={() => fmt.insertPageNumber("footer", "simple")}>Só o número (1)</button>
+                    <button onClick={() => fmt.insertPageNumber("footer", "label")}>"Página 1"</button>
+                    <button onClick={() => fmt.insertPageNumber("footer", "labelof")}>"Página 1 de N"</button>
                   </div>}
                 </div>
               </div>
@@ -15806,6 +17508,10 @@ function WordEditor({ doc, onClose, onSave }) {
                 <button data-tip="Caixa de Texto" data-tipdesc="Insere uma caixa de texto que pode ser posicionada livremente na página." onClick={fmt.insertTextBox}><SquareDashed size={15}/></button>
                 <button data-tip="Letra Capitular" data-tipdesc="Aumenta e destaca a primeira letra do parágrafo, como no início de um capítulo." onClick={fmt.toggleDropCap}><CaseUpper size={15}/></button>
                 <button data-tip="Data e Hora" data-tipdesc="Insere a data e a hora atuais no ponto onde está o cursor." onClick={fmt.insertDateTime}><CalendarDays size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="WordArt" data-tipdesc="Insere um texto com estilo visual pronto (contorno, sombra, cor). Continua editável como qualquer texto." onClick={() => setWordArtOpen(o => !o)}><Sparkle size={14}/> <ChevronDown size={12}/></button>
+                  {wordArtOpen && <div className="wordDropdownMenu">{WORDART_STYLES.map(s => <button key={s.id} onClick={() => insertWordArt(s.id)}>{s.label}</button>)}</div>}
+                </div>
               </div>
               <span className="wordRibbonGroupLabel">Texto</span>
             </div>
@@ -15827,6 +17533,42 @@ function WordEditor({ doc, onClose, onSave }) {
                 {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
               </div>
               <span className="wordRibbonGroupLabel">Emojis</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "draw" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Caneta" className={drawTool === "pen" ? "active" : ""} onClick={() => setDrawTool("pen")}><PenTool size={15}/></button>
+                <button data-tip="Marca-texto" className={drawTool === "highlighter" ? "active" : ""} onClick={() => setDrawTool("highlighter")}><Highlighter size={15}/></button>
+                <button data-tip="Borracha" className={drawTool === "eraser" ? "active" : ""} onClick={() => setDrawTool("eraser")}><Eraser size={15}/></button>
+                <button data-tip="Selecionar" className={drawTool === "select" ? "active" : ""} onClick={() => setDrawTool("select")}><MousePointer2 size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Ferramentas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                {WORD_TEXT_COLORS.map(c => (
+                  <button key={c} className={"colorSwatch" + (drawColor === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => setDrawColor(c)}/>
+                ))}
+              </div>
+              <span className="wordRibbonGroupLabel">Cor</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><input type="range" min="1" max="12" value={drawSize} onChange={e => setDrawSize(Number(e.target.value))} data-tip="Espessura"/></div>
+              <span className="wordRibbonGroupLabel">Espessura</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Régua" data-tipdesc="Mostra uma grade de apoio na tela de desenho." className={drawRuler ? "active" : ""} onClick={() => setDrawRuler(r => !r)}><Ruler size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Régua</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button className="wordTextBtn" onClick={() => setDrawOpen(true)}><PenTool size={14}/> Abrir Tela de Desenho</button></div>
+              <span className="wordRibbonGroupLabel">Desenhar</span>
             </div>
           </>)}
 
@@ -15954,6 +17696,132 @@ function WordEditor({ doc, onClose, onSave }) {
             </div>
           </>)}
 
+          {ribbonTab === "mailings" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Cartas" data-tipdesc="Insere um modelo de carta (data, destinatário, saudação e despedida), usando campos de mesclagem se já houver destinatários." onClick={insertLetterTemplate}><FileText size={15}/></button>
+                <button data-tip="Envelopes" data-tipdesc="Insere um bloco de endereço no formato de envelope (remetente e destinatário)." onClick={insertEnvelopeTemplate}><RectangleHorizontal size={15}/></button>
+                <button data-tip="Etiquetas" data-tipdesc="Gera uma folha de etiquetas já preenchida, uma por destinatário selecionado." onClick={insertLabelSheet}><Grid3x3 size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Iniciar Mala Direta</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Selecionar Destinatários" data-tipdesc="Cole ou edite a lista de destinatários (uma coluna por campo, uma linha por pessoa)." onClick={openRecipientsDialog}><Users size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Destinatários {recipients ? `(${recipients.rows.length})` : ""}</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Inserir Campo de Mesclagem" data-tipdesc="Insere um campo (ex: «Nome») que será trocado pelo valor de cada destinatário." onClick={() => setInsertFieldOpen(o => !o)}><FileDigit size={14}/> Inserir Campo <ChevronDown size={12}/></button>
+                  {insertFieldOpen && (
+                    <div className="wordDropdownMenu">
+                      {recipients?.headers?.length ? recipients.headers.map(h => (
+                        <button key={h} onClick={() => insertMergeField(h)}>{h}</button>
+                      )) : <span className="wordDropdownEmpty">Selecione destinatários primeiro</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Campos</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Visualizar Resultados" data-tipdesc="Alterna entre mostrar «Campo» ou o valor real de cada destinatário." className={mergePreview ? "active" : ""} onClick={toggleMergePreview}><Eye size={15}/></button>
+                <button data-tip="Registro Anterior" data-tipdesc="Mostra o destinatário anterior na pré-visualização." onClick={() => navigateMergeRecord(-1)}><ChevronLeft size={15}/></button>
+                <span className="wordZoomValue">{recipients?.rows?.length ? `${mergeIndex + 1}/${recipients.rows.length}` : "0/0"}</span>
+                <button data-tip="Próximo Registro" data-tipdesc="Mostra o próximo destinatário na pré-visualização." onClick={() => navigateMergeRecord(1)}><ChevronRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Visualizar Resultados</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Mesclar para Word" data-tipdesc="Gera um documento .docx para cada destinatário, com os campos já substituídos." onClick={() => finishMerge("docx")}><FileType2 size={15}/></button>
+                <button data-tip="Mesclar para PDF" data-tipdesc="Gera um PDF para cada destinatário, com os campos já substituídos." onClick={() => finishMerge("pdf")}><FileDown size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Concluir e Mesclar</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "review" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Ortografia" data-tipdesc="Liga ou desliga a verificação ortográfica do navegador (sublinhado vermelho nas palavras)." className={spellcheckOn ? "active" : ""} onClick={() => setSpellcheckOn(s => !s)}><SpellCheck size={15}/></button>
+                <button data-tip="Contagem de Palavras" data-tipdesc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}><FileDigit size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Verificação</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Novo Comentário" data-tipdesc="Adiciona um comentário ao trecho selecionado." onClick={addComment}><MessageSquarePlus size={15}/></button>
+                <button data-tip="Comentário Anterior" data-tipdesc="Vai para o comentário anterior no documento." onClick={() => navigateComment(-1)}><ChevronLeft size={15}/></button>
+                <button data-tip="Próximo Comentário" data-tipdesc="Vai para o próximo comentário no documento." onClick={() => navigateComment(1)}><ChevronRight size={15}/></button>
+                <button data-tip="Excluir Comentário" data-tipdesc="Exclui o comentário aberto no momento." onClick={deleteCurrentComment}><Trash2 size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Comentários ({comments.length})</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Controlar Alterações" data-tipdesc="A partir de agora, o que for digitado ou apagado fica marcado em vez de mudar o texto direto." className={trackChanges ? "active" : ""} onClick={toggleTrackChanges}><Pencil size={15}/></button>
+                <button data-tip="Mostrar Alterações" data-tipdesc="Mostra as marcações de inserção/exclusão, ou esconde para ver como o documento ficaria." className={showChangesMarkup ? "active" : ""} onClick={toggleShowChangesMarkup}><Eye size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Aceitar" data-tipdesc="Aceita as alterações marcadas, tornando-as parte definitiva do texto." onClick={() => { setAcceptMenuOpen(o => !o); setRejectMenuOpen(false); }}><Check size={13}/> <ChevronDown size={12}/></button>
+                  {acceptMenuOpen && (
+                    <div className="wordDropdownMenu">
+                      <button onClick={acceptOneChange}>Aceitar esta alteração</button>
+                      <button onClick={acceptAllChanges}>Aceitar todas as alterações</button>
+                    </div>
+                  )}
+                </div>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Rejeitar" data-tipdesc="Rejeita as alterações marcadas, voltando ao texto original." onClick={() => { setRejectMenuOpen(o => !o); setAcceptMenuOpen(false); }}><XCircle size={13}/> <ChevronDown size={12}/></button>
+                  {rejectMenuOpen && (
+                    <div className="wordDropdownMenu">
+                      <button onClick={rejectOneChange}>Rejeitar esta alteração</button>
+                      <button onClick={rejectAllChanges}>Rejeitar todas as alterações</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <span className="wordRibbonGroupLabel">Controle de Alterações</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip={docProtected ? "Desproteger Documento" : "Proteger Documento"} data-tipdesc="Bloqueia o documento contra edição até ser desprotegido de novo." className={docProtected ? "active" : ""} onClick={toggleProtectDoc}><Lock size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Proteger</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Idioma" data-tipdesc="Define o idioma deste documento, usado na tradução e na verificação ortográfica." onClick={() => setReviewLangOpen(o => !o)}><Globe size={14}/> {docLanguage ? languageName(docLanguage) : "Idioma"} <ChevronDown size={12}/></button>
+                  {reviewLangOpen && (
+                    <div className="wordDropdownMenu">
+                      <button className={!docLanguage ? "active" : ""} onClick={() => applyDocLanguage(null)}>Padrão</button>
+                      {LANGUAGES.map(l => (
+                        <button key={l.code} className={docLanguage === l.code ? "active" : ""} onClick={() => applyDocLanguage(l.code)}>{l.name}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button data-tip="Traduzir" data-tipdesc="Traduz o trecho selecionado para o idioma do documento." onClick={openTranslatePopover}><Type size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Idioma</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Comparar Documentos" data-tipdesc="Compara este documento com outro, palavra por palavra, e mostra as diferenças." onClick={() => { setCompareDialogOpen(true); setCompareResult(null); setCompareTargetId(""); }}><Columns2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Comparar</span>
+            </div>
+          </>)}
+
           {ribbonTab === "view" && (<>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
@@ -15967,6 +17835,7 @@ function WordEditor({ doc, onClose, onSave }) {
               <div className="wordRibbonRow">
                 <button data-tip="Régua" data-tipdesc="Mostra ou oculta a régua no topo da página, usada para ajustar margens e recuos." className={showRuler ? "active" : ""} onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
                 <button data-tip="Linhas de Grade" data-tipdesc="Mostra ou oculta linhas de grade que ajudam a alinhar objetos na página." className={showGrid ? "active" : ""} onClick={() => setShowGrid(g => !g)}><Grid3x3 size={15}/></button>
+                <button data-tip="Painel de Navegação" data-tipdesc="Mostra uma barra lateral com os títulos do documento e os resultados de busca, pra pular direto pro trecho." className={navPaneOpen ? "active" : ""} onClick={() => setNavPaneOpen(o => !o)}><ListTree size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Mostrar</span>
             </div>
@@ -15985,8 +17854,237 @@ function WordEditor({ doc, onClose, onSave }) {
               <span className="wordRibbonGroupLabel">Zoom</span>
             </div>
           </>)}
+
+          {ribbonTab === "pictureformat" && selectedImg && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button className={"wordTextBtn" + ((selectedImg.dataset.correction || "none") === "none" ? " active" : "")} onClick={() => imgSetCorrection("none")}>Original</button>
+                <button className={"wordTextBtn" + (selectedImg.dataset.correction === "claro" ? " active" : "")} onClick={() => imgSetCorrection("claro")}>Mais Claro</button>
+                <button className={"wordTextBtn" + (selectedImg.dataset.correction === "escuro" ? " active" : "")} onClick={() => imgSetCorrection("escuro")}>Mais Escuro</button>
+                <button className={"wordTextBtn" + (selectedImg.dataset.correction === "contraste" ? " active" : "")} onClick={() => imgSetCorrection("contraste")}>Mais Contraste</button>
+                <button className={"wordTextBtn" + (selectedImg.dataset.correction === "suave" ? " active" : "")} onClick={() => imgSetCorrection("suave")}>Suave</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Correções</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><input type="range" min="10" max="100" defaultValue={selectedImg.style.opacity ? Math.round(parseFloat(selectedImg.style.opacity) * 100) : 100} onChange={e => imgSetOpacity(e.target.value)} data-tip="Transparência"/></div>
+              <span className="wordRibbonGroupLabel">Transparência</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Em Linha com o Texto" data-tipdesc="A imagem se comporta como um caractere, dentro do fluxo do texto." onClick={() => imgSetWrap("inline")}><Type size={15}/></button>
+                <button data-tip="Quadrado à Esquerda" data-tipdesc="O texto contorna a imagem, que fica à esquerda." onClick={() => imgSetWrap("left")}><AlignLeft size={15}/></button>
+                <button data-tip="Quadrado à Direita" data-tipdesc="O texto contorna a imagem, que fica à direita." onClick={() => imgSetWrap("right")}><AlignRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Quebra de Texto</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Alinhar à Esquerda" data-tipdesc="Alinha a imagem (em linha própria) à esquerda da página." onClick={() => imgSetAlign("left")}><AlignLeft size={15}/></button>
+                <button data-tip="Centralizar" data-tipdesc="Centraliza a imagem na largura da página." onClick={() => imgSetAlign("center")}><AlignCenter size={15}/></button>
+                <button data-tip="Alinhar à Direita" data-tipdesc="Alinha a imagem à direita da página." onClick={() => imgSetAlign("right")}><AlignRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Posição</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                {["25", "50", "75", "100"].map(p => <button key={p} className="wordTextBtn" onClick={() => imgSetSize(p)}>{p}%</button>)}
+                <button className="wordTextBtn" onClick={() => imgSetSize("original")}>Original</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Tamanho</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Girar 90° à Esquerda" data-tipdesc="Gira a imagem 90 graus no sentido anti-horário." onClick={() => imgRotate(-90)}><RotateCcw size={15}/></button>
+                <button data-tip="Girar 90° à Direita" data-tipdesc="Gira a imagem 90 graus no sentido horário." onClick={() => imgRotate(90)}><RotateCw size={15}/></button>
+                <button data-tip="Borda" data-tipdesc="Liga ou desliga uma borda simples ao redor da imagem." onClick={imgToggleBorder}><Square size={15}/></button>
+                <button data-tip="Recortar" data-tipdesc="Corta a imagem, mantendo só a área escolhida." onClick={() => setCropDialogOpen(true)}><SquareDashed size={15}/></button>
+                <button data-tip="Remover Fundo" data-tipdesc="Torna transparente o que for da cor dos cantos da imagem. Funciona melhor com fundo liso de uma cor só (não é recorte de objeto por IA)." onClick={imgRemoveBackground}><ImageOff size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Girar / Borda / Recorte</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Excluir Imagem" data-tipdesc="Remove esta imagem do documento." onClick={imgDelete}><Trash2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Remover</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "shapeformat" && selectedShape && (<>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                {WORD_TEXT_COLORS.map(c => (
+                  <button key={c} className={"colorSwatch" + (selectedShape.dataset.fill === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => shapeSetFill(c)}/>
+                ))}
+              </div>
+              <span className="wordRibbonGroupLabel">Preenchimento</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                {["#1a1a1a", "#ffffff", "#5b9dff", "#ff5c5c", "#69db7c"].map(c => (
+                  <button key={c} className={"colorSwatch" + (selectedShape.dataset.stroke === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => shapeSetStroke(c)}/>
+                ))}
+              </div>
+              <span className="wordRibbonGroupLabel">Contorno</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Em Linha com o Texto" onClick={() => shapeSetWrap("inline")}><Type size={15}/></button>
+                <button data-tip="Quadrado à Esquerda" onClick={() => shapeSetWrap("left")}><AlignLeft size={15}/></button>
+                <button data-tip="Quadrado à Direita" onClick={() => shapeSetWrap("right")}><AlignRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Quebra de Texto</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                {["50", "100", "150", "200"].map(p => <button key={p} className="wordTextBtn" onClick={() => shapeSetSize(p)}>{p}%</button>)}
+                <button className="wordTextBtn" onClick={() => shapeSetSize("original")}>Original</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Tamanho</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Girar 90° à Esquerda" onClick={() => shapeRotate(-90)}><RotateCcw size={15}/></button>
+                <button data-tip="Girar 90° à Direita" onClick={() => shapeRotate(90)}><RotateCw size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Girar</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Excluir Forma" onClick={shapeDelete}><Trash2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Remover</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "tabledesign" && activeCell && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button className="wordTextBtn" onClick={() => tableSetStyle("plain")}>Simples</button>
+                <button className="wordTextBtn" onClick={() => tableSetStyle("striped")}>Listrada</button>
+                <button className="wordTextBtn" onClick={() => tableSetStyle("strong")}>Grade Forte</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Estilos de Tabela</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Bordas" data-tipdesc="Liga ou desliga as bordas da tabela inteira." onClick={tableToggleBorders}><Grid3x3 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Bordas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Borda Superior" data-tipdesc="Liga ou desliga só a borda de cima desta célula." onClick={() => cellBorderToggle("Top")}><PanelTop size={15}/></button>
+                <button data-tip="Borda Inferior" data-tipdesc="Liga ou desliga só a borda de baixo desta célula." onClick={() => cellBorderToggle("Bottom")}><PanelBottom size={15}/></button>
+                <button data-tip="Borda Esquerda" data-tipdesc="Liga ou desliga só a borda esquerda desta célula." onClick={() => cellBorderToggle("Left")}><AlignLeft size={15}/></button>
+                <button data-tip="Borda Direita" data-tipdesc="Liga ou desliga só a borda direita desta célula." onClick={() => cellBorderToggle("Right")}><AlignRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Bordas da Célula</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Repetir Linha de Cabeçalho" data-tipdesc="Quando a tabela ocupar mais de uma página, repete a primeira linha no topo de cada página (Word e PDF)." className={activeCell.closest("table")?.classList.contains("word-table-repeatheader") ? "active" : ""} onClick={tableToggleRepeatHeader}><Rows3 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Cabeçalho</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup wordRibbonGroupWide">
+              <div className="wordRibbonRow">
+                {WORD_SHADING_COLORS.map(c => (
+                  <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => tableSetShading(c === "transparent" ? "" : c)} data-tip="Sombreamento" data-tipdesc="Aplica esta cor de fundo à célula atual."/>
+                ))}
+              </div>
+              <span className="wordRibbonGroupLabel">Sombreamento da Célula</span>
+            </div>
+          </>)}
+
+          {ribbonTab === "tablelayout" && activeCell && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Inserir Acima" data-tipdesc="Insere uma nova linha acima da célula atual." onClick={() => tableInsertRow(false)}><ArrowUp size={15}/></button>
+                <button data-tip="Inserir Abaixo" data-tipdesc="Insere uma nova linha abaixo da célula atual." onClick={() => tableInsertRow(true)}><ArrowDown size={15}/></button>
+                <button data-tip="Inserir à Esquerda" data-tipdesc="Insere uma nova coluna à esquerda da célula atual." onClick={() => tableInsertCol(false)}><ArrowLeft size={15}/></button>
+                <button data-tip="Inserir à Direita" data-tipdesc="Insere uma nova coluna à direita da célula atual." onClick={() => tableInsertCol(true)}><ArrowRight size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Linhas e Colunas</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Excluir Linha" data-tipdesc="Remove a linha da célula atual." onClick={tableDeleteRow}><Rows3 size={15}/></button>
+                <button data-tip="Excluir Coluna" data-tipdesc="Remove a coluna da célula atual." onClick={tableDeleteCol}><Columns2 size={15}/></button>
+                <button data-tip="Excluir Tabela" data-tipdesc="Remove a tabela inteira do documento." onClick={tableDeleteTable}><Trash2 size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Excluir</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Mesclar com a Célula à Direita" data-tipdesc="Junta a célula atual com a próxima da mesma linha." onClick={tableMergeRight}><Columns2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Mesclar</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Dividir Célula" data-tipdesc="Desfaz a mesclagem desta célula, voltando a ter uma célula por coluna." onClick={tableSplitCell}><Columns2 size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Dividir</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button className="wordTextBtn" data-tip="Largura Automática" data-tipdesc="Remove larguras fixas de coluna (definidas arrastando a borda) e volta ao ajuste automático." onClick={tableSetAutoFit}>Ajustar Automaticamente</button>
+                <button className="wordTextBtn" data-tip="Converter em Texto" data-tipdesc="Transforma a tabela de volta em texto simples, uma linha por linha, células separadas por vírgula." onClick={convertTableToText}>Converter em Texto</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Largura / Converter</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Alinhar Acima" data-tipdesc="Alinha o conteúdo da célula na parte superior." onClick={() => tableSetVAlign("top")}><PanelTop size={15}/></button>
+                <button data-tip="Alinhar ao Centro" data-tipdesc="Centraliza o conteúdo verticalmente na célula." onClick={() => tableSetVAlign("middle")}><Rows3 size={15}/></button>
+                <button data-tip="Alinhar Abaixo" data-tipdesc="Alinha o conteúdo da célula na parte inferior." onClick={() => tableSetVAlign("bottom")}><PanelBottom size={15}/></button>
+              </div>
+              <span className="wordRibbonGroupLabel">Alinhamento Vertical</span>
+            </div>
+          </>)}
         </div>
 
+        <div className="wordPageAreaRow">
+        {navPaneOpen && (
+          <div className="wordNavPane">
+            <div className="wordNavPaneTabs">
+              <button className={navPaneTab === "headings" ? "active" : ""} onClick={() => setNavPaneTab("headings")}>Títulos</button>
+              <button className={navPaneTab === "results" ? "active" : ""} onClick={() => setNavPaneTab("results")}>Resultados</button>
+              <button className="wordNavPaneClose" onClick={() => setNavPaneOpen(false)}><X size={13}/></button>
+            </div>
+            {navPaneTab === "headings" ? (
+              navHeadings.length ? (
+                <div className="wordNavPaneList">
+                  {navHeadings.map((h, i) => (
+                    <button key={i} className={"wordNavPaneItem wordNavPaneItem-lvl" + h.level} onClick={() => jumpToHeading(h.el)}>{h.text || "(sem texto)"}</button>
+                  ))}
+                </div>
+              ) : <p className="wordBackstageHint">Nenhum título ainda. Use os estilos Título 1/2/3 no texto pra eles aparecerem aqui.</p>
+            ) : (
+              <div className="wordNavPaneList">
+                <div className="wordNavPaneSearch">
+                  <Search size={13}/>
+                  <input value={fmt.findQuery} onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }} placeholder="Pesquisar no documento"/>
+                </div>
+                {fmt.findQuery ? (
+                  fmt.findMatches.length ? fmt.findMatches.map((m, i) => (
+                    <button key={i} className="wordNavPaneItem" onClick={() => m.scrollIntoView({ block: "center", behavior: "smooth" })}>{matchSnippet(m)}</button>
+                  )) : <p className="wordBackstageHint">Nada encontrado.</p>
+                ) : <p className="wordBackstageHint">Digite algo pra pesquisar no documento.</p>}
+              </div>
+            )}
+          </div>
+        )}
         <div className="wordPageArea" ref={pageAreaRef} onClick={() => fmt.closeAllPopovers()}>
           {fmt.findOpen && (
             <div className="wordFindBar" onMouseDown={fmt.keepFocus} onClick={e => e.stopPropagation()}>
@@ -16030,35 +18128,51 @@ function WordEditor({ doc, onClose, onSave }) {
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
               <div
                 ref={bodyRef}
-                className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "")}
+                className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "") + (showChangesMarkup ? "" : " wordHideChanges")}
                 style={{
                   paddingLeft: marginLeftCm != null ? marginLeftCm + "cm" : undefined,
                   paddingRight: marginRightCm != null ? marginRightCm + "cm" : undefined,
                 }}
-                contentEditable
+                contentEditable={!docProtected}
                 suppressContentEditableWarning
-                spellCheck
+                spellCheck={spellcheckOn}
+                lang={docLanguage || undefined}
                 onInput={handleBodyInput}
+                onBeforeInput={handleTrackedBeforeInput}
+                onMouseDown={handleTableResizeMouseDown}
                 onClick={(e) => {
                   const anchor = e.target.closest?.(".word-comment-anchor");
                   if (anchor && bodyRef.current?.contains(anchor)) { e.preventDefault(); openCommentPopover(anchor); return; }
+                  handleContentSelectionClick(e);
                   fmt.handleBodyClick(e);
                 }}
                 onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
-                onKeyUp={fmt.updateLinkBar}
-                onKeyDown={fmt.handleBodyKeyDown}
-                data-placeholder="Comece a digitar..."
+                onKeyUp={(e) => { fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
+                onKeyDown={handleEditorKeyDown}
+                data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
               />
             </div>
           </div>
           <NoteLinkFloatingUI fmt={fmt}/>
         </div>
+        </div>
 
         <div className="wordStatusBar">
           <span>{wordCount.words} palavra{wordCount.words === 1 ? "" : "s"}</span>
           <span>{wordCount.chars} caractere{wordCount.chars === 1 ? "" : "s"}</span>
+          {trackChanges && <span className="wordStatusBadge"><Pencil size={11}/> Controlando Alterações</span>}
+          {docProtected && <span className="wordStatusBadge"><Lock size={11}/> Protegido</span>}
           <span className="wordStatusSpacer"/>
-          <SpellCheck size={13}/> <span>Verificação ortográfica do navegador ativada</span>
+          <Globe size={12}/> <span>{docLanguage ? languageName(docLanguage) : "Português (Brasil)"}</span>
+          <SpellCheck size={13}/> <span>Verificação ortográfica {spellcheckOn ? "ativada" : "desativada"}</span>
+          <span className="wordStatusDivider"/>
+          <button className={"wordStatusViewBtn" + (viewMode === "print" ? " active" : "")} data-tip="Layout de Impressão" onClick={() => setViewMode("print")}><FileText size={13}/></button>
+          <button className={"wordStatusViewBtn" + (viewMode === "draft" ? " active" : "")} data-tip="Rascunho" onClick={() => setViewMode("draft")}><FileType size={13}/></button>
+          <span className="wordStatusDivider"/>
+          <button className="wordStatusZoomBtn" data-tip="Diminuir Zoom" onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={13}/></button>
+          <input type="range" className="wordStatusZoomSlider" min="50" max="200" step="10" value={zoom} onChange={e => setZoom(Number(e.target.value))} data-tip="Zoom"/>
+          <button className="wordStatusZoomBtn" data-tip="Aumentar Zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={13}/></button>
+          <span className="wordZoomValue">{zoom}%</span>
         </div>
 
         {tableDialogOpen && (
@@ -16066,7 +18180,15 @@ function WordEditor({ doc, onClose, onSave }) {
         )}
 
         {drawOpen && (
-          <WordDrawDialog onClose={() => setDrawOpen(false)} onInsert={(file) => { setDrawOpen(false); fmt.insertImageFile(file); }}/>
+          <WordDrawDialog
+            onClose={() => setDrawOpen(false)}
+            onInsert={(file) => { setDrawOpen(false); fmt.insertImageFile(file); }}
+            defaultTool={drawTool} defaultColor={drawColor} defaultSize={drawSize} defaultRuler={drawRuler}
+          />
+        )}
+
+        {cropDialogOpen && selectedImg && (
+          <WordCropDialog src={selectedImg.src} onClose={() => setCropDialogOpen(false)} onApply={imgApplyCrop}/>
         )}
 
         {commentPopover && (
@@ -16076,6 +18198,99 @@ function WordEditor({ doc, onClose, onSave }) {
               <button className="ghost" onClick={() => setCommentPopover(null)}>Fechar</button>
               <button className="danger" onClick={() => deleteComment(commentPopover.id)}><Trash2 size={13}/> Excluir</button>
             </div>
+          </div>
+        )}
+
+        {recipientsDialogOpen && (
+          <div className="readerBack wordTableDialogBack" onClick={() => setRecipientsDialogOpen(false)}>
+            <div className="wordTableDialog wordRecipientsDialog" onClick={e => e.stopPropagation()}>
+              <h3>Selecionar destinatários</h3>
+              <p className="wordBackstageHint">Cole os dados (do Excel/Sheets, ou separados por vírgula), uma pessoa por linha. A primeira linha é o nome dos campos — ex: Nome,Email,Cidade.</p>
+              <textarea
+                className="wordRecipientsTextarea"
+                rows={8}
+                value={recipientsDraft}
+                onChange={e => setRecipientsDraft(e.target.value)}
+                placeholder={"Nome,Email\nMaria Silva,maria@email.com\nJoão Souza,joao@email.com"}
+              />
+              <div className="wordTableDialogActions">
+                <button className="ghost" onClick={() => setRecipientsDialogOpen(false)}>Cancelar</button>
+                <button className="primary" onClick={saveRecipients}>Salvar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {wordCountDialogOpen && (
+          <div className="readerBack wordTableDialogBack" onClick={() => setWordCountDialogOpen(false)}>
+            <div className="wordTableDialog" onClick={e => e.stopPropagation()}>
+              <h3>Contagem de palavras</h3>
+              {(() => { const s = wordCountStats(); return (
+                <div className="wordBackstageInfoRow" style={{ flexDirection: "column", gap: 6 }}>
+                  <div className="wordBackstageInfoRow"><span>Palavras</span><b>{s.words}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Caracteres (com espaços)</span><b>{s.chars}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Caracteres (sem espaços)</span><b>{s.charsNoSpace}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Parágrafos</span><b>{s.paragraphs}</b></div>
+                </div>
+              ); })()}
+              <div className="wordTableDialogActions">
+                <button className="primary" onClick={() => setWordCountDialogOpen(false)}>Fechar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {compareDialogOpen && (
+          <div className="readerBack wordTableDialogBack" onClick={() => { setCompareDialogOpen(false); setCompareResult(null); }}>
+            <div className={"wordTableDialog" + (compareResult && compareResult !== "loading" ? " wordCompareDialog" : "")} onClick={e => e.stopPropagation()}>
+              <h3>Comparar Documentos</h3>
+              {!compareResult && (<>
+                <p className="wordBackstageHint">Escolhe outro documento Word pra comparar com "{title.trim() || "este documento"}", palavra por palavra.</p>
+                {docsList?.length ? (
+                  <select className="wordRecipientsTextarea" value={compareTargetId} onChange={e => setCompareTargetId(e.target.value)}>
+                    <option value="">Selecione um documento...</option>
+                    {docsList.map(d => <option key={d.id} value={d.id}>{d.title || "Documento sem título"}</option>)}
+                  </select>
+                ) : <p className="wordBackstageHint">Não há outro documento Word salvo pra comparar.</p>}
+                <div className="wordTableDialogActions">
+                  <button className="ghost" onClick={() => setCompareDialogOpen(false)}>Cancelar</button>
+                  <button className="primary" disabled={!compareTargetId} onClick={runCompare}>Comparar</button>
+                </div>
+              </>)}
+              {compareResult === "loading" && <p className="wordBackstageHint">Comparando...</p>}
+              {compareResult && compareResult !== "loading" && (<>
+                <p className="wordBackstageHint">Em vermelho, o que só está em "{title.trim() || "este documento"}"; em verde, o que só está em "{compareResult.otherTitle}".</p>
+                <div className="wordCompareResult">
+                  {compareResult.diff.map((part, i) => part.type === "same" ? part.text : (
+                    <span key={i} className={part.type === "del" ? "word-del" : "word-ins"}>{part.text}</span>
+                  ))}
+                </div>
+                <div className="wordTableDialogActions">
+                  <button className="ghost" onClick={() => setCompareResult(null)}>Voltar</button>
+                  <button className="primary" onClick={saveCompareAsDocument}>Salvar como Novo Documento</button>
+                </div>
+              </>)}
+            </div>
+          </div>
+        )}
+
+        {translatePopover && (
+          <div className="wordTranslatePopover" style={{ left: translatePopover.x, top: translatePopover.y }} onClick={e => e.stopPropagation()}>
+            <div className="wordTranslatePopoverHead">
+              <span>Traduzir</span>
+              <button className="ghost" onClick={() => setTranslatePopover(null)}><X size={13}/></button>
+            </div>
+            {translatePopover.loading ? (
+              <p className="wordBackstageHint">Buscando traduções...</p>
+            ) : translatePopover.suggestions.length ? (
+              <div className="wordTranslateOptions">
+                {translatePopover.suggestions.map((s, i) => (
+                  <button key={i} onClick={() => applyTranslation(s)}>{s}</button>
+                ))}
+              </div>
+            ) : (
+              <p className="wordBackstageHint">Nenhuma sugestão encontrada para este trecho.</p>
+            )}
           </div>
         )}
 

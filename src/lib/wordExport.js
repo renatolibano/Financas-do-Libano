@@ -2,6 +2,7 @@ import { jsPDF } from "jspdf";
 import {
   Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
   HeadingLevel, AlignmentType, LevelFormat, WidthType, PageBreak, PageOrientation,
+  VerticalAlign, BorderStyle, Header, Footer, PageNumber,
 } from "docx";
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,8 @@ function collectRuns(node, ctx) {
     return runs;
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return runs;
+  if (node.classList?.contains("word-del")) return runs; // trecho marcado como excluído (Controlar Alterações) — não sai na exportação
+  if (node.classList?.contains("word-pagenum")) { runs.push({ pageField: node.dataset.fmt || "label", ...ctx }); return runs; } // campo de número de página — vira campo dinâmico de verdade na exportação
   if (node.tagName === "BR") { runs.push({ text: "\n", ...ctx }); return runs; }
   if (node.tagName === "IMG") { runs.push({ image: node.getAttribute("src") }); return runs; }
 
@@ -106,7 +109,67 @@ function collectRuns(node, ctx) {
 function stripHtmlLocal(html) {
   const d = document.createElement("div");
   d.innerHTML = html || "";
+  d.querySelectorAll(".word-del").forEach(n => n.remove()); // texto excluído (Controlar Alterações) não conta
   return d.textContent || "";
+}
+
+// Rasteriza um <img> src (svg/png/etc.) num PNG de w×h, usando um <canvas>
+// escondido — usado pra achatar formas (SVG) e ajustes de imagem (filtro
+// CSS) antes de exportar, já que .docx/PDF só sabem lidar com pixels.
+function rasterizeToPng(src, w, h, { filter, opacity } = {}) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = w || im.naturalWidth;
+      canvas.height = h || im.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (filter) ctx.filter = filter;
+      if (opacity != null && opacity !== "") ctx.globalAlpha = parseFloat(opacity);
+      ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    im.onerror = reject;
+    im.src = src;
+  });
+}
+
+// Prepara o HTML pra exportação: formas (SVG) viram PNG (senão não
+// aparecem no .docx/PDF, que só entendem imagem raster), e imagens com
+// ajuste de transparência/correção (filtro CSS, só visual em tela) são
+// "achatadas" num PNG com o ajuste já aplicado nos pixels de verdade.
+// Roda numa cópia do HTML — o documento na tela não é alterado.
+async function preprocessExportHtml(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+
+  for (const shape of Array.from(container.querySelectorAll(".word-shape"))) {
+    const svg = shape.querySelector("svg");
+    if (!svg) { shape.remove(); continue; }
+    if (!svg.getAttribute("xmlns")) svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    const w = parseInt(shape.style.width, 10) || 120, h = parseInt(shape.style.height, 10) || 90;
+    const svgUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+    try {
+      const png = await rasterizeToPng(svgUrl, w, h);
+      const img = document.createElement("img");
+      img.src = png;
+      if (shape.style.float) img.style.float = shape.style.float;
+      if (shape.style.margin) img.style.margin = shape.style.margin;
+      shape.replaceWith(img);
+    } catch { shape.remove(); }
+  }
+
+  for (const img of Array.from(container.querySelectorAll("img"))) {
+    const filter = img.style.filter, opacity = img.style.opacity;
+    if (!filter && !opacity) continue;
+    try {
+      img.src = await rasterizeToPng(img.src, null, null, { filter, opacity });
+      img.style.filter = "";
+      img.style.opacity = "";
+    } catch { /* mantém a imagem original (sem o ajuste) se a rasterização falhar */ }
+  }
+
+  return container.innerHTML;
 }
 
 // Converte o HTML do documento numa lista de blocos normalizados, usada por
@@ -115,6 +178,7 @@ function parseBlocks(html) {
   const container = document.createElement("div");
   container.innerHTML = html || "";
   const blocks = [];
+  let header = null, headerFirst = null, footer = null, footerFirst = null;
 
   const pushParagraphLike = (el, type = "paragraph", extra = {}) => {
     blocks.push({ type, align: parseAlign(el), runs: collectRuns(el, {}), ...extra });
@@ -136,9 +200,14 @@ function parseBlocks(html) {
 
   const walkTable = (tableEl) => {
     const rows = Array.from(tableEl.querySelectorAll("tr")).map((tr) =>
-      Array.from(tr.children).map((td) => stripHtmlLocal(td.innerHTML).trim())
+      Array.from(tr.children).map((td) => ({
+        text: stripHtmlLocal(td.innerHTML).trim(),
+        colspan: parseInt(td.getAttribute("colspan") || "1", 10),
+        shading: td.style.backgroundColor ? rgbToHex(td.style.backgroundColor) : null,
+        valign: td.style.verticalAlign || null,
+      }))
     );
-    if (rows.length) blocks.push({ type: "table", rows });
+    if (rows.length) blocks.push({ type: "table", rows, repeatHeader: tableEl.classList.contains("word-table-repeatheader"), noBorder: tableEl.classList.contains("word-table-noborder") });
   };
 
   Array.from(container.children).forEach((el) => {
@@ -166,6 +235,18 @@ function parseBlocks(html) {
       });
       return;
     }
+    if (el.classList?.contains("word-smartart")) {
+      // SmartArt não tem representação nativa em .docx/PDF — exporta cada
+      // caixa como um parágrafo em negrito, na ordem em que aparecem.
+      Array.from(el.querySelectorAll(".word-smartart-box")).forEach((box) => {
+        blocks.push({ type: "paragraph", align: "left", runs: [{ text: box.textContent || "", bold: true }] });
+      });
+      return;
+    }
+    if (el.classList?.contains("word-header-band-first")) { headerFirst = { runs: collectRuns(el, {}) }; return; }
+    if (el.classList?.contains("word-header-band")) { header = { runs: collectRuns(el, {}) }; return; }
+    if (el.classList?.contains("word-footer-band-first")) { footerFirst = { runs: collectRuns(el, {}) }; return; }
+    if (el.classList?.contains("word-footer-band")) { footer = { runs: collectRuns(el, {}) }; return; }
     switch (el.tagName) {
       case "H1": pushParagraphLike(el, "heading", { level: 1 }); break;
       case "H2": pushParagraphLike(el, "heading", { level: 2 }); break;
@@ -180,7 +261,7 @@ function parseBlocks(html) {
   });
 
   if (!blocks.length) blocks.push({ type: "paragraph", runs: [] });
-  return blocks;
+  return { blocks, header, headerFirst, footer, footerFirst };
 }
 
 // ---------------------------------------------------------------------------
@@ -225,15 +306,21 @@ function alignMap(a) {
   return AlignmentType.LEFT;
 }
 
-function buildDocxTable(rows) {
-  const colCount = Math.max(...rows.map((r) => r.length));
+function buildDocxTable(rows, opts = {}) {
+  const colCount = Math.max(...rows.map((r) => r.reduce((sum, c) => sum + (c.colspan || 1), 0)));
+  const noBorderSide = opts.noBorder ? { style: BorderStyle.NONE, size: 0, color: "FFFFFF" } : { style: BorderStyle.SINGLE, size: 4, color: "B9BEC7" };
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: rows.map((cells) => new TableRow({
-      children: Array.from({ length: colCount }).map((_, i) => new TableCell({
-        width: { size: Math.round(100 / colCount), type: WidthType.PERCENTAGE },
+    borders: { top: noBorderSide, bottom: noBorderSide, left: noBorderSide, right: noBorderSide, insideHorizontal: noBorderSide, insideVertical: noBorderSide },
+    rows: rows.map((cells, ri) => new TableRow({
+      tableHeader: !!(opts.repeatHeader && ri === 0),
+      children: cells.map((c) => new TableCell({
+        width: { size: Math.round((100 / colCount) * (c.colspan || 1)), type: WidthType.PERCENTAGE },
+        columnSpan: c.colspan > 1 ? c.colspan : undefined,
         margins: { top: 80, bottom: 80, left: 100, right: 100 },
-        children: [new Paragraph({ children: [new TextRun(cells[i] || "")] })],
+        shading: c.shading ? { fill: c.shading.replace("#", "") } : undefined,
+        verticalAlign: c.valign === "top" ? VerticalAlign.TOP : c.valign === "bottom" ? VerticalAlign.BOTTOM : c.valign === "middle" ? VerticalAlign.CENTER : undefined,
+        children: [new Paragraph({ children: [new TextRun((opts.repeatHeader && ri === 0) ? { text: c.text || "", bold: true } : (c.text || "")) ] })],
       })),
     })),
   });
@@ -241,8 +328,30 @@ function buildDocxTable(rows) {
 
 const MARGIN_TWIPS = { estreita: 720, normal: 1440, larga: 2160 };
 
+// Cabeçalho/rodapé/número de página de verdade do .docx (campo dinâmico,
+// atualiza sozinho no Word) — a partir do que veio da faixa editável do
+// documento (ver ".word-pagenum" em collectRuns).
+function buildFieldParagraph(band) {
+  const children = [];
+  (band?.runs || []).forEach((r) => {
+    if (r.pageField) {
+      if (r.pageField === "simple") {
+        children.push(new TextRun({ children: [PageNumber.CURRENT] }));
+      } else if (r.pageField === "labelof") {
+        children.push(new TextRun("Página "), new TextRun({ children: [PageNumber.CURRENT] }), new TextRun(" de "), new TextRun({ children: [PageNumber.TOTAL_PAGES] }));
+      } else {
+        children.push(new TextRun("Página "), new TextRun({ children: [PageNumber.CURRENT] }));
+      }
+      return;
+    }
+    if (r.text) children.push(new TextRun({ text: r.text, bold: r.bold || undefined, italics: r.italic || undefined }));
+  });
+  return new Paragraph({ children: children.length ? children : [new TextRun("")] });
+}
+
 export async function downloadWordDocx(doc) {
-  const blocks = parseBlocks(doc.content);
+  const processedHtml = await preprocessExportHtml(doc.content);
+  const { blocks, header, headerFirst, footer, footerFirst } = parseBlocks(processedHtml);
   const children = [];
 
   for (const b of blocks) {
@@ -267,7 +376,7 @@ export async function downloadWordDocx(doc) {
       children.push(new Paragraph({ numbering: { reference: b.ordered ? "ordered-list" : "bullet-list", level: b.level || 0 }, children: runsToTextRuns(b.runs) }));
       continue;
     }
-    if (b.type === "table") { children.push(buildDocxTable(b.rows)); continue; }
+    if (b.type === "table") { children.push(buildDocxTable(b.rows, { repeatHeader: b.repeatHeader, noBorder: b.noBorder })); continue; }
     if (b.type === "image" && b.src?.startsWith("data:")) {
       try {
         const img = await new Promise((resolve, reject) => {
@@ -297,6 +406,12 @@ export async function downloadWordDocx(doc) {
   const rightTwips = doc.margin_right != null ? cmToTwips(doc.margin_right) : marginTwips;
   const landscape = doc.orientation === "paisagem";
 
+  const headerObj = header ? new Header({ children: [buildFieldParagraph(header)] }) : undefined;
+  const headerFirstObj = headerFirst ? new Header({ children: [buildFieldParagraph(headerFirst)] }) : undefined;
+  const footerObj = footer ? new Footer({ children: [buildFieldParagraph(footer)] }) : undefined;
+  const footerFirstObj = footerFirst ? new Footer({ children: [buildFieldParagraph(footerFirst)] }) : undefined;
+  const hasFirstPage = !!(headerFirstObj || footerFirstObj);
+
   const document = new Document({
     numbering: {
       config: [
@@ -310,7 +425,10 @@ export async function downloadWordDocx(doc) {
           size: { orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
           margin: { top: marginTwips, bottom: marginTwips, left: leftTwips, right: rightTwips },
         },
+        titlePage: hasFirstPage,
       },
+      headers: (headerObj || headerFirstObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj } : undefined,
+      footers: (footerObj || footerFirstObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj } : undefined,
       children,
     }],
   });
@@ -330,7 +448,7 @@ function blockToLines(b) {
   return [text];
 }
 
-export function downloadWordPdf(doc) {
+export async function downloadWordPdf(doc) {
   const landscape = doc.orientation === "paisagem";
   const format = doc.page_size === "carta" ? "letter" : "a4";
   const marginPt = doc.margins === "estreita" ? 36 : doc.margins === "larga" ? 72 : 54;
@@ -342,28 +460,49 @@ export function downloadWordPdf(doc) {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const maxWidth = pageWidth - marginLeftPt - marginRightPt;
-  let y = marginPt;
+  const { blocks, header, headerFirst, footer, footerFirst } = parseBlocks(await preprocessExportHtml(doc.content));
+  const hasHeader = !!(header || headerFirst), hasFooter = !!(footer || footerFirst);
+  let y = marginPt + (hasHeader ? 14 : 0);
 
   const ensureSpace = (lineHeight) => {
-    if (y > pageHeight - marginPt) { pdf.addPage(); y = marginPt; }
+    if (y > pageHeight - marginPt - (hasFooter ? 14 : 0)) { pdf.addPage(); y = marginPt + (hasHeader ? 14 : 0); }
   };
 
-  const blocks = parseBlocks(doc.content);
   blocks.forEach((b) => {
     if (b.type === "pagebreak") { pdf.addPage(); y = marginPt; return; }
     if (b.type === "table") {
-      const cols = Math.max(...b.rows.map((r) => r.length));
+      const cols = Math.max(...b.rows.map((r) => r.reduce((sum, c) => sum + (c.colspan || 1), 0)));
       const colWidth = maxWidth / cols;
       pdf.setFont("helvetica", "normal"); pdf.setFontSize(10);
-      b.rows.forEach((row) => {
-        const cellLines = Array.from({ length: cols }).map((_, i) => pdf.splitTextToSize(row[i] || "", colWidth - 8));
+      const drawRow = (row, isHeader, dryRun = false) => {
+        // expande colspans em posições de coluna reais pra desenhar certo
+        const cellsAtCol = [];
+        let col = 0;
+        row.forEach((c) => { cellsAtCol.push({ ...c, col }); col += c.colspan || 1; });
+        pdf.setFont("helvetica", isHeader ? "bold" : "normal");
+        const cellLines = cellsAtCol.map((c) => pdf.splitTextToSize(c.text || "", colWidth * (c.colspan || 1) - 8));
         const rowLines = Math.max(1, ...cellLines.map((l) => l.length));
         const rowHeight = rowLines * 13 + 8;
+        if (dryRun) { pdf.setFont("helvetica", "normal"); return rowHeight; }
         ensureSpace(rowHeight);
-        pdf.rect(marginLeftPt, y, maxWidth, rowHeight);
-        for (let i = 1; i < cols; i++) pdf.line(marginLeftPt + colWidth * i, y, marginLeftPt + colWidth * i, y + rowHeight);
-        cellLines.forEach((lines, i) => lines.forEach((line, li) => pdf.text(line, marginLeftPt + colWidth * i + 4, y + 13 + li * 13)));
+        cellsAtCol.forEach((c, i) => {
+          const x = marginLeftPt + colWidth * c.col, w = colWidth * (c.colspan || 1);
+          if (c.shading) { pdf.setFillColor(c.shading); pdf.rect(x, y, w, rowHeight, "F"); }
+          if (!b.noBorder) pdf.rect(x, y, w, rowHeight);
+          cellLines[i].forEach((line, li) => pdf.text(line, x + 4, y + 13 + li * 13));
+        });
         y += rowHeight;
+        pdf.setFont("helvetica", "normal");
+        return rowHeight;
+      };
+      b.rows.forEach((row, ri) => {
+        if (b.repeatHeader && ri > 0) {
+          // se essa linha não couber no que resta da página, quebra a
+          // página e redesenha o cabeçalho antes dela, na ordem certa
+          const needed = drawRow(row, false, true);
+          if (y + needed > pageHeight - marginPt) { pdf.addPage(); y = marginPt; drawRow(b.rows[0], true); }
+        }
+        drawRow(row, b.repeatHeader && ri === 0);
       });
       y += 8;
       return;
@@ -394,6 +533,28 @@ export function downloadWordPdf(doc) {
     });
     if (b.type === "heading") y += 4;
   });
+
+  // Cabeçalho/rodapé em cada página de verdade, com o número da página
+  // calculado agora que já sabemos quantas páginas o documento tem.
+  if (hasHeader || hasFooter) {
+    const bandText = (band, pageNum, totalPages) => (band?.runs || []).map((r) => {
+      if (r.pageField === "simple") return String(pageNum);
+      if (r.pageField === "labelof") return `Página ${pageNum} de ${totalPages}`;
+      if (r.pageField) return `Página ${pageNum}`;
+      return r.text || "";
+    }).join("");
+    const totalPages = pdf.internal.getNumberOfPages();
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    for (let p = 1; p <= totalPages; p++) {
+      pdf.setPage(p);
+      const useFirst = p === 1;
+      const h = useFirst && headerFirst ? headerFirst : header;
+      const f = useFirst && footerFirst ? footerFirst : footer;
+      if (h) pdf.text(bandText(h, p, totalPages), marginLeftPt, marginPt - 8);
+      if (f) pdf.text(bandText(f, p, totalPages), marginLeftPt, pageHeight - marginPt + 18);
+    }
+  }
 
   pdf.save(`${safeFileName(doc.title)}.pdf`);
 }
