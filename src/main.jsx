@@ -8068,12 +8068,13 @@ function Whiteboard({ board, onClose, onSave }) {
     e.preventDefault();
     try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); }
     const { x, y } = toWorld(e.clientX, e.clientY);
-    // Só a caneta/stylus (pointerType "pen") desenha de verdade. Trackpad
-    // (que o navegador reporta como "mouse", sem diferenciar de um mouse de
-    // verdade) e toque numa tela sensível ao toque nunca desenham, apagam ou
-    // criam formas/texto — só selecionam e movem objetos (ou navegam pelo
-    // quadro, se tocar/clicar em área vazia).
-    if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso" && tool !== "laser") {
+    // Só a caneta/stylus (pointerType "pen") desenha de verdade e apaga.
+    // Trackpad (que o navegador reporta como "mouse", sem diferenciar de um
+    // mouse de verdade) e toque numa tela sensível ao toque nunca desenham
+    // nem apagam — mas texto e formas não exigem a mesma precisão de um
+    // traço à mão livre, então essas duas ferramentas continuam adiante e
+    // funcionam normalmente com mouse/trackpad/toque (ver o switch abaixo).
+    if ((e.pointerType === "touch" || e.pointerType === "mouse") && tool !== "lasso" && tool !== "laser" && tool !== "text" && tool !== "shape") {
       // Antes de checar o hit-test normal, vê se o toque começou perto da
       // bolinha de redimensionar do item selecionado — sem isso, com o dedo
       // (impreciso) o clique quase sempre "erra" a bolinha por pouco e cai
