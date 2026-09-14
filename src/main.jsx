@@ -136,8 +136,13 @@ function GeneratedCoverArt({ title, compact = false }) {
 // "Capas geradas" ligado e um `title` informado, nem tenta o real: mostra
 // direto a capa desenhada localmente (egress zero, nem o placeholder pede
 // a imagem real depois).
-function SaverImg({ src, alt, fallback, className, wrapClassName, title, compact, lazy }) {
-  const saver = React.useContext(EgressSaverContext);
+function SaverImg({ src, alt, fallback, className, wrapClassName, title, compact, lazy, forceShow }) {
+  // `forceShow`: ignora o modo "Economizar dados" — usado nas imagens que
+  // SÃO o conteúdo do flashcard (a pessoa colocou a foto de propósito pra
+  // estudar com ela), diferente de uma capa/foto decorativa. Sem isso, a
+  // imagem sumia ao estudar mas continuava aparecendo no editor (que nunca
+  // passou pelo SaverImg), parecendo um bug de "some ao estudar".
+  const saver = React.useContext(EgressSaverContext) && !forceShow;
   const generated = React.useContext(GeneratedCoversContext);
   // `lazy`: só baixa quando o elemento entra na tela — usado em listas onde
   // muitos itens (com foto) são renderizados de uma vez só (ex.: a lista de
@@ -1369,7 +1374,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
             </span>
           </label>
           <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
-            Oculta capas de pastas, fotos (compras, mídia, jogos), gifs de exercício e imagens de flashcard pra economizar dados. Livros e PDFs continuam mostrando a capa salva — só param de baixar o arquivo inteiro pra gerar uma nova.
+            Oculta capas de pastas e fotos (compras, mídia, jogos) e gifs de exercício pra economizar dados. Imagens de flashcard continuam aparecendo ao estudar, já que fazem parte do próprio cartão. Livros e PDFs continuam mostrando a capa salva — só param de baixar o arquivo inteiro pra gerar uma nova.
           </small>
         </div>
         <div className="notifSettingsBlock">
@@ -11383,7 +11388,7 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
             {displayCards.map(c => (
               <div key={c.id} className="flashIntroTermRow">
                 <div className="flashIntroTermFront">
-                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy/>
+                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy forceShow/>
                   {stripHtml(c.term).trim() ? <span dangerouslySetInnerHTML={{__html: c.term}}/> : <span className="flashIntroTermEmpty">(sem termo)</span>}
                 </div>
                 {!hideDefs && (
@@ -11769,7 +11774,7 @@ function FlashcardFlipMode({ cards, onComplete, termLang, defLang }) {
           <div className="flashFlipFace flashFlipFront">
             <small>TERMO</small>
             {stripHtml(card.term).trim() && <FlashSpeakBtn text={card.term} lang={termLang}/>}
-            <SaverImg src={card.image} className="flashFlipImage" fallback={null}/>
+            <SaverImg src={card.image} className="flashFlipImage" fallback={null} forceShow/>
             {stripHtml(card.term).trim() ? <span dangerouslySetInnerHTML={{__html: card.term}}/> : <span>(sem termo)</span>}
           </div>
           <div className="flashFlipFace flashFlipBack">
@@ -11941,7 +11946,7 @@ function FlashcardLearnMode({ cards, onComplete }) {
     <div className="flashStudyArea">
       <div className="flashLearnQuestion">
         <small>TERMO</small>
-        <SaverImg src={card.image} className="flashLearnImage" fallback={null}/>
+        <SaverImg src={card.image} className="flashLearnImage" fallback={null} forceShow/>
         <h3 dangerouslySetInnerHTML={{__html: card.term}}/>
       </div>
       <div className="flashLearnOptions">
@@ -12014,7 +12019,7 @@ function FlashcardMatchMode({ cards, onComplete }) {
             else if (wrongFlash.includes(t.key)) cls += " wrong";
             return (
               <button key={t.key} className={cls} disabled={isMatched} onClick={()=>onTap(t)}>
-                <SaverImg src={t.image} className="flashMatchImage" fallback={null}/>
+                <SaverImg src={t.image} className="flashMatchImage" fallback={null} forceShow/>
                 <span dangerouslySetInnerHTML={{__html: t.text}}/>
               </button>
             );
