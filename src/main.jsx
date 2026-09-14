@@ -14121,6 +14121,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const [symbolOpen, setSymbolOpen] = useState(false);
   const [pageNumOpen, setPageNumOpen] = useState(false);
   const [sectionBreakOpen, setSectionBreakOpen] = useState(false);
+  const [crossRefOpen, setCrossRefOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [linkBar, setLinkBar] = useState(null);
   const [linkPopover, setLinkPopover] = useState(null);
@@ -15174,6 +15175,41 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const listBookmarks = () => Array.from(bodyRef.current?.querySelectorAll(".word-bookmark") || []).map(b => ({ id: b.id, name: b.dataset.bookmarkName }));
   const goToBookmark = (id) => bodyRef.current?.querySelector("#" + id)?.scrollIntoView({ block: "center", behavior: "smooth" });
 
+  // ---- referência cruzada (Inserir > Links) — lista títulos (H1/H2/H3) e
+  // indicadores existentes; ao escolher um, insere um link que leva até lá,
+  // com o próprio texto do título/indicador como rótulo (igual ao Word).
+  const listCrossRefTargets = () => {
+    const heads = collectHeadings().map((h, i) => {
+      if (!h.id) h.id = "word-heading-" + Date.now().toString(36) + i;
+      return { id: h.id, label: h.textContent || "(sem texto)" };
+    });
+    const marks = listBookmarks().map(b => ({ id: b.id, label: b.name }));
+    return [...heads, ...marks];
+  };
+  const insertCrossReference = (targetId, label) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) { el?.focus(); }
+    el.focus();
+    const a = document.createElement("a");
+    a.className = "word-crossref";
+    a.href = "#" + targetId;
+    a.textContent = label;
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(a);
+      range.setStartAfter(a);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      el.appendChild(a);
+    }
+    setCrossRefOpen(false);
+    onChange();
+  };
+
   // ---- vídeo online (Inserir > Mídia) — aceita link do YouTube ou Vimeo e
   // embute como iframe responsivo, num bloco não editável (mesmo padrão de
   // cabeçalho/rodapé e quebra de página acima).
@@ -15268,6 +15304,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     colorOpen, setColorOpen, hiliteOpen, setHiliteOpen, emojiOpen, setEmojiOpen,
     fontOpen, setFontOpen, sizeOpen, setSizeOpen, lineOpen, setLineOpen, marginsOpen, setMarginsOpen,
     shadingOpen, setShadingOpen, borderOpen, setBorderOpen, symbolOpen, setSymbolOpen, pageNumOpen, setPageNumOpen, sectionBreakOpen, setSectionBreakOpen, insertSectionBreak,
+    crossRefOpen, setCrossRefOpen, listCrossRefTargets, insertCrossReference,
     applyTextColor, applyHilite, applyFont, applyFontSize, applyHeading, clearFormatting, selectAll,
     insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertImageFile, applyLineHeight,
     findOpen, setFindOpen, findQuery, setFindQuery, replaceValue, setReplaceValue,
@@ -16160,6 +16197,34 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     range.deleteContents();
     range.insertNode(range.createContextualFragment(html));
     handleBodyInput();
+  };
+  // ---- Capa e Página em Branco (Inserir > Páginas) -----------------------
+  const insertCoverPage = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const meta = el.querySelector(":scope > .word-page-meta");
+    const anchor = meta ? meta.nextSibling : el.firstChild;
+    const html = `
+      <div style="height:140px"><br></div>
+      <div class="word-title" style="text-align:center">[Título do Documento]</div>
+      <div class="word-subtitle" style="text-align:center">[Subtítulo]</div>
+      <div style="text-align:center"><br></div>
+      <div style="text-align:center"><br></div>
+      <div style="text-align:center">${new Date().toLocaleDateString("pt-BR")}</div>
+      <div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>
+    `;
+    const frag = document.createRange().createContextualFragment(html);
+    el.insertBefore(frag, anchor);
+    handleBodyInput();
+  };
+  const insertBlankPage = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    fmt.insertPageBreak();
+    insertAtCursor("<div><br></div>");
+    fmt.insertPageBreak();
   };
   const insertLetterTemplate = () => {
     const nameField = guessField(/nome|name/i);
@@ -17406,8 +17471,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </>)}
 
           {ribbonTab === "insert" && (<>
-            <div className="wordRibbonGroup">
+            <div className="wordRibbonGroup wordRibbonGroupWide">
               <div className="wordRibbonRow">
+                <button className="wordTextBtn" data-tip="Capa" data-tipdesc="Insere uma página de rosto no início do documento, com título, subtítulo e data." onClick={insertCoverPage}><BookOpen size={14}/> Capa</button>
+                <button className="wordTextBtn" data-tip="Página em Branco" data-tipdesc="Insere uma página vazia no ponto onde está o cursor." onClick={insertBlankPage}><FileText size={14}/> Em Branco</button>
                 <button data-tip="Quebra de Página (Ctrl+Enter)" data-tipdesc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}><FileType size={15}/></button>
                 <div className="wordDropdownWrap">
                   <button className="wordDropdownBtn" data-tip="Quebra de Seção" data-tipdesc="Marca uma divisão de seção no documento (próxima página, contínua, página par ou ímpar)." onClick={() => fmt.setSectionBreakOpen(o => !o)}><Columns2 size={14}/> <ChevronDown size={12}/></button>
@@ -17452,13 +17519,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Link (Ctrl+K)" data-tipdesc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button></div>
+              <div className="wordRibbonRow">
+                <button data-tip="Link (Ctrl+K)" data-tipdesc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button>
+                <div className="wordDropdownWrap">
+                  <button className="wordDropdownBtn" data-tip="Referência Cruzada" data-tipdesc="Insere um link para um título ou indicador já existente no documento, usando o próprio texto dele como rótulo." onClick={() => fmt.setCrossRefOpen(o => !o)}><Crosshair size={14}/> <ChevronDown size={12}/></button>
+                  {fmt.crossRefOpen && <div className="wordDropdownMenu">
+                    {fmt.listCrossRefTargets().length ? fmt.listCrossRefTargets().map(t => <button key={t.id} onClick={() => fmt.insertCrossReference(t.id, t.label)}>{t.label}</button>) : <span className="wordDropdownEmpty">Nenhum título ou indicador ainda</span>}
+                  </div>}
+                </div>
+              </div>
               <span className="wordRibbonGroupLabel">Links</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Sumário</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
@@ -17691,6 +17761,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </>)}
 
           {ribbonTab === "references" && (<>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
+              <span className="wordRibbonGroupLabel">Sumário</span>
+            </div>
+            <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow"><button data-tip="Inserir Nota de Rodapé" data-tipdesc="Insere uma referência numerada no texto e um espaço para a nota correspondente no fim do documento." onClick={fmt.insertFootnote}><Superscript size={15}/></button></div>
               <span className="wordRibbonGroupLabel">Notas de Rodapé</span>
