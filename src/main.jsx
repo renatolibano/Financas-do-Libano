@@ -8484,7 +8484,12 @@ function Whiteboard({ board, onClose, onSave }) {
                     </div>
                     <textarea
                       autoFocus
-                      ref={ta => { activeTextareaRef.current = ta; if (ta) setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(ta, 18) }); }}
+                      ref={ta => {
+                        activeTextareaRef.current = ta;
+                        if (!ta) return;
+                        const { width: newW, height: newH } = autoSizeFreeTextarea(ta, 18);
+                        setNewTextDraft(prev => prev && (prev.width !== newW || prev.height !== newH) ? { ...prev, width: newW, height: newH } : prev);
+                      }}
                       className="whiteboardTextInput"
                       style={{ color, fontSize: 18, width: (newTextDraft.width) + "px", height: (newTextDraft.height) + "px" }}
                       onInput={e => setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(e.target, 18) })}
@@ -12169,6 +12174,33 @@ function nextActivityKind(kind){
   return "desenvolvimento";
 }
 
+// Cor do "foguinho" da sequência — reaproveita a paleta de categorias (gold)
+// em vez de inventar uma cor nova.
+const STREAK_COLOR = colorHex("gold");
+
+// Sequência (streak) de dias seguidos com pelo menos um afazer/registro de
+// categoria "Desenvolvimento" concluído — estilo Duolingo. Calculada 100% no
+// cliente a partir dos dados já carregados pra aba Gráfico (activityTodos/
+// activityLogs, ambos já buscados pra montar os gráficos), então não gera
+// nenhum egress extra. O dia de hoje só "quebra" a sequência quando ele
+// termina (ver activityEffectiveTodayISO) sem nenhum registro — até lá, a
+// sequência anterior continua valendo, só marcada como "hoje ainda não".
+function activityStreakInfo(items, todos, logs, effectiveToday){
+  const devIds = new Set(items.filter(it=>it.kind==="desenvolvimento").map(it=>it.id));
+  if(devIds.size===0) return {streak:0, doneToday:false, hasDevCategory:false};
+  const devDates = new Set();
+  todos.forEach(t=>{ if(t.done && t.completed_at && devIds.has(t.item_id)) devDates.add(isoDateFromTimestamp(t.completed_at)); });
+  logs.forEach(l=>{ if(devIds.has(l.item_id)) devDates.add(l.date); });
+  const doneToday = devDates.has(effectiveToday);
+  let cursor = doneToday ? effectiveToday : isoAddDays(effectiveToday, -1);
+  let streak = 0;
+  while(devDates.has(cursor)){
+    streak++;
+    cursor = isoAddDays(cursor, -1);
+  }
+  return {streak, doneToday, hasDevCategory:true};
+}
+
 // Monta a dica de equilíbrio a partir da contagem de cada afazer no período
 // selecionado: prioriza avisar sobre o que ficou zerado, depois sobre o que
 // está dominando demais o tempo, depois sobre o que está bem abaixo da média.
@@ -12472,6 +12504,7 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity, session}){
   const [dayEndHour,setDayEndHour] = usePersistentState("libano-activity-day-end-hour", 0);
   const [showDaySettings,setShowDaySettings] = useState(false);
   const effectiveToday = activityEffectiveTodayISO(dayEndHour);
+  const streakInfo = activityStreakInfo(items, todos, logs, effectiveToday);
 
   const [taskText,setTaskText] = useState("");
   const [taskCat,setTaskCat] = useState("");
@@ -12495,7 +12528,13 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity, session}){
     const name = newCatName.trim();
     if(!name) return;
     if(items.some(it=>it.name.toLowerCase()===name.toLowerCase())){ alert("Você já tem uma categoria com esse nome."); return; }
-    const color = STUDY_COLORS[items.length % STUDY_COLORS.length].key;
+    // Primeira cor da paleta ainda não usada por nenhuma categoria existente
+    // (índice por items.length repetia cor depois de excluir categorias, já
+    // que o comprimento da lista não reflete mais quais cores estão em uso).
+    // Se todas já estiverem em uso, volta a ciclar normalmente.
+    const usedColors = new Set(items.map(it=>it.color));
+    const unused = STUDY_COLORS.find(c=>!usedColors.has(c.key));
+    const color = (unused || STUDY_COLORS[items.length % STUDY_COLORS.length]).key;
     addItem({name, color, kind:newCatKind});
     setNewCatName("");
     setNewCatKind(null);
@@ -12617,6 +12656,14 @@ function ActivityChartPage({itemsEntity, logsEntity, todosEntity, session}){
         </div>
       </div>
       <div className="flashHeadActions">
+        {streakInfo.hasDevCategory && <span className="actStreakBadge" style={streakInfo.streak>0?{color:STREAK_COLOR, background:STREAK_COLOR+"18", borderColor:STREAK_COLOR+"55"}:undefined}
+          title={streakInfo.doneToday
+            ? `Sequência de ${streakInfo.streak} ${streakInfo.streak===1?"dia":"dias"} — hoje já contou.`
+            : (streakInfo.streak>0
+              ? `Sequência de ${streakInfo.streak} ${streakInfo.streak===1?"dia":"dias"} — marque algo de Desenvolvimento hoje para não perder.`
+              : "Nenhuma sequência ativa — marque um afazer de Desenvolvimento como feito para começar.")}>
+          <Flame size={15} fill={streakInfo.doneToday?STREAK_COLOR:"none"}/> {streakInfo.streak} {streakInfo.streak===1?"dia":"dias"}
+        </span>}
         <span className="actRangeBadge"><CalendarDays size={14}/> {formatTxDate(rangeStart)} - {formatTxDate(effectiveToday)}</span>
         <button type="button" className="actIconBtn" title="Configurações do gráfico" onClick={()=>setShowDaySettings(true)}><Settings size={16}/></button>
       </div>
