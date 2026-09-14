@@ -136,12 +136,30 @@ function GeneratedCoverArt({ title, compact = false }) {
 // "Capas geradas" ligado e um `title` informado, nem tenta o real: mostra
 // direto a capa desenhada localmente (egress zero, nem o placeholder pede
 // a imagem real depois).
-function SaverImg({ src, alt, fallback, className, wrapClassName, title, compact }) {
+function SaverImg({ src, alt, fallback, className, wrapClassName, title, compact, lazy }) {
   const saver = React.useContext(EgressSaverContext);
   const generated = React.useContext(GeneratedCoversContext);
-  const cachedSrc = useCachedImageUrl((saver || (generated && title)) ? null : src);
+  // `lazy`: só baixa quando o elemento entra na tela — usado em listas onde
+  // muitos itens (com foto) são renderizados de uma vez só (ex.: a lista de
+  // termos antes de começar a estudar um set de flashcards), pra não puxar
+  // egress de fotos que a pessoa nunca rolou até ver.
+  const elRef = useRef(null);
+  const [visible, setVisible] = useState(!lazy);
+  useEffect(() => {
+    if (!lazy || visible) return;
+    if (typeof IntersectionObserver === "undefined") { setVisible(true); return; }
+    const el = elRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting) { setVisible(true); obs.disconnect(); }
+    }, { rootMargin: "200px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [lazy, visible]);
+  const cachedSrc = useCachedImageUrl((saver || (generated && title) || !visible) ? null : src);
   if (generated && title) return <GeneratedCoverArt title={title} compact={compact}/>;
-  if (!src || saver || !cachedSrc) return fallback || null;
+  if (!src || saver) return fallback || null;
+  if (!cachedSrc) return lazy ? <span ref={elRef} style={{ display: "contents" }}>{fallback || null}</span> : (fallback || null);
   const img = <img src={cachedSrc} alt={alt || ""} className={className} />;
   return wrapClassName ? <div className={wrapClassName}>{img}</div> : img;
 }
@@ -11327,8 +11345,16 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
   const [tab, setTab] = useState(null);
   const [switchingMode, setSwitchingMode] = useState(false);
   const [hideDefs, setHideDefs] = useState(false);
+  const [invertTerms, setInvertTerms] = useState(false);
   const [aiQuizOpen, setAiQuizOpen] = useState(false);
   const cards = list.cards || [];
+  // Com a inversão ligada, termo e definição trocam de lugar em todo lugar
+  // que usa `cards` daqui pra baixo (prévia, modos de estudo) — a imagem
+  // continua no mesmo cartão, só o texto de cada lado muda.
+  const displayCards = useMemo(
+    () => invertTerms ? cards.map(c => ({ ...c, term: c.definition, definition: c.term })) : cards,
+    [cards, invertTerms]
+  );
   const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
   const fullRef = useRef(null);
   const [fullscreen, toggleFullscreen] = useFullscreen(fullRef);
@@ -11354,10 +11380,10 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
 
           <div className="flashIntroTerms">
             <div className="flashIntroTermsHead"><b>Termos nesta lista ({cards.length})</b></div>
-            {cards.map(c => (
+            {displayCards.map(c => (
               <div key={c.id} className="flashIntroTermRow">
                 <div className="flashIntroTermFront">
-                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null}/>
+                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy/>
                   {stripHtml(c.term).trim() ? <span dangerouslySetInnerHTML={{__html: c.term}}/> : <span className="flashIntroTermEmpty">(sem termo)</span>}
                 </div>
                 {!hideDefs && (
@@ -11370,6 +11396,10 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
           </div>
 
           <div className="flashIntroBar">
+            <button className={"flashIntroBarBtn"+(invertTerms?" active":"")} title="Troca o termo pela definição em todos os cartões" onClick={()=>setInvertTerms(v=>!v)}>
+              <ArrowLeftRight size={15}/>
+              {invertTerms ? "Desfazer inversão" : "Inverter termos e definições"}
+            </button>
             <button className="flashIntroBarBtn" onClick={()=>setHideDefs(h=>!h)}>
               {hideDefs ? <Eye size={15}/> : <EyeOff size={15}/>}
               {hideDefs ? "Mostrar definições" : "Esconder definições"}
@@ -11377,12 +11407,12 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
             <button className="flashAIBtn" title="Estudar com IA" onClick={()=>setAiQuizOpen(true)}><Sparkles size={17}/></button>
           </div>
         </>
-      ) : tab === "cards" ? <FlashcardFlipMode cards={cards} onComplete={notifyFinished} termLang={list.term_lang} defLang={list.definition_lang}/>
-        : tab === "learn" ? <FlashcardLearnMode cards={cards} onComplete={notifyFinished}/>
-        : <FlashcardMatchMode cards={cards} onComplete={notifyFinished}/>}
+      ) : tab === "cards" ? <FlashcardFlipMode cards={displayCards} onComplete={notifyFinished} termLang={invertTerms ? list.definition_lang : list.term_lang} defLang={invertTerms ? list.term_lang : list.definition_lang}/>
+        : tab === "learn" ? <FlashcardLearnMode cards={displayCards} onComplete={notifyFinished}/>
+        : <FlashcardMatchMode cards={displayCards} onComplete={notifyFinished}/>}
 
       {switchingMode && <FlashcardModeSwitchModal activeTab={tab} onPick={setTab} onClose={()=>setSwitchingMode(false)}/>}
-      {aiQuizOpen && <FlashcardAIQuiz listId={list.id} cards={cards} session={session} onClose={()=>setAiQuizOpen(false)}/>}
+      {aiQuizOpen && <FlashcardAIQuiz listId={list.id} cards={displayCards} session={session} onClose={()=>setAiQuizOpen(false)}/>}
     </div>
   );
 }

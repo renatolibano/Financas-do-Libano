@@ -876,6 +876,7 @@ h1{font-size:23px}
 .flashIntroBar{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px;padding:8px;background:var(--bg-surface);border:1px solid var(--border);border-radius:999px;width:fit-content;margin-left:auto;margin-right:auto}
 .flashIntroBarBtn{display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:600;color:var(--text-1)}
 .flashIntroBarBtn:hover{background:var(--bg-hover-2)}
+.flashIntroBarBtn.active{background:var(--accent-soft-bg);color:var(--accent)}
 .flashAIBtn{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7b5bff,#ff5bd6);color:#fff;display:grid;place-items:center;flex-shrink:0}
 .flashAIBtn:hover{filter:brightness(1.1)}
 
