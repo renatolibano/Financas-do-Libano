@@ -11029,13 +11029,17 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
         // o navegador cacheia a imagem normalmente, em vez de baixar um base64
         // embutido no JSON toda vez que a lista é carregada (isso é o que mais
         // pesava no egress do plano gratuito nas listas com fotos).
-        const blob = await resizeImageToBlob(file, 640, 640, 0.82);
+        // 480x480@0.75: a imagem some no máximo com 140-180px de altura na
+        // tela (ver .flashFlipImage/.flashLearnImage), então 640px era mais
+        // resolução do que qualquer aparelho chega a exibir — isso só
+        // engordava o arquivo baixado (egress) sem ganho visual.
+        const blob = await resizeImageToBlob(file, 480, 480, 0.75);
         const url = await uploadFlashcardImage(session.user.id, id, blob);
         setRow(id, "image", url);
       } else {
         // Modo local (sem login/Supabase configurado): não há onde subir o
         // arquivo, então mantém o comportamento antigo de embutir o base64.
-        const dataUrl = await resizeImageToDataUrl(file, 640, 640, 0.82);
+        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.75);
         setRow(id, "image", dataUrl);
       }
     } catch (e) {
