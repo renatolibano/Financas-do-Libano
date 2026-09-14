@@ -809,12 +809,15 @@ h1{font-size:23px}
 .flashImportActions{display:flex;justify-content:flex-end;gap:10px}
 @media (max-width:640px){.flashFormRowFields{grid-template-columns:1fr}}
 
-.flashFormImageField{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;width:84px}
+.flashFormImageField{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:84px}
 .flashFormImageBtn{width:64px;height:64px;border-radius:12px;border:1.5px dashed var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-3);font-size:10px;cursor:pointer;overflow:hidden;text-align:center}
 .flashFormImageBtn:hover{color:var(--accent);border-color:var(--accent)}
 .flashFormImageBtn img{width:100%;height:100%;object-fit:cover;display:block}
 .flashFormImageRemove{position:absolute;top:-6px;right:8px;width:20px;height:20px;border-radius:50%;background:var(--bg-danger-soft);color:#ff9d9d;display:grid;place-items:center}
 .flashFormImageField label:last-child{font-size:10px;color:var(--text-3);letter-spacing:.04em}
+.flashFormImageSideToggle{display:flex;gap:4px}
+.flashFormImageSideToggle button{font-size:9px;padding:3px 6px;border-radius:999px;border:1px solid var(--border);color:var(--text-3);white-space:nowrap}
+.flashFormImageSideToggle button.active{background:var(--accent-soft-bg);color:var(--accent);border-color:var(--accent)}
 @media (max-width:640px){.flashFormImageField{width:100%;flex-direction:row;justify-content:flex-start}.flashFormImageBtn{width:56px;height:56px;flex-shrink:0}}
 
 /* Barra de idiomas termo/definição (sugestões de tradução nos flashcards) */

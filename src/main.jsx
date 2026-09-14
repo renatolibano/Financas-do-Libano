@@ -10960,8 +10960,8 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   const [termLang, setTermLang] = useState(list?.term_lang || null);
   const [defLang, setDefLang] = useState(list?.definition_lang || null);
   const [rows, setRows] = useState(
-    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null }))
-      : [{ id: rid(), term: "", definition: "", image: null }, { id: rid(), term: "", definition: "", image: null }]
+    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null, image_side: c.image_side === "definition" ? "definition" : "term" }))
+      : [{ id: rid(), term: "", definition: "", image: null, image_side: "term" }, { id: rid(), term: "", definition: "", image: null, image_side: "term" }]
   );
   const [uploadingId, setUploadingId] = useState(null);
   const [showImport, setShowImport] = useState(false);
@@ -10978,7 +10978,7 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
       return rs.filter(r => r.id !== id);
     });
   };
-  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null }]);
+  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null, image_side: "term" }]);
 
   const parseImportText = (text) => {
     const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -11082,7 +11082,7 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   };
 
   const submit = () => {
-    const cards = rows.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image).map(r => ({ id: r.id, term: r.term, definition: r.definition, image: r.image || null }));
+    const cards = rows.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image).map(r => ({ id: r.id, term: r.term, definition: r.definition, image: r.image || null, image_side: r.image_side === "definition" ? "definition" : "term" }));
     if (cards.length === 0) { alert("Adicione pelo menos um cartão com termo ou definição."); return; }
     onSave({
       title: title.trim() || "Lista sem título",
@@ -11310,6 +11310,12 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
           </label>
           {row.image && <button className="flashFormImageRemove" onClick={()=>onRemoveImage(row.id)}><X size={12}/></button>}
           <label>IMAGEM</label>
+          {row.image && (
+            <div className="flashFormImageSideToggle">
+              <button type="button" className={row.image_side!=="definition"?"active":""} onClick={()=>onChangeField(row.id, "image_side", "term")}>Termo</button>
+              <button type="button" className={row.image_side==="definition"?"active":""} onClick={()=>onChangeField(row.id, "image_side", "definition")}>Definição</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -11357,7 +11363,7 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
   // que usa `cards` daqui pra baixo (prévia, modos de estudo) — a imagem
   // continua no mesmo cartão, só o texto de cada lado muda.
   const displayCards = useMemo(
-    () => invertTerms ? cards.map(c => ({ ...c, term: c.definition, definition: c.term })) : cards,
+    () => invertTerms ? cards.map(c => ({ ...c, term: c.definition, definition: c.term, image_side: c.image_side==="definition" ? "term" : "definition" })) : cards,
     [cards, invertTerms]
   );
   const notifyFinished = () => onFinish && onFinish(list.id, list.title || "Lista sem título");
@@ -11388,11 +11394,12 @@ function FlashcardListStudy({ list, session, onBack, onEdit, onFinish }) {
             {displayCards.map(c => (
               <div key={c.id} className="flashIntroTermRow">
                 <div className="flashIntroTermFront">
-                  <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy forceShow/>
+                  {c.image_side!=="definition" && <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy forceShow/>}
                   {stripHtml(c.term).trim() ? <span dangerouslySetInnerHTML={{__html: c.term}}/> : <span className="flashIntroTermEmpty">(sem termo)</span>}
                 </div>
                 {!hideDefs && (
                   <div className="flashIntroTermBack">
+                    {c.image_side==="definition" && <SaverImg src={c.image} className="flashIntroTermImg" fallback={null} lazy forceShow/>}
                     {stripHtml(c.definition).trim() ? <span dangerouslySetInnerHTML={{__html: c.definition}}/> : <span className="flashIntroTermEmpty">(sem definição)</span>}
                   </div>
                 )}
@@ -11774,12 +11781,13 @@ function FlashcardFlipMode({ cards, onComplete, termLang, defLang }) {
           <div className="flashFlipFace flashFlipFront">
             <small>TERMO</small>
             {stripHtml(card.term).trim() && <FlashSpeakBtn text={card.term} lang={termLang}/>}
-            <SaverImg src={card.image} className="flashFlipImage" fallback={null} forceShow/>
+            {card.image_side!=="definition" && <SaverImg src={card.image} className="flashFlipImage" fallback={null} forceShow/>}
             {stripHtml(card.term).trim() ? <span dangerouslySetInnerHTML={{__html: card.term}}/> : <span>(sem termo)</span>}
           </div>
           <div className="flashFlipFace flashFlipBack">
             <small>DEFINIÇÃO</small>
             {stripHtml(card.definition).trim() && <FlashSpeakBtn text={card.definition} lang={defLang}/>}
+            {card.image_side==="definition" && <SaverImg src={card.image} className="flashFlipImage" fallback={null} forceShow/>}
             {stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}
           </div>
         </div>
@@ -11946,7 +11954,7 @@ function FlashcardLearnMode({ cards, onComplete }) {
     <div className="flashStudyArea">
       <div className="flashLearnQuestion">
         <small>TERMO</small>
-        <SaverImg src={card.image} className="flashLearnImage" fallback={null} forceShow/>
+        {card.image_side!=="definition" && <SaverImg src={card.image} className="flashLearnImage" fallback={null} forceShow/>}
         <h3 dangerouslySetInnerHTML={{__html: card.term}}/>
       </div>
       <div className="flashLearnOptions">
@@ -11959,6 +11967,9 @@ function FlashcardLearnMode({ cards, onComplete }) {
           return <button key={i} className={cls} onClick={()=>choose(opt)} dangerouslySetInnerHTML={{__html: opt}}/>;
         })}
       </div>
+      {selected && card.image_side==="definition" && (
+        <SaverImg src={card.image} className="flashLearnImage" fallback={null} forceShow/>
+      )}
       {selected && <button className="add flashLearnNext" onClick={next}>Próxima <ArrowRight size={15}/></button>}
       <div className="flashPager"><span>{index+1} / {order.length}</span></div>
     </div>
@@ -11968,8 +11979,8 @@ function FlashcardLearnMode({ cards, onComplete }) {
 function FlashcardMatchMode({ cards, onComplete }) {
   const pairCards = cards.slice(0, 8);
   const makeTiles = () => shuffleArr(pairCards.flatMap(c => [
-    { key: c.id+"-t", pairId: c.id, text: c.term, image: c.image || null },
-    { key: c.id+"-d", pairId: c.id, text: c.definition }
+    { key: c.id+"-t", pairId: c.id, text: c.term, image: c.image_side!=="definition" ? (c.image || null) : null },
+    { key: c.id+"-d", pairId: c.id, text: c.definition, image: c.image_side==="definition" ? (c.image || null) : null }
   ]));
   const [tiles, setTiles] = useState(makeTiles);
   const [selected, setSelected] = useState(null);
