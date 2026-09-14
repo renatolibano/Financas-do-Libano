@@ -11152,7 +11152,23 @@ const FLASH_HIGHLIGHT_COLOR = "#997700";
 function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage, onRemoveImage, termLang, defLang }) {
   const termRef = useRef(null);
   const defRef = useRef(null);
-  const cachedRowImage = useCachedImageUrl(row.image);
+  const rowRef = useRef(null);
+  // Só baixa/cacheia a foto do cartão quando a linha entra na tela — sem
+  // isso, abrir um set com várias fotos baixava todas de uma vez (egress
+  // invisível), mesmo as que a pessoa nunca rolou até ver.
+  const [imageVisible, setImageVisible] = useState(false);
+  useEffect(() => {
+    if (!row.image || imageVisible) return;
+    if (typeof IntersectionObserver === "undefined") { setImageVisible(true); return; }
+    const el = rowRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting) { setImageVisible(true); obs.disconnect(); }
+    }, { rootMargin: "200px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [row.image, imageVisible]);
+  const cachedRowImage = useCachedImageUrl(imageVisible ? row.image : null);
 
   useEffect(() => {
     if (termRef.current) termRef.current.innerHTML = row.term || "";
@@ -11206,7 +11222,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
   };
 
   return (
-    <div className="flashFormRow">
+    <div className="flashFormRow" ref={rowRef}>
       <div className="flashFormRowHead">
         <span>{index+1}</span>
         <div className="flashFormToolbar" onMouseDown={keepFocus}>
@@ -11263,7 +11279,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
             {uploading ? (
               <span>Enviando...</span>
             ) : row.image ? (
-              <img src={cachedRowImage || row.image} alt="Imagem do cartão"/>
+              cachedRowImage ? <img src={cachedRowImage} alt="Imagem do cartão"/> : <ImagePlus size={16}/>
             ) : (
               <><ImagePlus size={16}/><span>Imagem</span></>
             )}
