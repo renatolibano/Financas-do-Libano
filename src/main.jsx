@@ -6162,7 +6162,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   useEffect(() => {
     const handler = (e) => {
       if (panel==="notas") return; // não interfere na digitação das notas
-      if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
+      if (["INPUT","TEXTAREA"].includes(e.target.tagName) || e.target?.isContentEditable) return;
       const panBinding = getBinding(shortcuts, "pan");
       if (matchesShortcut(e, panBinding)) {
         // preventDefault aqui é essencial: sem ele, se o foco estiver num botão
@@ -6499,10 +6499,6 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   >
                     {editingTextId===a.id && (
                       <div className="textAnnToolbar" onPointerDown={e=>e.stopPropagation()}>
-                        <button type="button" title="Quebrar linha (ou Shift+Enter)"
-                          onPointerDown={(e)=>{ e.preventDefault(); const ta=activeTextareaRef.current; if(!ta) return; insertLineBreakAt(ta); autoGrowPdfTextarea(ta); }}>
-                          <Pilcrow size={13}/>
-                        </button>
                         <button type="button" title={handwritingId===a.id?"Voltar pro teclado":"Escrever à mão e converter"}
                           className={handwritingId===a.id?"active":""}
                           onClick={()=>{
@@ -6562,12 +6558,6 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                       pointerEvents: "auto",
                     }}
                   >
-                    <div className="textAnnToolbar" onPointerDown={e=>e.stopPropagation()}>
-                      <button type="button" title="Quebrar linha (ou Shift+Enter)"
-                        onPointerDown={(e)=>{ e.preventDefault(); const ta=activeTextareaRef.current; if(!ta) return; insertLineBreakAt(ta); autoSizeFreeTextarea(ta, 16); }}>
-                        <Pilcrow size={13}/>
-                      </button>
-                    </div>
                     <div contentEditable suppressContentEditableWarning className="pdfTextAnnInput"
                       ref={(node)=>{
                         activeTextareaRef.current = node;
@@ -8083,7 +8073,7 @@ function Whiteboard({ board, onClose, onSave }) {
 
   useEffect(() => {
     const onKeyDown = (e) => {
-      if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
+      if (["INPUT", "TEXTAREA"].includes(e.target.tagName) || e.target?.isContentEditable) return;
       if (matchesShortcut(e, getBinding(shortcuts, "pan"))) { spaceDownRef.current = true; e.preventDefault(); }
       if (matchesShortcut(e, getBinding(shortcuts, "straightLine"))) straightLineHeldRef.current = true;
       if (e.key === "Escape") { if (editingTextId) { setEditingTextId(null); setHandwritingId(null); setPendingTextDraft(null); } else if (tool === "lasso" && lassoSelectedIds.length) setLassoSelectedIds([]); else onClose(); }
@@ -8527,10 +8517,6 @@ function Whiteboard({ board, onClose, onSave }) {
                   >
                     {editingTextId === el.id && (
                       <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
-                        <button type="button" title="Quebrar linha (ou Shift+Enter)"
-                          onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); autoGrowWhiteboardTextarea(ta); }}>
-                          <Pilcrow size={13}/>
-                        </button>
                         <button type="button" title={handwritingId === el.id ? "Voltar pro teclado" : "Escrever à mão e converter"}
                           className={handwritingId === el.id ? "active" : ""}
                           onClick={() => {
@@ -8596,12 +8582,6 @@ function Whiteboard({ board, onClose, onSave }) {
                     width={newTextDraft.width} height={newTextDraft.height}
                     style={{ overflow: "visible" }}
                   >
-                    <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
-                      <button type="button" title="Quebrar linha (ou Shift+Enter)"
-                        onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(ta, 18) }); }}>
-                        <Pilcrow size={13}/>
-                      </button>
-                    </div>
                     <div
                       contentEditable
                       suppressContentEditableWarning
