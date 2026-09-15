@@ -47,6 +47,7 @@ import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl, optimizeExistingBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile, optimizeExistingStudyPdfFile } from "./lib/studyPdfs";
 import { listPdfAudios, getPdfAudioBlob, addPdfAudio, renamePdfAudio, deletePdfAudio, optimizeAllPdfAudios } from "./lib/pdfAudios";
+import { listPdfPrints, getPdfPrintBlob, addPdfPrint, renamePdfPrint, deletePdfPrint } from "./lib/pdfPrints";
 import { recordingAudioBitsPerSecond } from "./lib/audioOptimize";
 import { useReadingStats, currentMonthKey } from "./lib/readingStats";
 import { createBlankPdfBlob } from "./lib/pdfPages";
@@ -2717,6 +2718,198 @@ function PdfAudioPanel({ pdfKind, pdfId, title }) {
   );
 }
 
+// Painel de "Prints" dos leitores de PDF: cola (Ctrl+V) ou importa
+// screenshots/fotos e guarda tudo junto daquele PDF, igual ao painel de
+// áudios (PdfAudioPanel). Usado tanto no PdfReader (livros) quanto no
+// StudyPdfReader (PDFs de estudo).
+//
+// Cada imagem é comprimida no próprio navegador (canvas, ver
+// compressImageForPage) antes de salvar — assim ela ocupa bem menos espaço
+// e, caso o app algum dia sincronize esses dados, gera o mínimo possível de
+// egress. Tudo fica só no IndexedDB local (ver lib/pdfPrints.js): nada sobe
+// pra nuvem, então hoje isso não gasta rede nenhuma.
+function PdfPrintsPanel({ pdfKind, pdfId, title }) {
+  const [prints, setPrints] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [viewingId, setViewingId] = useState(null);
+  const [viewUrl, setViewUrl] = useState(null);
+  const objectUrlRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    (async () => {
+      const list = await listPdfPrints(pdfKind, pdfId);
+      if (!cancelled) { setPrints(list); setLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfKind, pdfId]);
+
+  useEffect(() => () => { if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current); }, []);
+
+  const addPrintFromFile = async (file) => {
+    if (!file || !file.type?.startsWith("image/") || pdfId == null) return;
+    setBusy(true);
+    try {
+      // Mesma compressão usada pras imagens do quadro infinito: 1400px no
+      // maior lado e qualidade 0.82 já bastam pra ler um print com conforto
+      // sem pesar no IndexedDB.
+      const { dataUrl, width, height } = await compressImageForPage(file, 1400, 1400, 0.82);
+      const blob = await (await fetch(dataUrl)).blob();
+      const meta = await addPdfPrint(pdfKind, pdfId, {
+        blob, width, height,
+        name: file.name ? file.name.replace(/\.[a-z0-9]+$/i, "") : `Print ${new Date().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`,
+      });
+      if (meta) setPrints(list => [meta, ...list]);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    addPrintFromFile(file);
+  };
+
+  // Colar (Ctrl+V) direto no painel de prints — só ativo enquanto ele está
+  // aberto, igual ao paste de imagens do quadro infinito.
+  useEffect(() => {
+    const handlePaste = (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type?.startsWith("image/")) {
+          e.preventDefault();
+          addPrintFromFile(item.getAsFile());
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfKind, pdfId]);
+
+  const openViewer = async (print) => {
+    const blob = await getPdfPrintBlob(pdfKind, pdfId, print.id);
+    if (!blob) return;
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    const url = URL.createObjectURL(blob);
+    objectUrlRef.current = url;
+    setViewUrl(url);
+    setViewingId(print.id);
+  };
+  const closeViewer = () => {
+    if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = null; }
+    setViewUrl(null);
+    setViewingId(null);
+  };
+
+  const handleDownload = async (print) => {
+    const blob = await getPdfPrintBlob(pdfKind, pdfId, print.id);
+    if (!blob) return;
+    const ext = (blob.type && blob.type.split("/")[1]) ? blob.type.split("/")[1].split(";")[0] : "jpg";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${print.name || "print"}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const startRename = (print) => { setRenamingId(print.id); setRenameValue(print.name); };
+  const commitRename = async () => {
+    if (renamingId == null) return;
+    const id = renamingId;
+    setRenamingId(null);
+    const next = await renamePdfPrint(pdfKind, pdfId, id, renameValue);
+    setPrints(next);
+  };
+
+  const handleDelete = async (print) => {
+    if (viewingId === print.id) closeViewer();
+    const next = await deletePdfPrint(pdfKind, pdfId, print.id);
+    setPrints(next);
+  };
+
+  return (
+    <div className="pdfPrintsPanel">
+      {pdfId == null ? (
+        <p className="emptyHint">Prints só podem ser guardados em PDFs salvos na estante — esse aqui está aberto sem salvar.</p>
+      ) : (
+        <>
+          <label className={`add pdfPrintsAddBtn${busy ? " disabled" : ""}`}>
+            <ImagePlus size={16}/> {busy ? "Salvando..." : "Adicionar print"}
+            <input type="file" accept="image/*" hidden onChange={handleImportFile} disabled={busy}/>
+          </label>
+          <p className="emptyHint pdfPrintsPasteHint">Ou cole com Ctrl+V um print copiado.</p>
+          <div className="pdfPrintsGrid">
+            {!loaded && <p className="emptyHint">Carregando prints...</p>}
+            {loaded && prints.length===0 && <p className="emptyHint">Nenhum print ainda. Cole ou importe uma imagem relevante para "{title}".</p>}
+            {prints.map(print => (
+              <div key={print.id} className="pdfPrintItem">
+                <PdfPrintThumb pdfKind={pdfKind} pdfId={pdfId} print={print} onClick={()=>openViewer(print)}/>
+                <div className="pdfPrintItemInfo">
+                  {renamingId===print.id ? (
+                    <input autoFocus className="pdfAudioRenameInput" value={renameValue}
+                      onChange={e=>setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={e=>{ if(e.key==="Enter") commitRename(); if(e.key==="Escape") setRenamingId(null); }}/>
+                  ) : (
+                    <b className="pdfPrintItemName" onClick={()=>startRename(print)} title="Toque para renomear">{print.name}</b>
+                  )}
+                </div>
+                <div className="pdfPrintItemActions">
+                  <button className="pdfAudioItemIconBtn" title="Renomear print" onClick={()=>startRename(print)}><Pencil size={13}/></button>
+                  <button className="pdfAudioItemIconBtn" title="Baixar print" onClick={()=>handleDownload(print)}><Download size={13}/></button>
+                  <button className="pdfAudioItemDelete" title="Excluir print" onClick={()=>handleDelete(print)}><Trash2 size={13}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {viewUrl && (
+        <div className="pdfPrintLightbox" onClick={closeViewer}>
+          <img src={viewUrl} alt={prints.find(p=>p.id===viewingId)?.name || "Print"} onClick={e=>e.stopPropagation()}/>
+          <button className="pdfPrintLightboxClose" onClick={closeViewer}><X size={18}/></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Miniatura de um print: carrega o Blob (comprimido) só quando o item entra
+// na lista, e revoga a URL ao desmontar — evita manter dezenas de imagens
+// inteiras na memória de uma vez só.
+function PdfPrintThumb({ pdfKind, pdfId, print, onClick }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    let objUrl = null;
+    (async () => {
+      const blob = await getPdfPrintBlob(pdfKind, pdfId, print.id);
+      if (cancelled || !blob) return;
+      objUrl = URL.createObjectURL(blob);
+      setUrl(objUrl);
+    })();
+    return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
+  }, [pdfKind, pdfId, print.id]);
+  return (
+    <button type="button" className="pdfPrintThumbBtn" onClick={onClick} title="Ver print">
+      {url ? <img src={url} alt={print.name}/> : <span className="pdfPrintThumbLoading"><ImageIcon size={18}/></span>}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Formatação de texto rica, compartilhada por TODAS as áreas de anotação com
 // corpo editável: a nota avulsa (NoteEditor), as anotações de livros
@@ -3145,7 +3338,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [outline, setOutline] = useState(null); // sumário/índice do PDF (null = ainda não carregado, [] = sem sumário)
   const textLayerRef = useRef(null);
 
-  const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores" | "sumario"
+  const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores" | "sumario" | "audios" | "prints"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -3679,6 +3872,9 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button className={`ghost${panel==="audios" ? " active" : ""}`} onClick={()=>togglePanel("audios")}>
               <Headphones size={15}/> <span>Áudios</span>
             </button>
+            <button className={`ghost${panel==="prints" ? " active" : ""}`} onClick={()=>togglePanel("prints")}>
+              <ImageIcon size={15}/> <span>Prints</span>
+            </button>
             <button onClick={handleClose}><X size={18}/></button>
           </div>
         </div>
@@ -3885,6 +4081,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
               <div className="notesPaneHead"><b>Áudios de estudo</b><span>sobre "{book.title}"</span></div>
               <div className="notesPaneBody">
                 <PdfAudioPanel pdfKind="book" pdfId={book.id} title={book.title}/>
+              </div>
+            </div>
+          )}
+          {panel==="prints" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Prints</b><span>sobre "{book.title}"</span></div>
+              <div className="notesPaneBody">
+                <PdfPrintsPanel pdfKind="book" pdfId={book.id} title={book.title}/>
               </div>
             </div>
           )}
@@ -4883,7 +5087,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const [favoriteExcerpts, setFavoriteExcerpts] = useState(pdfDoc.favorite_excerpts || []);
   const [selection, setSelection] = useState(null); // {text, top, left}
 
-  const [panel, setPanel] = useState(null); // null | "busca" | "marcadores" | "notas"
+  const [panel, setPanel] = useState(null); // null | "busca" | "marcadores" | "notas" | "audios" | "prints" | "timer"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -6266,6 +6470,9 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
             <button className={`ghost${panel==="audios" ? " active" : ""}`} onClick={()=>togglePanel("audios")}>
               <Headphones size={15}/> <span>Áudios</span>
             </button>
+            <button className={`ghost${panel==="prints" ? " active" : ""}`} onClick={()=>togglePanel("prints")}>
+              <ImageIcon size={15}/> <span>Prints</span>
+            </button>
             <button className={`ghost${panel==="timer" ? " active" : ""}${timerDone ? " pdfTimerBlink" : ""}`} onClick={()=>togglePanel("timer")}>
               <Clock3 size={15}/> <span>{timerStarted ? (timerHidden && !timerDone ? "Contando…" : fmtTimer(timerLeft)) : "Cronômetro"}</span>
             </button>
@@ -6736,6 +6943,15 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
               <div className="notesPaneHead"><b>Áudios de estudo</b><span>sobre "{pdfDoc.title}"</span></div>
               <div className="notesPaneBody">
                 <PdfAudioPanel pdfKind="study" pdfId={pdfDoc.id} title={pdfDoc.title}/>
+              </div>
+            </div>
+          )}
+
+          {panel==="prints" && (
+            <div className="notesPane">
+              <div className="notesPaneHead"><b>Prints</b><span>sobre "{pdfDoc.title}"</span></div>
+              <div className="notesPaneBody">
+                <PdfPrintsPanel pdfKind="study" pdfId={pdfDoc.id} title={pdfDoc.title}/>
               </div>
             </div>
           )}
