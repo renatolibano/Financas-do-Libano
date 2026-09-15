@@ -699,7 +699,7 @@ h1{font-size:23px}
   background:rgba(255,255,255,.12);
 }
 .pdfTextAnn{position:absolute;z-index:4;white-space:pre;line-height:1.25;cursor:default;font-weight:600;box-sizing:border-box}
-.pdfTextAnn textarea{background:transparent;color:inherit;border:none;padding:2px 5px;font:inherit;font-size:inherit;resize:none;outline:none;box-sizing:border-box;overflow:hidden;white-space:pre}
+.pdfTextAnn .pdfTextAnnInput{background:transparent;color:inherit;border:none;padding:2px 5px;font:inherit;font-size:inherit;resize:none;outline:none;box-sizing:border-box;overflow:hidden;white-space:pre}
 .pdfTextAnnLabel{padding:2px 5px;box-sizing:border-box;white-space:pre;overflow:hidden}
 .textAnnToolbar{position:absolute;bottom:100%;left:0;display:flex;gap:4px;margin-bottom:3px;z-index:6}
 .textAnnToolbar button{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:5px;border:1px solid var(--border);background:var(--card-bg,#1c222b);color:var(--text-1);cursor:pointer}
