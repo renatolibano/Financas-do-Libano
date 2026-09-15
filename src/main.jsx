@@ -6808,7 +6808,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
         />
       )}
       {textColorBubble && (
-        <div className="whiteboardTextColorBubble" style={{ top: textColorBubble.top, left: textColorBubble.left }} onMouseDown={e => e.preventDefault()}>
+        <div className="whiteboardTextColorBubble" style={{ top: textColorBubble.top, left: textColorBubble.left }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
           {favPenColors.map(hex => (
             <button key={hex} type="button" style={{ background: hex }} title={hex} onClick={() => applyTextSelectionColor(hex)}/>
           ))}
@@ -8851,7 +8851,7 @@ function Whiteboard({ board, onClose, onSave }) {
         />
       )}
       {textColorBubble && (
-        <div className="whiteboardTextColorBubble" style={{ top: textColorBubble.top, left: textColorBubble.left }} onMouseDown={e => e.preventDefault()}>
+        <div className="whiteboardTextColorBubble" style={{ top: textColorBubble.top, left: textColorBubble.left }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
           {favPenColors.map(hex => (
             <button key={hex} type="button" style={{ background: hex }} title={hex} onClick={() => applyTextSelectionColor(hex)}/>
           ))}
