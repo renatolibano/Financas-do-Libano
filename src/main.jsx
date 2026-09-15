@@ -7317,7 +7317,7 @@ function WhiteboardThumbnail({ board }) {
       <svg viewBox={`${minX - pad} ${minY - pad} ${w + pad * 2} ${h + pad * 2}`} preserveAspectRatio="xMidYMid meet">
         {elements.filter(el => el.type !== "text").map(el => <WhiteboardElementShape key={el.id} el={el}/>)}
         {elements.filter(el => el.type === "text").map(el => (
-          <text key={el.id} x={el.x} y={el.y + el.fontSize} fill={el.color} fontSize={el.fontSize} fontWeight="600">{(el.content || "").slice(0, 60)}</text>
+          <text key={el.id} x={el.x} y={el.y + el.fontSize} fill={el.color} fontSize={el.fontSize} fontWeight="600">{whiteboardTextPreview(el.content).slice(0, 60)}</text>
         ))}
       </svg>
     </div>
@@ -7518,6 +7518,9 @@ function Whiteboard({ board, onClose, onSave }) {
   // é descartado sem nunca ter entrado em "elements".
   const [newTextDraft, setNewTextDraft] = useState(null);
   const activeTextareaRef = useRef(null);
+  // Bolinhas de cor que aparecem ao selecionar um trecho dentro de um texto
+  // do quadro (pra colorir só o trecho selecionado, não o texto inteiro).
+  const [textColorBubble, setTextColorBubble] = useState(null);
   const [liveEl, setLiveEl] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [flash, setFlash] = useState(false);
@@ -7743,7 +7746,8 @@ function Whiteboard({ board, onClose, onSave }) {
     setEditingTextId(null);
     setHandwritingId(null);
     setPendingTextDraft(null);
-    setElements(prev => value.trim() ? prev.map(a => a.id === id ? { ...a, content: value } : a) : prev.filter(a => a.id !== id));
+    setTextColorBubble(null);
+    setElements(prev => stripHtml(value).trim() ? prev.map(a => a.id === id ? { ...a, content: value } : a) : prev.filter(a => a.id !== id));
   };
 
   // Confirma (ou descarta) o rascunho de texto livre. Só vira elemento de
@@ -7753,13 +7757,14 @@ function Whiteboard({ board, onClose, onSave }) {
     setNewTextDraft(null);
     setPendingTextDraft(null);
     setHandwritingId(null);
-    if (!draft || !value.trim()) return;
+    setTextColorBubble(null);
+    if (!draft || !stripHtml(value).trim()) return;
     commitElement({ id: draft.id, type: "text", x: draft.x, y: draft.y, fontSize: 18, color, content: value, width, height });
   };
 
-  // Mede o texto do próprio textarea (via scrollWidth/scrollHeight) pra
-  // caber exatamente no conteúdo, sem quebrar linha sozinho — a única forma
-  // de pular linha é o botão dedicado.
+  // Mede o texto do próprio campo (via scrollWidth/scrollHeight) pra caber
+  // exatamente no conteúdo, sem quebrar linha sozinho — a única forma de
+  // pular linha é o botão dedicado ou Shift+Enter.
   const autoSizeFreeTextarea = (ta, fontSize) => {
     if (!ta) return { width: 220, height: Math.round(fontSize * 1.6) + 14 };
     const minW = Math.round(fontSize * 0.9) + 14;
@@ -7773,19 +7778,38 @@ function Whiteboard({ board, onClose, onSave }) {
     return { width, height };
   };
 
-  // Enter nunca quebra linha sozinho — só o botão "quebrar linha" faz isso.
+  // Enter nunca quebra linha sozinho (evita commit sem querer); Shift+Enter quebra.
   const handleFreeTextKeyDown = (e) => {
+    if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); insertLineBreakAt(e.target); return; }
     if (e.key === "Enter") { e.preventDefault(); return; }
     if (e.key === "Escape") { e.preventDefault(); e.target.blur(); }
   };
 
-  const insertLineBreakAt = (ta) => {
-    if (!ta) return;
-    const start = ta.selectionStart ?? ta.value.length;
-    const end = ta.selectionEnd ?? ta.value.length;
-    ta.value = ta.value.slice(0, start) + "\n" + ta.value.slice(end);
-    ta.selectionStart = ta.selectionEnd = start + 1;
-    ta.focus();
+  // O campo de texto do quadro agora é um contentEditable (não mais um
+  // <textarea>), pra dar pra colorir só um trecho selecionado — por isso a
+  // quebra de linha usa execCommand em vez de mexer em ".value".
+  const insertLineBreakAt = (el) => {
+    if (!el) return;
+    el.focus();
+    if (!document.execCommand("insertLineBreak")) document.execCommand("insertHTML", false, "<br>");
+  };
+
+  // Mostra as bolinhas de cor perto do trecho selecionado dentro de um texto
+  // do quadro. Chamado no mouseup do campo em edição.
+  const handleTextSelectionMouseUp = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.toString().trim()) { setTextColorBubble(null); return; }
+    const anchor = sel.anchorNode;
+    if (!anchor || !activeTextareaRef.current || !activeTextareaRef.current.contains(anchor)) { setTextColorBubble(null); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { setTextColorBubble(null); return; }
+    setTextColorBubble({ top: rect.top, left: rect.left + rect.width / 2 });
+  };
+  // Aplica a cor só no trecho selecionado (o botão já segura o foco/seleção
+  // com onMouseDown={e=>e.preventDefault()}, então a seleção ainda existe aqui).
+  const applyTextSelectionColor = (hex) => {
+    document.execCommand("foreColor", false, hex);
+    setTextColorBubble(null);
   };
 
   const eraseRadiusAt = (x, y) => {
@@ -8443,7 +8467,7 @@ function Whiteboard({ board, onClose, onSave }) {
                   >
                     {editingTextId === el.id && (
                       <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
-                        <button type="button" title="Quebrar linha"
+                        <button type="button" title="Quebrar linha (ou Shift+Enter)"
                           onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); autoGrowWhiteboardTextarea(ta); }}>
                           <Pilcrow size={13}/>
                         </button>
@@ -8463,22 +8487,33 @@ function Whiteboard({ board, onClose, onSave }) {
                         onCancel={() => setHandwritingId(null)}
                         onConvert={(text) => {
                           setPendingTextDraft(prev => {
-                            const base = prev ?? el.content ?? "";
-                            return base ? base + "\n" + text : text;
+                            const baseHtml = whiteboardTextToHtml(prev ?? el.content ?? "");
+                            const escapedText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                            return baseHtml ? baseHtml + "<br>" + escapedText : escapedText;
                           });
                           setHandwritingId(null);
                         }}
                       />
                     ) : editingTextId === el.id ? (
-                      <textarea
-                        autoFocus
-                        ref={ta => { activeTextareaRef.current = ta; autoGrowWhiteboardTextarea(ta); }}
-                        defaultValue={pendingTextDraft ?? el.content}
+                      <div
+                        contentEditable
+                        suppressContentEditableWarning
+                        ref={node => {
+                          activeTextareaRef.current = node;
+                          if (!node) return;
+                          if (node.dataset.boardTextId !== String(el.id)) {
+                            node.innerHTML = whiteboardTextToHtml(pendingTextDraft ?? el.content);
+                            node.dataset.boardTextId = String(el.id);
+                            node.focus();
+                          }
+                          autoGrowWhiteboardTextarea(node);
+                        }}
                         className="whiteboardTextInput"
                         style={{ color: el.color, fontSize: el.fontSize, width: elWidth + "px", height: elHeight + "px" }}
                         onInput={e => autoGrowWhiteboardTextarea(e.target)}
                         onKeyDown={handleFreeTextKeyDown}
-                        onBlur={e => commitTextEdit(el.id, e.target.value)}
+                        onMouseUp={handleTextSelectionMouseUp}
+                        onBlur={e => commitTextEdit(el.id, e.target.innerHTML)}
                         onPointerDown={e => e.stopPropagation()}
                       />
                     ) : (
@@ -8488,7 +8523,9 @@ function Whiteboard({ board, onClose, onSave }) {
                         onPointerDown={e => { if (tool === "select") { e.stopPropagation(); try { svgRef.current?.setPointerCapture?.(e.pointerId); } catch (err) { console.log("[quadro] setPointerCapture falhou", err); } setSelectedId(el.id); pushHistory(); const { x, y } = toWorld(e.clientX, e.clientY); dragRef.current = { mode: "move", id: el.id, lastX: x, lastY: y, pointerId: e.pointerId }; } }}
                         onDoubleClick={() => { setPendingTextDraft(null); setHandwritingId(null); setEditingTextId(el.id); }}
                       >
-                        {el.content || (tool === "select" ? "Duplo toque para escrever" : "")}
+                        {el.content
+                          ? <span dangerouslySetInnerHTML={{ __html: whiteboardTextToHtml(el.content) }}/>
+                          : (tool === "select" ? "Duplo toque para escrever" : "")}
                       </div>
                     )}
                   </foreignObject>
@@ -8500,24 +8537,30 @@ function Whiteboard({ board, onClose, onSave }) {
                     style={{ overflow: "visible" }}
                   >
                     <div className="textAnnToolbar" style={{ position: "absolute", bottom: "100%", left: 0 }} onPointerDown={e => e.stopPropagation()}>
-                      <button type="button" title="Quebrar linha"
+                      <button type="button" title="Quebrar linha (ou Shift+Enter)"
                         onPointerDown={e => { e.preventDefault(); const ta = activeTextareaRef.current; if (!ta) return; insertLineBreakAt(ta); setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(ta, 18) }); }}>
                         <Pilcrow size={13}/>
                       </button>
                     </div>
-                    <textarea
-                      autoFocus
-                      ref={ta => {
-                        activeTextareaRef.current = ta;
-                        if (!ta) return;
-                        const { width: newW, height: newH } = autoSizeFreeTextarea(ta, 18);
+                    <div
+                      contentEditable
+                      suppressContentEditableWarning
+                      ref={node => {
+                        activeTextareaRef.current = node;
+                        if (!node) return;
+                        if (!node.dataset.boardTextInit) {
+                          node.dataset.boardTextInit = "1";
+                          node.focus();
+                        }
+                        const { width: newW, height: newH } = autoSizeFreeTextarea(node, 18);
                         setNewTextDraft(prev => prev && (prev.width !== newW || prev.height !== newH) ? { ...prev, width: newW, height: newH } : prev);
                       }}
                       className="whiteboardTextInput"
                       style={{ color, fontSize: 18, width: (newTextDraft.width) + "px", height: (newTextDraft.height) + "px" }}
                       onInput={e => setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(e.target, 18) })}
                       onKeyDown={handleFreeTextKeyDown}
-                      onBlur={e => { const w = parseInt(e.target.style.width) || 220; const h = parseInt(e.target.style.height) || (Math.round(18 * 1.6) + 14); commitNewTextDraft(e.target.value, w, h); }}
+                      onMouseUp={handleTextSelectionMouseUp}
+                      onBlur={e => { const w = parseInt(e.target.style.width) || 220; const h = parseInt(e.target.style.height) || (Math.round(18 * 1.6) + 14); commitNewTextDraft(e.target.innerHTML, w, h); }}
                       onPointerDown={e => e.stopPropagation()}
                     />
                   </foreignObject>
@@ -8766,6 +8809,16 @@ function Whiteboard({ board, onClose, onSave }) {
           eraserRadius={eraserRadius} setEraserRadius={setEraserRadius}
           shortcuts={shortcuts} setShortcuts={setShortcuts}
         />
+      )}
+      {textColorBubble && (
+        <div className="whiteboardTextColorBubble" style={{ top: textColorBubble.top, left: textColorBubble.left }} onMouseDown={e => e.preventDefault()}>
+          {favPenColors.map(hex => (
+            <button key={hex} type="button" style={{ background: hex }} title={hex} onClick={() => applyTextSelectionColor(hex)}/>
+          ))}
+          <label className="whiteboardTextColorBubbleCustom" title="Cor personalizada">
+            <input type="color" onChange={e => applyTextSelectionColor(e.target.value)}/>
+          </label>
+        </div>
       )}
     </div>
   );
@@ -12047,6 +12100,22 @@ function stripHtml(html){
   div.innerHTML = html;
   div.querySelectorAll(".word-del").forEach(n => n.remove()); // texto excluído (Controlar Alterações do Word) não conta na prévia
   return div.textContent || div.innerText || "";
+}
+
+// Textos do quadro infinito guardavam texto puro (só "\n" pra quebrar linha)
+// antes de dar pra colorir um trecho selecionado; agora guardam HTML (pode
+// ter <span style=color> e <br>). As três funções abaixo distinguem os dois
+// formatos pra continuar mostrando certo os quadros salvos antes dessa
+// mudança, sem reinterpretar acidentalmente "<"/"&" de texto antigo como tag.
+function whiteboardTextIsHtml(content) { return !!content && /<[a-z][\s\S]*>/i.test(content); }
+function whiteboardTextToHtml(content) {
+  if (!content) return "";
+  if (whiteboardTextIsHtml(content)) return content;
+  return content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+}
+function whiteboardTextPreview(content) {
+  if (!content) return "";
+  return whiteboardTextIsHtml(content) ? stripHtml(content) : content;
 }
 
 // Diff palavra-a-palavra clássico (maior subsequência comum), usado em
