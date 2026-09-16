@@ -392,32 +392,35 @@ alter table study_goals add column if not exists link_list_ids uuid[];
 alter table study_goals drop constraint if exists study_goals_link_source_check;
 alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards'));
 
--- Área de Lazer: Treino (treinos personalizados em pastas, com exercícios em séries e GIF de referência)
-create table if not exists workout_folders (
+-- Área de Lazer: Treino — plano semanal (workout_plan_items: cada linha é
+-- uma atividade num dia da semana, ex.: "Corrida" na Segunda, com metas em
+-- texto livre) + dias marcados como concluídos (workout_completions, uma
+-- linha por data, usada pro foguinho). Substitui o modelo antigo de pastas/
+-- exercícios com GIF e player de séries.
+drop table if exists workout_exercises cascade;
+drop table if exists workout_folders cascade;
+
+create table if not exists workout_plan_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
+  day_of_week int not null check (day_of_week between 0 and 6), -- 0=domingo..6=sábado, igual Date.getDay()
   name text not null,
-  cover_image text,
+  goals text[] not null default '{}',
   sort_order int,
   created_at timestamptz not null default now()
 );
-alter table workout_folders enable row level security;
+alter table workout_plan_items enable row level security;
 
-create table if not exists workout_exercises (
+create table if not exists workout_completions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  folder_id uuid references workout_folders(id) on delete cascade,
-  name text not null,
-  mode text not null default 'reps' check (mode in ('reps','tempo')),
-  sets int not null default 1,
-  value numeric not null default 0,
-  gif_url text,
-  sort_order int,
-  created_at timestamptz not null default now()
+  date date not null,
+  created_at timestamptz not null default now(),
+  unique(user_id, date)
 );
-alter table workout_exercises enable row level security;
+alter table workout_completions enable row level security;
 
-do $$ declare t text; begin foreach t in array array['workout_folders','workout_exercises'] loop
+do $$ declare t text; begin foreach t in array array['workout_plan_items','workout_completions'] loop
  execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
  execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
@@ -451,9 +454,6 @@ do $$ declare t text; begin foreach t in array array['shopping_items'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
-
--- Atualização: descanso entre séries de cada exercício do Treino (em segundos)
-alter table workout_exercises add column if not exists rest_seconds int not null default 0;
 
 -- Integração bancária via Pluggy (Open Finance)
 -- Guarda a conexão (item) de cada banco ligado pelo usuário.

@@ -81,7 +81,6 @@ import { uploadFlashcardImage, deleteFlashcardImage } from "./lib/flashcardImage
 import { uploadShoppingImage, deleteShoppingImage } from "./lib/shoppingImages";
 import { uploadMediaItemImage, deleteMediaItemImage, uploadMediaGroupCover, deleteMediaGroupCover } from "./lib/mediaImages";
 import { uploadGameItemImage, deleteGameItemImage, uploadGameGroupCover, deleteGameGroupCover } from "./lib/gameImages";
-import { uploadWorkoutFolderCover, deleteWorkoutFolderCover } from "./lib/workoutImages";
 import { uploadBookGroupCover, deleteBookGroupCover } from "./lib/bookGroupImages";
 import { uploadStudyPdfGroupCover, deleteStudyPdfGroupCover } from "./lib/studyPdfGroupImages";
 
@@ -541,10 +540,6 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const [activeFlashcardsUrlId, setActiveFlashcardsUrlId] = useState(initialRoute?.page === "Flashcards" ? initialRoute.itemId : null);
   const [flashcardsCloseSignal, setFlashcardsCloseSignal] = useState(0);
 
-  const [treinoOpenTrigger, setTreinoOpenTrigger] = useState(initialRoute?.page === "Treino" ? initialRoute.itemId : null);
-  const [activeTreinoUrlId, setActiveTreinoUrlId] = useState(initialRoute?.page === "Treino" ? initialRoute.itemId : null);
-  const [treinoCloseSignal, setTreinoCloseSignal] = useState(0);
-
   // Mantém a URL igual ao que está sendo mostrado. Só troca de URL quando o
   // caminho calculado é diferente do atual, pra não empilhar entradas de
   // histórico à toa a cada re-render.
@@ -554,13 +549,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       : page === "Word" ? activeWordUrlId
       : page === "Leitor de PDF" ? activeReaderUrlId
       : page === "Flashcards" ? activeFlashcardsUrlId
-      : page === "Treino" ? activeTreinoUrlId
       : null;
     const path = buildPath(page, itemId);
     if (window.location.pathname !== path) {
       window.history.pushState({ page, itemId }, "", path);
     }
-  }, [page, activeNoteUrlId, activeBookUrlId, activeWordUrlId, activeReaderUrlId, activeFlashcardsUrlId, activeTreinoUrlId]);
+  }, [page, activeNoteUrlId, activeBookUrlId, activeWordUrlId, activeReaderUrlId, activeFlashcardsUrlId]);
 
   // Botão voltar/avançar do navegador: relê a URL e ajusta o estado do app
   // pra bater com ela.
@@ -579,8 +573,6 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         if (route?.itemId) setReaderOpenTrigger(route.itemId); else setReaderCloseSignal((s) => s + 1);
       } else if (nextPage === "Flashcards") {
         if (route?.itemId) setFlashcardsOpenTrigger(route.itemId); else setFlashcardsCloseSignal((s) => s + 1);
-      } else if (nextPage === "Treino") {
-        if (route?.itemId) setTreinoOpenTrigger(route.itemId); else setTreinoCloseSignal((s) => s + 1);
       }
     };
     window.addEventListener("popstate", onPopState);
@@ -685,8 +677,13 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const treinoVisitado = visitedPages.has("Treino");
   const filmesVisitado = visitedPages.has("Filmes e Séries");
   const jogosVisitado = visitedPages.has("Jogos");
-  const workoutFolders = useEntity("workout_folders", [], session, "asc", {orderable:true, enabled: treinoVisitado});
-  const workoutExercises = useEntity("workout_exercises", [], session, "asc", {orderable:true, enabled: treinoVisitado});
+  // Treino: metas da semana (workout_plan_items, um por dia+atividade) e os
+  // dias marcados como concluídos (workout_completions), usados pro
+  // foguinho — mesmo corte de janela (370 dias) que activity_tracker_logs
+  // já usa, pra não baixar anos de histórico à toa.
+  const workoutHistoryCutoff = isoAddDays(todayISO(), -370);
+  const workoutPlanItems = useEntity("workout_plan_items", [], session, "asc", {orderable:true, enabled: treinoVisitado});
+  const workoutCompletions = useEntity("workout_completions", [], session, "asc", {enabled: treinoVisitado, gteColumn: "date", gteValue: workoutHistoryCutoff});
   // Lista de compras: usada na própria aba e também no preview "Quadro
   // possível" do Dashboard (Visão Geral) — por isso a busca é adiada até
   // uma dessas duas telas ser visitada nesta sessão, em vez de sempre na
@@ -1051,7 +1048,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           metas_de_estudo: studyGoals.data, pdfs: studyPdfs.data, pastas_de_pdfs: studyPdfGroups.data,
           flashcards: studyFlashcards.data, listas_de_flashcards: studyFlashcardLists.data, pastas_de_flashcards: studyFlashcardFolders.data,
         },
-        treino: { pastas: workoutFolders.data, exercicios: workoutExercises.data },
+        treino: { itens: workoutPlanItems.data, dias_concluidos: workoutCompletions.data },
         lista_de_compras: shoppingItems.data,
         filmes_e_series: { pastas: mediaGroups.data, itens: mediaItems.data },
         jogos: { pastas: gameGroups.data, itens: gameItems.data },
@@ -1262,7 +1259,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
       {page==="Word" && <WordDocs entity={wordDocs} openDocId={wordOpenTrigger} onConsumeOpenDoc={()=>setWordOpenTrigger(null)} onOpenChange={setActiveWordUrlId} closeSignal={wordCloseSignal}/>}
-      {page==="Treino" && <WorkoutShelf foldersEntity={workoutFolders} exercisesEntity={workoutExercises} session={session} openItemId={treinoOpenTrigger} onConsumeOpenItem={()=>setTreinoOpenTrigger(null)} onOpenChange={setActiveTreinoUrlId} closeSignal={treinoCloseSignal}/>}
+      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
@@ -9243,133 +9240,72 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
   );
 }
 
-// ---------- Treino (treinos personalizados em pastas, com exercícios em séries e GIF de referência) ----------
+// ---------- Treino (plano semanal de treinos, com metas por dia e sequência de dias concluídos, estilo Strava) ----------
 
-const workoutFmtValue = (ex) => {
-  if (ex.mode === "tempo") {
-    const s = Math.max(0, Number(ex.value) || 0);
-    const m = Math.floor(s / 60), r = s % 60;
-    return `${m}:${String(r).padStart(2, "0")} min`;
-  }
-  return `${Number(ex.value) || 0} repetições`;
-};
+function WorkoutShelf({ itemsEntity, completionsEntity }) {
+  const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
+  const { data: completions, add: addCompletion, remove: removeCompletion } = completionsEntity;
 
-function WorkoutShelf({ foldersEntity, exercisesEntity, session, openItemId, onConsumeOpenItem, onOpenChange, closeSignal }) {
-  const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
-  const { data: exercises, add: addExercise, remove: removeExercise, update: updateExercise, reorder: reorderExercises } = exercisesEntity;
-
-  const [openFolderId, setOpenFolderId] = useState(null);
-  const [folderModal, setFolderModal] = useState(null); // null | "new" | pasta sendo renomeada
-  const [exerciseForm, setExerciseForm] = useState(null); // null | "new" | exercício sendo editado
+  const todayDow = new Date().getDay();
+  const [selectedDay, setSelectedDay] = useState(todayDow);
+  const [itemModal, setItemModal] = useState(null); // null | "new" | item sendo editado
   const [openMenuId, setOpenMenuId] = useState(null);
-  const [playerFolderId, setPlayerFolderId] = useState(null);
 
-  const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
-  const visibleExercises = exercises.filter(e => e.folder_id === openFolderId);
+  const todayStr = todayISO();
+  const completedDates = useMemo(() => new Set(completions.map(c => c.date)), [completions]);
+  const doneToday = completedDates.has(todayStr);
 
-  // Avisa o App qual treino está de fato em execução agora, só pra manter a
-  // URL certa (ex.: /treino/abc123).
-  useEffect(() => {
-    onOpenChange?.(playerFolderId || null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerFolderId]);
-  // Sinal vindo do App quando o usuário aperta "voltar" do navegador saindo
-  // de um treino em execução pra estante — fecha o player pra bater com a URL.
-  const skipPlayerCloseSignal = useRef(true);
-  useEffect(() => {
-    if (skipPlayerCloseSignal.current) { skipPlayerCloseSignal.current = false; return; }
-    setPlayerFolderId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closeSignal]);
-  // Deep link / reload (ex.: abriu direto em /treino/abc123): acha a pasta
-  // de treino e já inicia o player, quando ela já tiver carregado.
-  useEffect(() => {
-    if (!openItemId) return;
-    const folder = folders.find(f => f.id === openItemId);
-    if (folder) setPlayerFolderId(openItemId);
-    onConsumeOpenItem?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openItemId, folders]);
+  // Sequência (foguinho) de dias seguidos com o treino marcado como feito —
+  // mesmo cálculo usado pela aba Gráfico (activityStreakInfo): o dia de hoje
+  // só "quebra" a sequência quando termina sem nenhuma marcação; até lá, a
+  // sequência anterior continua valendo.
+  const streak = useMemo(() => {
+    let cursor = doneToday ? todayStr : isoAddDays(todayStr, -1);
+    let n = 0;
+    while (completedDates.has(cursor)) { n++; cursor = isoAddDays(cursor, -1); }
+    return n;
+  }, [completedDates, doneToday, todayStr]);
 
-  const handleSaveFolder = (name) => {
-    if (folderModal === "new") addFolder({ id: crypto.randomUUID(), name, cover_image: null });
-    else updateFolder(folderModal.id, { name });
-    setFolderModal(null);
-  };
+  const dayItems = (d) => items.filter(it => it.day_of_week === d).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const todaysItems = dayItems(todayDow);
+  const selectedItems = dayItems(selectedDay);
 
-  const handleSetCover = async (folder, file) => {
-    setOpenMenuId(null);
-    try {
-      if (cloudConfigured && session?.user?.id) {
-        const blob = await resizeImageToBlob(file, 480, 480, 0.85);
-        const url = await uploadWorkoutFolderCover(session.user.id, folder.id, blob);
-        await updateFolder(folder.id, { cover_image: url });
-      } else {
-        const dataUrl = await resizeImageToDataUrl(file, 480, 480, 0.85);
-        await updateFolder(folder.id, { cover_image: dataUrl });
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Não foi possível usar essa imagem. Tente outra foto.");
+  const toggleToday = () => {
+    if (doneToday) {
+      const row = completions.find(c => c.date === todayStr);
+      if (row) removeCompletion(row.id);
+    } else {
+      addCompletion({ id: crypto.randomUUID(), date: todayStr });
     }
   };
-  const handleRemoveCover = (folder) => {
+
+  const confirmDeleteItem = (it) => {
     setOpenMenuId(null);
-    if (folder.cover_image && cloudConfigured && session?.user?.id && folder.cover_image.includes("/workout_images/")) {
-      deleteWorkoutFolderCover(session.user.id, folder.id).catch(() => {});
-    }
-    updateFolder(folder.id, { cover_image: null });
+    if (confirm(`Excluir "${it.name}" de ${WEEKDAY_LABELS[it.day_of_week]}?`)) removeItem(it.id);
   };
 
-  const confirmDeleteFolder = (folder) => {
-    setOpenMenuId(null);
-    const count = exercises.filter(e => e.folder_id === folder.id).length;
-    const msg = count > 0
-      ? `Excluir o treino "${folder.name}"? Os ${count} exercício(s) dele também serão apagados.`
-      : `Excluir o treino "${folder.name}"?`;
-    if (!confirm(msg)) return;
-    if (folder.cover_image && cloudConfigured && session?.user?.id && folder.cover_image.includes("/workout_images/")) {
-      deleteWorkoutFolderCover(session.user.id, folder.id).catch(() => {});
-    }
-    exercises.filter(e => e.folder_id === folder.id).forEach(e => removeExercise(e.id));
-    removeFolder(folder.id);
-    if (openFolderId === folder.id) setOpenFolderId(null);
-  };
-
-  const confirmDeleteExercise = (ex) => {
-    setOpenMenuId(null);
-    if (confirm(`Excluir "${ex.name}"?`)) removeExercise(ex.id);
-  };
-
-  const moveExercise = (ex, dir) => {
-    const idx = visibleExercises.findIndex(e => e.id === ex.id);
+  const moveItem = (it, dir) => {
+    const list = dayItems(it.day_of_week);
+    const idx = list.findIndex(x => x.id === it.id);
     const swapIdx = idx + dir;
-    if (swapIdx < 0 || swapIdx >= visibleExercises.length) return;
-    const a = visibleExercises[idx], b = visibleExercises[swapIdx];
-    const fullIdxA = exercises.findIndex(e => e.id === a.id);
-    const fullIdxB = exercises.findIndex(e => e.id === b.id);
-    const newFull = [...exercises];
+    if (swapIdx < 0 || swapIdx >= list.length) return;
+    const a = list[idx], b = list[swapIdx];
+    const fullIdxA = items.findIndex(x => x.id === a.id);
+    const fullIdxB = items.findIndex(x => x.id === b.id);
+    const newFull = [...items];
     [newFull[fullIdxA], newFull[fullIdxB]] = [newFull[fullIdxB], newFull[fullIdxA]];
-    reorderExercises(newFull);
+    reorderItems(newFull);
   };
 
-  if (playerFolderId) {
-    const folder = folders.find(f => f.id === playerFolderId);
-    return <WorkoutPlayer
-      folder={folder}
-      exercises={exercises.filter(e => e.folder_id === playerFolderId)}
-      onClose={() => setPlayerFolderId(null)}
-    />;
-  }
-
-  if (exerciseForm !== null) {
-    return <ExerciseForm
-      exercise={exerciseForm === "new" ? null : exerciseForm}
-      onCancel={() => setExerciseForm(null)}
+  if (itemModal !== null) {
+    return <WorkoutItemForm
+      item={itemModal === "new" ? null : itemModal}
+      defaultDay={selectedDay}
+      onCancel={() => setItemModal(null)}
       onSave={(payload) => {
-        if (exerciseForm === "new") addExercise({ id: crypto.randomUUID(), folder_id: openFolderId, ...payload });
-        else updateExercise(exerciseForm.id, payload);
-        setExerciseForm(null);
+        if (itemModal === "new") addItem({ id: crypto.randomUUID(), ...payload });
+        else updateItem(itemModal.id, payload);
+        setItemModal(null);
       }}
     />;
   }
@@ -9380,186 +9316,95 @@ function WorkoutShelf({ foldersEntity, exercisesEntity, session, openItemId, onC
         <div className="flashHeadInfo">
           <div className="flashHeadIcon"><Dumbbell size={22}/></div>
           <div>
-            <small>{currentFolder ? currentFolder.name.toUpperCase() : "ÁREA DE LAZER"}</small>
-            <h2>{currentFolder ? currentFolder.name : "Treino"}</h2>
-            <p>{currentFolder ? `${visibleExercises.length} exercício(s) neste treino.` : "Monte treinos personalizados em pastas, com exercícios, séries e GIF de referência."}</p>
+            <small>ÁREA DE LAZER</small>
+            <h2>Treino</h2>
+            <p>Seu plano de treino da semana, com a meta de cada dia.</p>
           </div>
         </div>
         <div className="flashHeadActions">
-          {currentFolder ? <>
-            <button className="ghost" onClick={() => setOpenFolderId(null)}><ChevronLeft size={16}/> Voltar</button>
-            {visibleExercises.length > 0 && <button className="ghost" onClick={() => setPlayerFolderId(currentFolder.id)}><Play size={16}/> Iniciar treino</button>}
-            <button className="add" onClick={(e) => { e.stopPropagation(); setExerciseForm("new"); }}><Plus size={16}/> Adicionar exercício</button>
-          </> : (
-            <button className="add" onClick={(e) => { e.stopPropagation(); setFolderModal("new"); }}><FolderPlus size={16}/> Novo treino</button>
-          )}
+          {streak > 0 && <span className="actStreakBadge" style={{color:STREAK_COLOR, background:STREAK_COLOR+"18", borderColor:STREAK_COLOR+"55"}}
+            title={doneToday
+              ? `Sequência de ${streak} ${streak===1?"dia":"dias"} — hoje já contou.`
+              : `Sequência de ${streak} ${streak===1?"dia":"dias"} — marque o treino de hoje pra não perder.`}>
+            <Flame size={15} fill={doneToday?STREAK_COLOR:"none"}/> {streak} {streak===1?"dia":"dias"}
+          </span>}
+          <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
         </div>
       </div>
 
-      {!currentFolder && folders.length === 0 ? (
+      <div className="workoutTodayCard">
+        <div className="workoutTodayInfo">
+          <small>HOJE · {WEEKDAY_LABELS[todayDow].toUpperCase()}</small>
+          <h3>{todaysItems.length ? todaysItems.map(i => i.name).join(" + ") : "Nenhum treino planejado pra hoje"}</h3>
+          {todaysItems.length > 0 && <p>{todaysItems.length} atividade{todaysItems.length===1?"":"s"} programada{todaysItems.length===1?"":"s"} pra hoje</p>}
+        </div>
+        {todaysItems.length > 0 && (
+          <button className={"ghost workoutDoneBtn "+(doneToday?"active":"")} onClick={toggleToday}>
+            {doneToday ? <><Check size={16}/> Treino de hoje feito</> : <><Flame size={16}/> Marcar como feito</>}
+          </button>
+        )}
+      </div>
+
+      <div className="workoutWeekTabs">
+        {WEEKDAY_LABELS.map((label, d) => (
+          <button key={d} type="button" className={"workoutDayTab "+(selectedDay===d?"active":"")+(d===todayDow?" isToday":"")} onClick={() => setSelectedDay(d)}>
+            <span>{label}</span>
+            <i className={"workoutDayDot "+(dayItems(d).length?"has":"")}/>
+          </button>
+        ))}
+      </div>
+
+      {selectedItems.length === 0 ? (
         <div className="flashEmpty">
           <div className="flashEmptyIcon"><Dumbbell size={30}/></div>
-          <h3>Nenhum treino ainda</h3>
-          <p>Crie uma pasta de treino, escolha uma foto pra capa e comece a adicionar seus exercícios.</p>
-          <button className="add" onClick={() => setFolderModal("new")}><Plus size={16}/> Criar meu primeiro treino</button>
-        </div>
-      ) : !currentFolder ? (
-        <div className="shelf">
-          <div className="bookTile addTile" onClick={() => setFolderModal("new")}>
-            <div className="bookCoverWrap addCover"><FolderPlus size={26}/><span>Novo treino</span></div>
-          </div>
-          {folders.map(f => (
-            <WorkoutFolderTile
-              key={f.id}
-              folder={f}
-              count={exercises.filter(e => e.folder_id === f.id).length}
-              menuOpen={openMenuId === `folder:${f.id}`}
-              onToggleMenu={(e) => { e?.stopPropagation?.(); setOpenMenuId(id => id === `folder:${f.id}` ? null : `folder:${f.id}`); }}
-              onOpen={() => setOpenFolderId(f.id)}
-              onRename={() => { setOpenMenuId(null); setFolderModal(f); }}
-              onDelete={() => confirmDeleteFolder(f)}
-              onSetCover={(file) => handleSetCover(f, file)}
-              onRemoveCover={() => handleRemoveCover(f)}
-            />
-          ))}
-        </div>
-      ) : visibleExercises.length === 0 ? (
-        <div className="flashEmpty">
-          <div className="flashEmptyIcon"><ClipboardList size={30}/></div>
-          <h3>Nenhum exercício ainda</h3>
-          <p>Adicione exercícios com nome, séries, tempo ou repetições — e um GIF de referência se quiser.</p>
-          <button className="add" onClick={() => setExerciseForm("new")}><Plus size={16}/> Adicionar exercício</button>
+          <h3>Nenhum treino em {WEEKDAY_LABELS[selectedDay]}</h3>
+          <p>Adicione os exercícios e metas planejados pra esse dia da semana.</p>
+          <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
         </div>
       ) : (
-        <div className="exerciseList">
-          {visibleExercises.map((ex, idx) => (
-            <ExerciseRow
-              key={ex.id}
-              exercise={ex}
-              isFirst={idx === 0}
-              isLast={idx === visibleExercises.length - 1}
-              menuOpen={openMenuId === `ex:${ex.id}`}
-              onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(id => id === `ex:${ex.id}` ? null : `ex:${ex.id}`); }}
-              onEdit={() => { setOpenMenuId(null); setExerciseForm(ex); }}
-              onDelete={() => confirmDeleteExercise(ex)}
-              onMoveUp={() => moveExercise(ex, -1)}
-              onMoveDown={() => moveExercise(ex, 1)}
-            />
+        <div className="workoutItemList">
+          {selectedItems.map((it, idx) => (
+            <div className="workoutItemCard" key={it.id}>
+              <div className="workoutItemHead">
+                <h4>{it.name}</h4>
+                <div className="exerciseOrderBtns">
+                  <button className="ghost" disabled={idx===0} onClick={() => moveItem(it, -1)}><ArrowUp size={13}/></button>
+                  <button className="ghost" disabled={idx===selectedItems.length-1} onClick={() => moveItem(it, 1)}><ArrowDown size={13}/></button>
+                </div>
+                <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id===it.id?null:it.id); }}><MoreVertical size={16}/></button>
+                {openMenuId===it.id && (
+                  <div className="flashMenuPop" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => { setOpenMenuId(null); setItemModal(it); }}><Pencil size={13}/> Editar</button>
+                    <button className="danger" onClick={() => confirmDeleteItem(it)}><Trash2 size={13}/> Excluir</button>
+                  </div>
+                )}
+              </div>
+              {it.goals?.length > 0 && (
+                <ul className="workoutGoalsList">
+                  {it.goals.map((g, i) => <li key={i}>{g}</li>)}
+                </ul>
+              )}
+            </div>
           ))}
         </div>
       )}
-
-      {folderModal && (
-        <FolderModal
-          folder={folderModal === "new" ? null : folderModal}
-          onClose={() => setFolderModal(null)}
-          onSave={handleSaveFolder}
-        />
-      )}
     </div>
   );
 }
 
-function WorkoutFolderTile({ folder, count, menuOpen, onToggleMenu, onOpen, onRename, onDelete, onSetCover, onRemoveCover }) {
-  const generated = React.useContext(GeneratedCoversContext);
-  const coverInputRef = useRef(null);
-  return (
-    <div className="bookTile groupTile" onClick={onOpen}>
-      <div className="bookCoverWrap groupCover">
-        <SaverImg src={folder.cover_image} alt={folder.name} title={folder.name} wrapClassName="bookCoverImg" fallback={<Dumbbell size={34}/>}/>
-      </div>
-      <input
-        ref={coverInputRef}
-        type="file"
-        accept="image/*"
-        style={{ display: "none" }}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = "";
-          if (file) onSetCover(file);
-        }}
-      />
-      <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); onToggleMenu(e); }}><MoreVertical size={16}/></button>
-      {menuOpen && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
-        {!generated && <button onClick={() => coverInputRef.current?.click()}><ImagePlus size={13}/> {folder.cover_image ? "Trocar foto da capa" : "Colocar foto na capa"}</button>}
-        {!generated && folder.cover_image && <button onClick={onRemoveCover}><X size={13}/> Remover foto da capa</button>}
-        <button onClick={onRename}><Pencil size={13}/> Renomear</button>
-        <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir treino</button>
-      </div>}
-      <b className="bookTitle">{folder.name}</b>
-      <small className="bookProgressLabel">{count} exercício{count === 1 ? "" : "s"}</small>
-    </div>
-  );
-}
+function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
+  const [day, setDay] = useState(item?.day_of_week ?? defaultDay ?? new Date().getDay());
+  const [name, setName] = useState(item?.name || "");
+  const [goals, setGoals] = useState(item?.goals?.length ? [...item.goals] : [""]);
 
-const workoutFmtRest = (s) => {
-  const sec = Math.max(0, Number(s) || 0);
-  if (sec === 0) return null;
-  if (sec % 60 === 0) return `${sec / 60} min`;
-  const m = Math.floor(sec / 60), r = sec % 60;
-  return m > 0 ? `${m}:${String(r).padStart(2, "0")} min` : `${sec}s`;
-};
-
-function ExerciseRow({ exercise, isFirst, isLast, menuOpen, onToggleMenu, onEdit, onDelete, onMoveUp, onMoveDown }) {
-  const restLabel = workoutFmtRest(exercise.rest_seconds);
-  return (
-    <div className="exerciseRow">
-      <div className="exerciseThumb">
-        <SaverImg src={exercise.gif_url} alt={exercise.name} fallback={<Film size={22}/>}/>
-      </div>
-      <div className="exerciseInfo">
-        <b>{exercise.name}</b>
-        <small><Repeat2 size={12}/> {Number(exercise.sets) || 1} série{(Number(exercise.sets) || 1) === 1 ? "" : "s"} de {workoutFmtValue(exercise)}{restLabel && <> <Hourglass size={12}/> descanso de {restLabel}</>}</small>
-      </div>
-      <div className="exerciseOrderBtns">
-        <button className="ghost" disabled={isFirst} onClick={onMoveUp}><ArrowUp size={13}/></button>
-        <button className="ghost" disabled={isLast} onClick={onMoveDown}><ArrowDown size={13}/></button>
-      </div>
-      <button className="flashTileMenuBtn exerciseMenuBtn" onClick={onToggleMenu}><MoreVertical size={16}/></button>
-      {menuOpen && (
-        <div className="flashMenuPop exerciseMenuPop" onClick={e => e.stopPropagation()}>
-          <button onClick={onEdit}><Pencil size={13}/> Editar</button>
-          <button className="danger" onClick={onDelete}><Trash2 size={13}/> Excluir</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ExerciseForm({ exercise, onCancel, onSave }) {
-  const [name, setName] = useState(exercise?.name || "");
-  const [mode, setMode] = useState(exercise?.mode || "reps");
-  const [sets, setSets] = useState(exercise?.sets ?? 3);
-  const [minutes, setMinutes] = useState(exercise?.mode === "tempo" ? Math.floor((exercise.value || 0) / 60) : 0);
-  const [seconds, setSeconds] = useState(exercise?.mode === "tempo" ? (exercise.value || 0) % 60 : 30);
-  const [reps, setReps] = useState(exercise?.mode !== "tempo" ? (exercise?.value ?? 15) : 15);
-  const [restMinutes, setRestMinutes] = useState(exercise ? Math.floor((exercise.rest_seconds || 0) / 60) : 1);
-  const [restSeconds, setRestSeconds] = useState(exercise ? (exercise.rest_seconds || 0) % 60 : 0);
-  const [gifUrl, setGifUrl] = useState(exercise?.gif_url || "");
-  const cachedGifUrl = useCachedImageUrl(gifUrl);
-  const [gifMode, setGifMode] = useState("upload"); // "upload" | "url"
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef(null);
-
-  const handleFile = async (file) => {
-    if (!file) return;
-    setUploading(true);
-    try {
-      const dataUrl = await fileToRawDataUrl(file);
-      setGifUrl(dataUrl);
-    } catch (e) {
-      console.error(e);
-      alert("Não foi possível usar esse arquivo. Tente um GIF, imagem ou vídeo curto.");
-    }
-    setUploading(false);
-  };
+  const setGoal = (i, v) => setGoals(g => g.map((x, idx) => idx===i ? v : x));
+  const addGoal = () => setGoals(g => [...g, ""]);
+  const removeGoal = (i) => setGoals(g => g.length>1 ? g.filter((_, idx) => idx!==i) : g);
 
   const handleSubmit = () => {
     if (!name.trim()) return;
-    const value = mode === "tempo" ? (Number(minutes) || 0) * 60 + (Number(seconds) || 0) : Number(reps) || 0;
-    const rest_seconds = (Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0);
-    onSave({ name: name.trim(), mode, sets: Number(sets) || 1, value, rest_seconds, gif_url: gifUrl || null });
+    const cleanGoals = goals.map(g => g.trim()).filter(Boolean);
+    onSave({ day_of_week: day, name: name.trim(), goals: cleanGoals });
   };
 
   return (
@@ -9569,8 +9414,8 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
           <div className="flashHeadIcon"><Dumbbell size={22}/></div>
           <div>
             <small>TREINO</small>
-            <h2>{exercise ? "Editar exercício" : "Novo exercício"}</h2>
-            <p>Dê um nome, escolha entre tempo ou repetições, e organize em séries.</p>
+            <h2>{item ? "Editar treino" : "Novo treino"}</h2>
+            <p>Escolha o dia da semana, dê um nome e liste as metas dessa atividade.</p>
           </div>
         </div>
         <div className="flashHeadActions">
@@ -9579,191 +9424,28 @@ function ExerciseForm({ exercise, onCancel, onSave }) {
         </div>
       </div>
 
-      <div className="exerciseFormGrid">
-        <div className="exerciseFormFields">
-          <label>Nome do exercício<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Flexões, Abdominais, Prancha..."/></label>
-
-          <label>Modo
-            <div className="themeToggle exerciseModeToggle">
-              <button type="button" className={mode === "reps" ? "active" : ""} onClick={() => setMode("reps")}><Repeat2 size={14}/> Repetições</button>
-              <button type="button" className={mode === "tempo" ? "active" : ""} onClick={() => setMode("tempo")}><Clock3 size={14}/> Tempo</button>
-            </div>
-          </label>
-
-          <label>Séries<input type="number" min="1" value={sets} onChange={e => setSets(e.target.value)}/></label>
-
-          {mode === "reps" ? (
-            <label>Repetições por série<input type="number" min="1" value={reps} onChange={e => setReps(e.target.value)}/></label>
-          ) : (
-            <label>Duração por série
-              <div className="exerciseTimeRow">
-                <input type="number" min="0" value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="min"/>
-                <span>min</span>
-                <input type="number" min="0" max="59" value={seconds} onChange={e => setSeconds(e.target.value)} placeholder="seg"/>
-                <span>seg</span>
-              </div>
-            </label>
-          )}
-
-          <label>Descanso entre séries
-            <div className="exerciseTimeRow">
-              <input type="number" min="0" value={restMinutes} onChange={e => setRestMinutes(e.target.value)} placeholder="min"/>
-              <span>min</span>
-              <input type="number" min="0" max="59" value={restSeconds} onChange={e => setRestSeconds(e.target.value)} placeholder="seg"/>
-              <span>seg</span>
-            </div>
-          </label>
-
-          <p className="emptyHint">Prévia: {sets || 1} série{(Number(sets) || 1) === 1 ? "" : "s"} de {mode === "tempo" ? `${Number(minutes) || 0}:${String(Number(seconds) || 0).padStart(2, "0")} min` : `${Number(reps) || 0} repetições`}{((Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0)) > 0 && ` · descanso de ${workoutFmtRest((Number(restMinutes) || 0) * 60 + (Number(restSeconds) || 0))}`}</p>
-        </div>
-
-        <div className="exerciseFormGif">
-          <small className="bookMenuLabel">GIF de referência (opcional)</small>
-          <div className="exerciseGifPreview">
-            {gifUrl ? <img src={cachedGifUrl || gifUrl} alt="Prévia do exercício"/> : <Film size={30}/>}
+      <div className="exerciseFormFields">
+        <label>Dia da semana
+          <div className="workoutDayPicker">
+            {WEEKDAY_LABELS.map((label, d) => (
+              <button type="button" key={d} className={day===d?"active":""} onClick={() => setDay(d)}>{label}</button>
+            ))}
           </div>
-          <div className="themeToggle exerciseModeToggle">
-            <button type="button" className={gifMode === "upload" ? "active" : ""} onClick={() => setGifMode("upload")}><Upload size={14}/> Enviar arquivo</button>
-            <button type="button" className={gifMode === "url" ? "active" : ""} onClick={() => setGifMode("url")}><Link2 size={14}/> Colar link</button>
+        </label>
+
+        <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Barra..."/></label>
+
+        <label>Metas
+          <div className="workoutGoalRows">
+            {goals.map((g, i) => (
+              <div className="workoutGoalRow" key={i}>
+                <input value={g} onChange={e => setGoal(i, e.target.value)} placeholder="Ex.: Correr no mínimo 1km"/>
+                <button type="button" className="ghost" onClick={() => removeGoal(i)}><X size={13}/></button>
+              </div>
+            ))}
+            <button type="button" className="ghost" onClick={addGoal}><Plus size={13}/> Adicionar meta</button>
           </div>
-          {gifMode === "upload" ? (
-            <>
-              <input ref={fileRef} type="file" accept="image/gif,image/*,video/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleFile(f); }}/>
-              <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>{uploading ? "Enviando..." : "Escolher GIF ou imagem"}</button>
-            </>
-          ) : (
-            <input value={gifUrl} onChange={e => setGifUrl(e.target.value)} placeholder="https://... (link de um GIF)"/>
-          )}
-          {gifUrl && <button type="button" className="ghost" onClick={() => setGifUrl("")}><X size={13}/> Remover GIF</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WorkoutPlayer({ folder, exercises, onClose }) {
-  const [idx, setIdx] = useState(0);
-  const [setNum, setSetNum] = useState(1);
-  const [phase, setPhase] = useState("exercise"); // "exercise" | "rest"
-  const [running, setRunning] = useState(false);
-  const ex = exercises[idx];
-  const [left, setLeft] = useState(ex?.mode === "tempo" ? (Number(ex.value) || 0) : 0);
-  const timerRef = useRef(null);
-
-  const totalSets = Number(ex?.sets) || 1;
-  const restSeconds = Number(ex?.rest_seconds) || 0;
-
-  // Reinicia estado do exercício ao trocar de exercício
-  useEffect(() => {
-    setSetNum(1);
-    setPhase("exercise");
-    setRunning(false);
-    setLeft(ex?.mode === "tempo" ? (Number(ex.value) || 0) : 0);
-    return () => clearInterval(timerRef.current);
-  }, [idx]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cronômetro (conta tanto o tempo do exercício quanto o descanso)
-  useEffect(() => {
-    clearInterval(timerRef.current);
-    const shouldTick = running && (phase === "rest" || ex?.mode === "tempo");
-    if (shouldTick) {
-      timerRef.current = setInterval(() => {
-        setLeft(s => {
-          if (s <= 1) { clearInterval(timerRef.current); setRunning(false); return 0; }
-          return s - 1;
-        });
-      }, 1000);
-    }
-    return () => clearInterval(timerRef.current);
-  }, [running, phase, ex]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!ex) return null;
-  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-
-  const goToExercise = (n) => { if (n < 0 || n >= exercises.length) return; setIdx(n); };
-
-  // Avança para o descanso (se houver) ou direto pra próxima série/exercício
-  const finishSet = () => {
-    clearInterval(timerRef.current);
-    setRunning(false);
-    if (setNum < totalSets) {
-      if (restSeconds > 0) {
-        setPhase("rest");
-        setLeft(restSeconds);
-      } else {
-        setSetNum(n => n + 1);
-        setPhase("exercise");
-        setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0);
-      }
-    } else if (idx < exercises.length - 1) {
-      goToExercise(idx + 1);
-    } else {
-      onClose();
-    }
-  };
-
-  const finishRest = () => {
-    clearInterval(timerRef.current);
-    setRunning(false);
-    setSetNum(n => n + 1);
-    setPhase("exercise");
-    setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0);
-  };
-
-  return (
-    <div className="modalBack" onClick={onClose}>
-      <div className="modal workoutPlayerModal" onClick={e => e.stopPropagation()}>
-        <div className="modalHead">
-          <h2>{folder?.name}</h2>
-          <button type="button" onClick={onClose}><X/></button>
-        </div>
-        <small className="bookMenuLabel">Exercício {idx + 1} de {exercises.length} · Série {Math.min(setNum, totalSets)} de {totalSets}</small>
-
-        {phase === "rest" ? (
-          <>
-            <div className="exerciseGifPreview workoutPlayerGif workoutRestPreview"><Hourglass size={40}/></div>
-            <h2 className="workoutPlayerName">Descanso</h2>
-            <p className="emptyHint">Prepare-se: próxima é a série {setNum + 1} de {ex.name}.</p>
-            <div className="levelTimerRow workoutPlayerTimer">
-              <div className="levelTimer"><Clock3 size={20}/> {fmt(left)}</div>
-              <div className="levelTimerBtns">
-                <button className="ghost" onClick={() => setLeft(restSeconds)}><RotateCcw size={14}/></button>
-                <button className="add" onClick={() => setRunning(r => !r)}>{running ? <Pause size={16}/> : <Play size={16}/>}</button>
-              </div>
-            </div>
-            <div className="modalActions workoutPlayerNav">
-              <button className="ghost" disabled={idx === 0 && setNum === 1} onClick={() => { setPhase("exercise"); setRunning(false); setLeft(ex.mode === "tempo" ? (Number(ex.value) || 0) : 0); }}><SkipBack size={15}/> Voltar à série</button>
-              <button className="add" onClick={finishRest}>Pular descanso <SkipForward size={15}/></button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="exerciseGifPreview workoutPlayerGif">
-              <SaverImg src={ex.gif_url} alt={ex.name} fallback={<Film size={40}/>}/>
-            </div>
-            <h2 className="workoutPlayerName">{ex.name}</h2>
-            <p className="emptyHint">{totalSets} série{totalSets === 1 ? "" : "s"} de {workoutFmtValue(ex)}{restSeconds > 0 && ` · descanso de ${workoutFmtRest(restSeconds)}`}</p>
-
-            {ex.mode === "tempo" ? (
-              <div className="levelTimerRow workoutPlayerTimer">
-                <div className="levelTimer"><Clock3 size={20}/> {fmt(left)}</div>
-                <div className="levelTimerBtns">
-                  <button className="ghost" onClick={() => setLeft(Number(ex.value) || 0)}><RotateCcw size={14}/></button>
-                  <button className="add" onClick={() => setRunning(r => !r)}>{running ? <Pause size={16}/> : <Play size={16}/>}</button>
-                </div>
-              </div>
-            ) : (
-              <p className="emptyHint">Faça as repetições no seu ritmo e conclua a série quando terminar.</p>
-            )}
-
-            <div className="modalActions workoutPlayerNav">
-              <button className="ghost" disabled={idx === 0} onClick={() => goToExercise(idx - 1)}><SkipBack size={15}/> Exercício anterior</button>
-              <button className="add" onClick={finishSet}>
-                {setNum < totalSets ? <>Concluir série <SkipForward size={15}/></> : idx === exercises.length - 1 ? <>Concluir treino <Check size={16}/></> : <>Próximo exercício <SkipForward size={15}/></>}
-              </button>
-            </div>
-          </>
-        )}
+        </label>
       </div>
     </div>
   );
