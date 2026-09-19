@@ -70,6 +70,18 @@ export function HandwritingPad({ onConvert, onCancel }) {
     ctx.stroke();
     lastPtRef.current = pos;
     hasInkRef.current = true;
+    // Perto da borda direita, rola o desenho pra esquerda em vez de deixar
+    // a caneta sair do canvas — é isso que cortava o final da palavra.
+    const canvas = canvasRef.current;
+    const scrollZone = canvas.width * 0.82;
+    if (pos.x > scrollZone) {
+      const shift = Math.round(canvas.width * 0.22);
+      const imgData = ctx.getImageData(shift, 0, canvas.width - shift, canvas.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.putImageData(imgData, 0, 0);
+      lastPtRef.current = { x: lastPtRef.current.x - shift, y: lastPtRef.current.y };
+    }
   };
   const handlePointerUp = (e) => {
     if (drawingRef.current) e.stopPropagation();
