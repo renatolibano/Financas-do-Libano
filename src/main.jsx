@@ -3392,6 +3392,10 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
+  // `book` e um snapshot congelado no momento em que o leitor abriu - nao
+  // reflete saves feitos durante a sessao. Guardamos o conteudo mais atual
+  // aqui pra recarregar o painel a partir dele, e nao da prop desatualizada.
+  const notesContentRef = useRef(book.notes || "");
   const searchToken = useRef(0);
   const renderTaskRef = useRef(null);
 
@@ -3797,19 +3801,23 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   // Carrega a nota salva desse livro sempre que o painel de notas é aberto
   useEffect(() => {
     if (panel==="notas" && notesBodyRef.current) {
-      notesBodyRef.current.innerHTML = book.notes || "";
+      notesBodyRef.current.innerHTML = notesContentRef.current || "";
     }
   }, [panel]);
 
   const flushNotes = () => {
     clearTimeout(notesSaveTimer.current);
-    if (notesBodyRef.current) onNotesChange(book.id, notesBodyRef.current.innerHTML || "");
+    if (notesBodyRef.current) {
+      notesContentRef.current = notesBodyRef.current.innerHTML || "";
+      onNotesChange(book.id, notesContentRef.current);
+    }
   };
 
   const scheduleNotesSave = () => {
     clearTimeout(notesSaveTimer.current);
     notesSaveTimer.current = setTimeout(() => {
-      onNotesChange(book.id, notesBodyRef.current?.innerHTML || "");
+      notesContentRef.current = notesBodyRef.current?.innerHTML || "";
+      onNotesChange(book.id, notesContentRef.current);
     }, 600);
   };
 
@@ -5246,6 +5254,10 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const pageWrapRef = useRef(null);
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
+  // `pdfDoc` e um snapshot congelado no momento em que o leitor abriu - nao
+  // reflete saves feitos durante a sessao. Guardamos o conteudo mais atual
+  // aqui pra recarregar o painel a partir dele, e nao da prop desatualizada.
+  const notesContentRef = useRef(pdfDoc.notes || "");
   const searchToken = useRef(0);
   const renderTaskRef = useRef(null);
   const pdfBytesRef = useRef(null); // bytes crus do PDF atual, usados pelo "Baixar PDF" (arquivo exatamente como está salvo)
@@ -6148,19 +6160,23 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   // Carrega a anotação salva desse PDF sempre que o painel de notas é aberto
   useEffect(() => {
     if (panel==="notas" && notesBodyRef.current) {
-      notesBodyRef.current.innerHTML = pdfDoc.notes || "";
+      notesBodyRef.current.innerHTML = notesContentRef.current || "";
     }
   }, [panel]);
 
   const flushNotes = () => {
     clearTimeout(notesSaveTimer.current);
-    if (notesBodyRef.current) onNotesChange(pdfDoc.id, notesBodyRef.current.innerHTML || "");
+    if (notesBodyRef.current) {
+      notesContentRef.current = notesBodyRef.current.innerHTML || "";
+      onNotesChange(pdfDoc.id, notesContentRef.current);
+    }
   };
 
   const scheduleNotesSave = () => {
     clearTimeout(notesSaveTimer.current);
     notesSaveTimer.current = setTimeout(() => {
-      onNotesChange(pdfDoc.id, notesBodyRef.current?.innerHTML || "");
+      notesContentRef.current = notesBodyRef.current?.innerHTML || "";
+      onNotesChange(pdfDoc.id, notesContentRef.current);
     }, 600);
   };
 
