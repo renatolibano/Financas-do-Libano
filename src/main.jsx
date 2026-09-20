@@ -3817,7 +3817,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
   const togglePanel = (name) => {
     setPanel(p => {
-      if (p==="notas" && name!=="notas") flushNotes(); // fechando notas ao trocar de painel
+      if (p==="notas") flushNotes(); // fechando (ou trocando) o painel de notas
       return p===name ? null : name;
     });
   };
@@ -6341,7 +6341,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
 
   const togglePanel = (name) => {
     setPanel(p => {
-      if (p==="notas" && name!=="notas") flushNotes(); // fechando notas ao trocar de painel
+      if (p==="notas") flushNotes(); // fechando (ou trocando) o painel de notas
       return p===name ? null : name;
     });
   };
