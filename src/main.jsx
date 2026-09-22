@@ -26,7 +26,7 @@ import {
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
   Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
-  Share2, Info
+  Share2, Info, Heart
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -1301,6 +1301,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           <div className="themeToggle">
             <button type="button" className={theme==="dark"?"active":""} onClick={()=>setTheme("dark")}><Moon size={14}/> Escuro</button>
             <button type="button" className={theme==="light"?"active":""} onClick={()=>setTheme("light")}><Sun size={14}/> Claro</button>
+          </div>
+        </label>
+        <label>Paleta rosa
+          <div className="themeToggle">
+            <button type="button" className={theme==="pink-dark"?"active":""} onClick={()=>setTheme("pink-dark")}><Heart size={14}/> Escuro</button>
+            <button type="button" className={theme==="pink-light"?"active":""} onClick={()=>setTheme("pink-light")}><Heart size={14}/> Claro</button>
           </div>
         </label>
         <label>Tela inicial
