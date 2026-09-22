@@ -37,7 +37,7 @@ import { useTransactions } from "./lib/useTransactions";
 import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
 import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
-import { idbGet, idbSet } from "./lib/idbStorage";
+import { idbGet, idbSet, idbDelete } from "./lib/idbStorage";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
@@ -10965,23 +10965,79 @@ function FolderModal({ folder, onClose, onSave }) {
   );
 }
 
+const blankFlashRows = () => [{ id: rid(), term: "", definition: "", image: null, image_side: "term" }, { id: rid(), term: "", definition: "", image: null, image_side: "term" }];
+const rowsFromList = (l) => l?.cards?.length ? l.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null, image_side: c.image_side === "definition" ? "definition" : "term" })) : blankFlashRows();
+
 function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave }) {
+  // Rascunho: identifica esse formulário (lista nova, ou a lista sendo
+  // editada) pra salvar o que está sendo digitado no IndexedDB e poder
+  // restaurar depois, caso a pessoa saia sem clicar em Salvar.
+  const draftKey = list?.id ? `flashcard_draft:${list.id}` : "flashcard_draft:new";
   const [title, setTitle] = useState(list?.title || "");
   const [description, setDescription] = useState(list?.description || "");
   // Par de idiomas do termo/definição — usado só pra dar sugestão de tradução
   // enquanto a pessoa digita (não afeta o estudo/o jogo, é opcional).
   const [termLang, setTermLang] = useState(list?.term_lang || null);
   const [defLang, setDefLang] = useState(list?.definition_lang || null);
-  const [rows, setRows] = useState(
-    list?.cards?.length ? list.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null, image_side: c.image_side === "definition" ? "definition" : "term" }))
-      : [{ id: rid(), term: "", definition: "", image: null, image_side: "term" }, { id: rid(), term: "", definition: "", image: null, image_side: "term" }]
-  );
+  const [rows, setRows] = useState(() => rowsFromList(list));
   const [uploadingId, setUploadingId] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState("");
+  const [draftRestored, setDraftRestored] = useState(false);
 
-  const setRow = (id, field, value) => setRows(rs => rs.map(r => r.id===id ? {...r, [field]: value} : r));
+  // Ao abrir o formulário, checa se há um rascunho salvo (de uma edição
+  // anterior que não chegou a ser salva) e, se houver, restaura por cima
+  // dos valores iniciais.
+  useEffect(() => {
+    let cancelled = false;
+    idbGet(draftKey, null).then(draft => {
+      if (cancelled || !draft) return;
+      setTitle(draft.title || "");
+      setDescription(draft.description || "");
+      setTermLang(draft.termLang || null);
+      setDefLang(draft.defLang || null);
+      if (draft.rows?.length) setRows(draft.rows);
+      setDraftRestored(true);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Só grava rascunho depois de uma edição de verdade (marcada via
+  // dirtyRef) — sem isso, o simples fato de abrir "Editar"/"Criar lista" já
+  // criaria um rascunho idêntico ao original, fazendo o aviso de "rascunho
+  // restaurado" aparecer sem a pessoa ter mudado nada.
+  const dirtyRef = useRef(false);
+
+  // Salva o estado atual do formulário no IndexedDB a cada mudança
+  // (debounced), pra sobreviver a uma saída sem salvar (troca de aba,
+  // reload etc.). Só some quando a lista é salva ou o rascunho é descartado.
+  const draftSaveTimer = useRef(null);
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      idbSet(draftKey, { title, description, termLang, defLang, rows });
+    }, 500);
+    return () => clearTimeout(draftSaveTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, description, termLang, defLang, rows]);
+
+  const discardDraft = () => {
+    if (!confirm("Descartar o rascunho e voltar ao estado original?")) return;
+    clearTimeout(draftSaveTimer.current);
+    idbDelete(draftKey);
+    setDraftRestored(false);
+    setTitle(list?.title || "");
+    setDescription(list?.description || "");
+    setTermLang(list?.term_lang || null);
+    setDefLang(list?.definition_lang || null);
+    setRows(rowsFromList(list));
+  };
+
+  const setRow = (id, field, value) => { dirtyRef.current = true; setRows(rs => rs.map(r => r.id===id ? {...r, [field]: value} : r)); };
   const removeRow = (id) => {
+    dirtyRef.current = true;
     setRows(rs => {
       const row = rs.find(r => r.id === id);
       if (row?.image && cloudConfigured && session?.user?.id && row.image.includes("/flashcard_images/")) {
@@ -10991,7 +11047,7 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
       return rs.filter(r => r.id !== id);
     });
   };
-  const addRow = () => setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null, image_side: "term" }]);
+  const addRow = () => { dirtyRef.current = true; setRows(rs => [...rs, { id: rid(), term: "", definition: "", image: null, image_side: "term" }]); };
 
   const parseImportText = (text) => {
     const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -11048,6 +11104,7 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   const confirmImport = () => {
     const imported = parseImportText(importText);
     if (imported.length === 0) { alert("Cole o texto exportado do Quizlet antes de importar."); return; }
+    dirtyRef.current = true;
     setRows(rs => {
       const kept = rs.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image);
       return [...kept, ...imported];
@@ -11097,6 +11154,8 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   const submit = () => {
     const cards = rows.filter(r => stripHtml(r.term).trim() || stripHtml(r.definition).trim() || r.image).map(r => ({ id: r.id, term: r.term, definition: r.definition, image: r.image || null, image_side: r.image_side === "definition" ? "definition" : "term" }));
     if (cards.length === 0) { alert("Adicione pelo menos um cartão com termo ou definição."); return; }
+    clearTimeout(draftSaveTimer.current);
+    idbDelete(draftKey);
     onSave({
       title: title.trim() || "Lista sem título",
       description: description.trim(),
@@ -11122,10 +11181,17 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
         </div>
       </div>
 
+      {draftRestored && (
+        <div className="flashDraftBanner">
+          <span><Sparkle size={13}/> Rascunho não salvo restaurado — continue de onde parou.</span>
+          <button type="button" onClick={discardDraft}>Descartar rascunho</button>
+        </div>
+      )}
+
       <div className="flashFormPanel">
         <label className="flashFormLabel">Título</label>
-        <input className="flashFormTitleInput" value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ex.: Conjunções — Português"/>
-        <input className="flashFormDescInput" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Adicione uma descrição (opcional)"/>
+        <input className="flashFormTitleInput" value={title} onChange={e=>{ dirtyRef.current = true; setTitle(e.target.value); }} placeholder="Ex.: Conjunções — Português"/>
+        <input className="flashFormDescInput" value={description} onChange={e=>{ dirtyRef.current = true; setDescription(e.target.value); }} placeholder="Adicione uma descrição (opcional)"/>
       </div>
 
       {showImport && (
@@ -11150,11 +11216,11 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
       <div className="flashLangBar">
         <div className="flashLangBarCol">
           <span>TERMO</span>
-          <LanguagePicker value={termLang} onChange={setTermLang}/>
+          <LanguagePicker value={termLang} onChange={v=>{ dirtyRef.current = true; setTermLang(v); }}/>
         </div>
         <div className="flashLangBarCol">
           <span>DEFINIÇÃO</span>
-          <LanguagePicker value={defLang} onChange={setDefLang}/>
+          <LanguagePicker value={defLang} onChange={v=>{ dirtyRef.current = true; setDefLang(v); }}/>
         </div>
       </div>
       {termLang && defLang && termLang !== defLang && (
@@ -11801,7 +11867,7 @@ function FlashcardFlipMode({ cards, onComplete, termLang, defLang }) {
             <small>DEFINIÇÃO</small>
             {stripHtml(card.definition).trim() && <FlashSpeakBtn text={card.definition} lang={defLang}/>}
             {card.image_side==="definition" && <SaverImg src={card.image} className="flashFlipImage" fallback={null} forceShow/>}
-            {stripHtml(card.definition).trim() ? <span dangerouslySetInnerHTML={{__html: card.definition}}/> : <span>(sem definição)</span>}
+            {stripHtml(card.definition).trim() && <span dangerouslySetInnerHTML={{__html: card.definition}}/>}
           </div>
         </div>
         {feedback && (
