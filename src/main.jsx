@@ -1333,7 +1333,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
             <div className="notifKindsList">
               {headerQuotes.map((q, i) => (
                 <div key={i} className="notifKindRow" style={{cursor:"default"}}>
-                  <span className="notifKindLabel" style={{flex:1, minWidth:0}}><span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block"}}>{q}</span></span>
+                  <span className="notifKindLabel" style={{flex:1, minWidth:0}}><span style={{display:"block", wordBreak:"break-word"}}>{q}</span></span>
                   <button type="button" className="pdfExcerptDelete" title="Remover frase" onClick={()=>removeHeaderQuote(i)}><Trash2 size={13}/></button>
                 </div>
               ))}
