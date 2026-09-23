@@ -2970,8 +2970,54 @@ function findTopLevelChild(el, node) {
 // Hook com toda a lógica de formatação de um corpo editável (bodyRef).
 // onChange é chamado sempre que o conteúdo muda, pra quem estiver usando
 // agendar o autosave.
-// Insere o conteúdo colado sem cor/fundo herdados da origem (ex.: fundo
-// preto de um chat), mantendo negrito/itálico/links/listas. Usado em
+// Sanitiza o HTML colado por whitelist: mantém só negrito/itálico/
+// sublinhado/links/listas (sem nenhum atributo/estilo neles) e "desembrulha"
+// qualquer outra tag (div, p, span, table...) preservando o texto mas
+// descartando cor, fundo, fonte, tamanho, margem, indentação etc. herdados
+// da origem (Quizlet, Discord...), que é o que causava letra gigante,
+// texto deslocado pra frente e outras diferenças visuais ao colar.
+const PASTE_INLINE_KEEP = new Set(["B", "STRONG", "I", "EM", "U", "A", "BR"]);
+const PASTE_LIST_KEEP = new Set(["UL", "OL", "LI"]);
+const PASTE_BLOCK_TAGS = new Set([
+  "DIV", "P", "SECTION", "ARTICLE", "BLOCKQUOTE", "H1", "H2", "H3", "H4",
+  "H5", "H6", "TABLE", "THEAD", "TBODY", "TR", "TD", "TH", "PRE",
+]);
+
+function sanitizePastedHtml(container) {
+  container.querySelectorAll("script,style,meta,link").forEach((el) => el.remove());
+
+  function walk(node) {
+    Array.from(node.childNodes).forEach((child) => {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        child.remove();
+        return;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) return;
+      walk(child);
+      const tag = child.tagName;
+      if (PASTE_LIST_KEEP.has(tag)) {
+        [...child.attributes].forEach((a) => child.removeAttribute(a.name));
+      } else if (PASTE_INLINE_KEEP.has(tag)) {
+        const href = tag === "A" ? child.getAttribute("href") : null;
+        [...child.attributes].forEach((a) => child.removeAttribute(a.name));
+        if (tag === "A") {
+          if (href) child.setAttribute("href", href);
+          child.setAttribute("target", "_blank");
+          child.setAttribute("rel", "noopener noreferrer");
+        }
+      } else {
+        const frag = document.createDocumentFragment();
+        while (child.firstChild) frag.appendChild(child.firstChild);
+        if (PASTE_BLOCK_TAGS.has(tag) && frag.lastChild) frag.appendChild(document.createElement("br"));
+        child.replaceWith(frag);
+      }
+    });
+  }
+  walk(container);
+  return container;
+}
+
+// Insere o conteúdo colado já sanitizado (ver sanitizePastedHtml). Usado em
 // qualquer contentEditable do app (notas, word, cartões de flashcard).
 function insertSanitizedPaste(e) {
   e.preventDefault();
@@ -2979,16 +3025,7 @@ function insertSanitizedPaste(e) {
   if (html) {
     const container = document.createElement("div");
     container.innerHTML = html;
-    container.querySelectorAll("*").forEach((el) => {
-      el.style.removeProperty("color");
-      el.style.removeProperty("background");
-      el.style.removeProperty("background-color");
-      el.style.removeProperty("background-image");
-      el.removeAttribute("color");
-      el.removeAttribute("bgcolor");
-      if (!el.style.length) el.removeAttribute("style");
-    });
-    document.execCommand("insertHTML", false, container.innerHTML);
+    document.execCommand("insertHTML", false, sanitizePastedHtml(container).innerHTML);
   } else {
     document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") || "");
   }
