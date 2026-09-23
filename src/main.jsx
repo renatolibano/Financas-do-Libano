@@ -2970,6 +2970,30 @@ function findTopLevelChild(el, node) {
 // Hook com toda a lógica de formatação de um corpo editável (bodyRef).
 // onChange é chamado sempre que o conteúdo muda, pra quem estiver usando
 // agendar o autosave.
+// Insere o conteúdo colado sem cor/fundo herdados da origem (ex.: fundo
+// preto de um chat), mantendo negrito/itálico/links/listas. Usado em
+// qualquer contentEditable do app (notas, word, cartões de flashcard).
+function insertSanitizedPaste(e) {
+  e.preventDefault();
+  const html = e.clipboardData?.getData("text/html");
+  if (html) {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    container.querySelectorAll("*").forEach((el) => {
+      el.style.removeProperty("color");
+      el.style.removeProperty("background");
+      el.style.removeProperty("background-color");
+      el.style.removeProperty("background-image");
+      el.removeAttribute("color");
+      el.removeAttribute("bgcolor");
+      if (!el.style.length) el.removeAttribute("style");
+    });
+    document.execCommand("insertHTML", false, container.innerHTML);
+  } else {
+    document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") || "");
+  }
+}
+
 function useNoteFormatting(bodyRef, onChange) {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
@@ -2988,27 +3012,8 @@ function useNoteFormatting(bodyRef, onChange) {
     onChange();
   };
 
-  // Cola texto colado sem cor/fundo herdados do app de origem (ex.: fundo
-  // preto de um chat), mantendo negrito/itálico/links/listas.
   const handlePaste = (e) => {
-    e.preventDefault();
-    const html = e.clipboardData?.getData("text/html");
-    if (html) {
-      const container = document.createElement("div");
-      container.innerHTML = html;
-      container.querySelectorAll("*").forEach((el) => {
-        el.style.removeProperty("color");
-        el.style.removeProperty("background");
-        el.style.removeProperty("background-color");
-        el.style.removeProperty("background-image");
-        el.removeAttribute("color");
-        el.removeAttribute("bgcolor");
-        if (!el.style.length) el.removeAttribute("style");
-      });
-      document.execCommand("insertHTML", false, container.innerHTML);
-    } else {
-      document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") || "");
-    }
+    insertSanitizedPaste(e);
     onChange();
   };
 
@@ -11348,6 +11353,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
             suppressContentEditableWarning
             data-placeholder={termLang ? `Digite em ${languageName(termLang)}` : "Digite o termo"}
             onInput={()=>onChangeField(row.id, "term", termRef.current.innerHTML)}
+            onPaste={(e)=>{ insertSanitizedPaste(e); onChangeField(row.id, "term", termRef.current.innerHTML); }}
           />
           <label>TERMO</label>
         </div>
@@ -11360,6 +11366,7 @@ function FlashFormRow({ row, index, uploading, onChangeField, onRemove, onImage,
             data-placeholder={defLang ? `Digite em ${languageName(defLang)}` : "Digite a definição"}
             onInput={()=>{ onChangeField(row.id, "definition", defRef.current.innerHTML); setShowSuggestions(false); }}
             onFocus={()=>{ if (suggestions.length) setShowSuggestions(true); }}
+            onPaste={(e)=>{ insertSanitizedPaste(e); onChangeField(row.id, "definition", defRef.current.innerHTML); setShowSuggestions(false); }}
           />
           <label>DEFINIÇÃO</label>
           {translationEnabled && (suggestLoading || (showSuggestions && suggestions.length > 0)) && (
