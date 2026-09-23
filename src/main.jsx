@@ -4083,6 +4083,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                   onBlur={flushNotes}
                   onClick={fmt.handleBodyClick}
                   onKeyDown={fmt.handleBodyKeyDown}
+                  onPaste={fmt.handlePaste}
                   onMouseUp={fmt.updateLinkBar}
                   onKeyUp={fmt.updateLinkBar}
                   data-placeholder="Escreva suas anotações sobre este livro..."
@@ -6769,6 +6770,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                               onInput={(e)=>autoGrowPdfTextarea(e.target)}
                               onKeyDown={handleFreeTextKeyDown}
                               onMouseUp={handleTextSelectionMouseUp}
+                              onPaste={(e)=>{ insertSanitizedPaste(e); autoGrowPdfTextarea(e.target); }}
                               onBlur={(e)=>commitTextEdit(a.id, e.target.innerHTML)} onPointerDown={e=>e.stopPropagation()}/>)
                       : <div className="pdfTextAnnLabel" style={{ width: aWidth + "px", height: aHeight + "px" }}>
                           {a.content
@@ -6802,6 +6804,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                       onInput={(e)=>autoSizeFreeTextarea(e.target, 16)}
                       onKeyDown={handleFreeTextKeyDown}
                       onMouseUp={handleTextSelectionMouseUp}
+                      onPaste={(e)=>{ insertSanitizedPaste(e); autoSizeFreeTextarea(e.target, 16); }}
                       onBlur={(e)=>{ const w=parseInt(e.target.style.width)||220; const h=parseInt(e.target.style.height)||(Math.round(16*1.6)+14); commitNewTextDraft(e.target.innerHTML, w, h); }}
                       onPointerDown={e=>e.stopPropagation()}/>
                   </div>
@@ -6953,6 +6956,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
                   onBlur={flushNotes}
                   onClick={fmt.handleBodyClick}
                   onKeyDown={fmt.handleBodyKeyDown}
+                  onPaste={fmt.handlePaste}
                   onMouseUp={fmt.updateLinkBar}
                   onKeyUp={fmt.updateLinkBar}
                   data-placeholder="Escreva suas anotações sobre este PDF..."
@@ -8799,6 +8803,7 @@ function Whiteboard({ board, onClose, onSave }) {
                         onInput={e => autoGrowWhiteboardTextarea(e.target)}
                         onKeyDown={handleFreeTextKeyDown}
                         onMouseUp={handleTextSelectionMouseUp}
+                        onPaste={e => { insertSanitizedPaste(e); autoGrowWhiteboardTextarea(e.target); }}
                         onBlur={e => commitTextEdit(el.id, e.target.innerHTML)}
                         onPointerDown={e => e.stopPropagation()}
                       />
@@ -8840,6 +8845,7 @@ function Whiteboard({ board, onClose, onSave }) {
                       onInput={e => setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(e.target, 18) })}
                       onKeyDown={handleFreeTextKeyDown}
                       onMouseUp={handleTextSelectionMouseUp}
+                      onPaste={e => { insertSanitizedPaste(e); setNewTextDraft(prev => prev && { ...prev, ...autoSizeFreeTextarea(e.target, 18) }); }}
                       onBlur={e => { const w = parseInt(e.target.style.width) || 220; const h = parseInt(e.target.style.height) || (Math.round(18 * 1.6) + 14); commitNewTextDraft(e.target.innerHTML, w, h); }}
                       onPointerDown={e => e.stopPropagation()}
                     />
@@ -18431,6 +18437,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 lang={docLanguage || undefined}
                 onInput={handleBodyInput}
                 onBeforeInput={handleTrackedBeforeInput}
+                onPaste={(e) => { insertSanitizedPaste(e); handleBodyInput(); }}
                 onMouseDown={handleTableResizeMouseDown}
                 onClick={(e) => {
                   const anchor = e.target.closest?.(".word-comment-anchor");
