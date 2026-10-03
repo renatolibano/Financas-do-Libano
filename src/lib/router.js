@@ -29,6 +29,7 @@ export const PAGE_TO_SLUG = {
   "Aniversários": "aniversarios",
   "Calendário": "calendario",
   "Notas": "notas",
+  "Cozinha": "cozinha",
   "Biblioteca": "biblioteca",
   "Livros Lendo": "livros/lendo",
   "Livros Lidos": "livros/lidos",

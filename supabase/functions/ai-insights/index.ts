@@ -1,11 +1,10 @@
-// Edge Function: ai-insights
-// Recebe um resumo financeiro do app Libano e devolve uma análise gerada
-// pela API do Gemini (Google). A chave da API fica só aqui no servidor —
-// nunca é exposta ao navegador.
+// Edge Function: recipe-extract
+// Recebe o texto de uma receita (ex.: descrição de um vídeo do YouTube) e
+// devolve { title, ingredients[], steps } usando a API do Gemini. Só é chamada
+// quando o app não consegue separar os blocos localmente.
 //
-// Deploy: supabase functions deploy ai-insights
-// Configurar a chave secreta (uma vez só):
-//   supabase secrets set GEMINI_API_KEY=AIza...
+// Deploy: supabase functions deploy recipe-extract
+// (usa o mesmo segredo GEMINI_API_KEY da função ai-insights)
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -19,6 +18,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -26,20 +31,11 @@ Deno.serve(async (req) => {
 
   try {
     if (!GEMINI_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: "GEMINI_API_KEY não configurada no projeto Supabase." }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return json({ error: "GEMINI_API_KEY não configurada no projeto Supabase." }, 500);
     }
 
-    // Confirma que quem está chamando é um usuário autenticado (não qualquer um na internet)
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Não autenticado." }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!authHeader) return json({ error: "Não autenticado." }, 401);
     const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -47,51 +43,24 @@ Deno.serve(async (req) => {
       data: { user },
       error: userError,
     } = await supabaseClient.auth.getUser();
-    if (userError || !user) {
-      return new Response(JSON.stringify({ error: "Sessão inválida." }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (userError || !user) return json({ error: "Sessão inválida." }, 401);
 
-    const summary = await req.json();
+    const body = await req.json();
+    const text = String(body?.text || "").slice(0, 8000).trim();
+    if (!text) return json({ error: "Texto vazio." }, 400);
 
-    const prompt = `Aqui está um resumo financeiro do mês de um usuário do app Libano:
-
-- Saldo atual: ${summary.balance}
-- Entradas do mês: ${summary.income}
-- Gastos do mês: ${summary.expense}
-- Total em pagamentos fixos mensais: ${summary.fixedTotal}
-- Total restante em dívidas: ${summary.debtRemaining}
-- Fatura atual do cartão: ${summary.cardBill}
-- Gastos por categoria no cartão: ${JSON.stringify(summary.cardCategories || [])}
-- Últimas movimentações: ${JSON.stringify(summary.recentTransactions || [])}
-
-Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Brasil, tom direto e acolhedor) destacando padrões, pontos de atenção e uma sugestão prática. Não dê conselhos de investimento específicos nem invente dados que não foram fornecidos. Não use markdown, apenas texto corrido.`;
+    const prompt = `Texto de uma receita (pode ser a descrição de um vídeo):\n\n${text}\n\nExtraia a receita e responda SOMENTE com um JSON no formato {"title": string, "ingredients": string[], "steps": string}. "ingredients" tem um item por ingrediente, com a quantidade quando houver. "steps" é o modo de preparo em linhas separadas por \\n. Use apenas o que está no texto; se algo não existir, use "" ou [].`;
 
     const aiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text: "Você é um assistente financeiro dentro do app Libano. Seja objetivo, gentil e nunca prescritivo — ofereça observações e opções, não ordens. Nunca invente números que não foram passados a você.",
-              },
-            ],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: prompt }],
-            },
-          ],
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             maxOutputTokens: 4096,
+            responseMimeType: "application/json",
             thinkingConfig: { thinkingLevel: "minimal" },
           },
         }),
@@ -99,44 +68,35 @@ Escreva uma análise curta (no máximo 3 parágrafos curtos, em português do Br
     );
 
     if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("Gemini API error:", errText);
-      return new Response(JSON.stringify({ error: "Falha ao consultar a IA." }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      console.error("Gemini API error:", await aiRes.text());
+      return json({ error: "Falha ao consultar a IA." }, 502);
     }
 
     const aiData = await aiRes.json();
-    const candidate = aiData.candidates?.[0];
-    const text = (candidate?.content?.parts || [])
-      .filter((p) => typeof p.text === "string")
-      .map((p) => p.text)
-      .join("\n")
+    const raw = (aiData.candidates?.[0]?.content?.parts || [])
+      .filter((p: { text?: unknown }) => typeof p.text === "string")
+      .map((p: { text: string }) => p.text)
+      .join("")
+      .replace(/```json|```/g, "")
       .trim();
 
-    if (candidate?.finishReason === "MAX_TOKENS") {
-      // O modelo ficou sem espaço (pensamento + resposta) antes de terminar.
-      // Isso normalmente aparece pro usuário como um texto cortado no meio.
-      console.error("Gemini cortou a resposta por MAX_TOKENS:", JSON.stringify(aiData.usageMetadata || {}));
+    let parsed: { title?: unknown; ingredients?: unknown; steps?: unknown };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.error("Resposta da IA não é JSON:", raw);
+      return json({ error: "A IA não retornou uma resposta válida." }, 502);
     }
 
-    if (!text) {
-      console.error("Gemini retornou sem texto:", JSON.stringify(aiData));
-      return new Response(JSON.stringify({ error: "A IA não retornou uma resposta." }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    return new Response(JSON.stringify({ insight: text }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return json({
+      title: typeof parsed.title === "string" ? parsed.title : "",
+      ingredients: Array.isArray(parsed.ingredients)
+        ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean)
+        : [],
+      steps: typeof parsed.steps === "string" ? parsed.steps : "",
     });
   } catch (err) {
     console.error(err);
-    return new Response(JSON.stringify({ error: "Erro inesperado no servidor." }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json({ error: "Erro inesperado no servidor." }, 500);
   }
 });

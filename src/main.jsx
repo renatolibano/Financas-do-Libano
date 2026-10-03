@@ -26,7 +26,7 @@ import {
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
   Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
-  Share2, Info, Heart
+  Share2, Info, Heart, ChefHat
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -244,7 +244,7 @@ const initialCardPurchases = [
 const HOME_PAGE_OPTIONS = [
   { group: "Finanças", pages: ["Visão Geral","Movimentações","Pagamentos Fixos","Dívidas","Cartões","Orçamento","Metas","Recorrentes",{key:"Lista de Compras", label:"Lista de compras"}] },
   { group: "Lembretes", pages: [{key:"Lembretes Comuns", label:"Lembretes comuns"},"Aniversários"] },
-  { group: "Geral", pages: ["Calendário","Notas","Gráfico"] },
+  { group: "Geral", pages: ["Calendário","Notas","Cozinha","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF","Word"] },
   { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos",{key:"Teste de PC", label:"Meu PC roda?"}] },
@@ -691,8 +691,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // isso não muda o comportamento pra quem abre o app nela; só evita a
   // busca de quem definiu outra tela como inicial e não passa por nenhuma
   // das duas.
-  const shoppingItemsVisitado = visitedPages.has("Lista de Compras") || visitedPages.has("Visão Geral");
+  const shoppingItemsVisitado = visitedPages.has("Lista de Compras") || visitedPages.has("Visão Geral") || visitedPages.has("Cozinha");
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true, enabled: shoppingItemsVisitado});
+  // Cozinha: receitas (link, ingredientes, modo de preparo). A Lista de Compras acima também é carregada ao visitar a Cozinha, pro botão "Enviar ingredientes" não gravar sobre um cache incompleto.
+  const recipes = useEntity("recipes", [], session, "desc", {enabled: visitedPages.has("Cozinha")});
   const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true, enabled: filmesVisitado});
   // Obs.: "seasons" (progresso por temporada) fica de fora do listSelect só
   // não dá pra fazer aqui como em livros/PDFs — a própria linha da prateleira
@@ -1150,6 +1152,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Jogos", icon:Gamepad2 },
       { key:"Teste de PC", label:"Meu PC roda?", icon:Cpu },
     ]},
+    { type:"single", key:"Cozinha", icon:ChefHat },
     { type:"single", key:"Gráfico", icon:PieChart },
   ];
   const [openGroups,setOpenGroups] = useState({});
@@ -1263,6 +1266,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
+      {page==="Cozinha" && <Kitchen entity={recipes} shoppingEntity={shoppingItems} session={session}/>}
       {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos} session={session}/>}
 
       <ToastHost/>
@@ -9304,6 +9308,234 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
           <button type="button" className="add" disabled={!name.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Cozinha (receitas: link do vídeo, ingredientes e modo de preparo) ----------
+
+// Extrai ingredientes e modo de preparo de um texto colado (ex.: descrição do
+// vídeo do YouTube) sem IA: procura os títulos "Ingredientes" e "Modo de
+// preparo" e separa as linhas de cada bloco.
+function parseRecipeText(raw) {
+  const lines = String(raw || "").split(/\r?\n/).map(l => l.trim());
+  const head = (l) => l.replace(/^[^\p{L}]+/u, "");
+  const isIng = (l) => l.length < 40 && /^ingredientes?\b/i.test(head(l));
+  const isStep = (l) => l.length < 40 && /^(modo de preparo|modo de fazer|preparo|como fazer|instru[cç](ão|ões|oes)|passo a passo)\b/i.test(head(l));
+  const isStop = (l) => /https?:\/\/|^#|^@|inscreva|siga[- ]?(me|nos)|instagram|^\d{1,2}:\d{2}\b/i.test(l);
+  const clean = (l) => l.replace(/^[\s\-–—•*·▪▫◦✓✔➡👉\uFE0F]+/u, "").trim();
+  const ingredients = [], steps = [];
+  let mode = null;
+  for (const l of lines) {
+    if (isIng(l)) { mode = "ing"; continue; }
+    if (isStep(l)) { mode = "step"; continue; }
+    if (!mode) continue;
+    if (isStop(l)) { mode = null; continue; }
+    const c = clean(l);
+    if (!c) continue;
+    (mode === "ing" ? ingredients : steps).push(c);
+  }
+  return { ingredients, steps: steps.join("\n") };
+}
+
+const isYoutubeLink = (url) => /(^|\/\/)(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(url || "");
+
+function Kitchen({ entity, shoppingEntity, session }) {
+  const { data, add, update, remove } = entity;
+  const [formOpen, setFormOpen] = useState(null); // null | "new" | receita sendo editada
+  const [viewingId, setViewingId] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const viewing = viewingId ? data.find(r => r.id === viewingId) : null;
+  const aiAvailable = cloudConfigured && !!session;
+
+  const confirmDelete = (r) => {
+    setOpenMenuId(null);
+    if (confirm(`Excluir a receita "${r.title}"?`)) {
+      if (viewingId === r.id) setViewingId(null);
+      remove(r.id);
+    }
+  };
+
+  const sendToShopping = async (r) => {
+    setOpenMenuId(null);
+    const have = new Set((shoppingEntity.data || []).map(i => String(i.name || "").trim().toLowerCase()));
+    const toAdd = [];
+    for (const raw of r.ingredients || []) {
+      const name = String(raw).trim();
+      const key = name.toLowerCase();
+      if (!name || have.has(key)) continue;
+      have.add(key);
+      toAdd.push(name);
+    }
+    if (!toAdd.length) { toast("Todos os ingredientes já estão na lista de compras."); return; }
+    for (const name of toAdd) await shoppingEntity.add({ id: crypto.randomUUID(), name, price: null, link: null, photo: null });
+    toast(`${toAdd.length} ${toAdd.length === 1 ? "ingrediente adicionado" : "ingredientes adicionados"} à lista de compras.`);
+  };
+
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><ChefHat size={22}/></div>
+          <div>
+            <small>RECEITAS</small>
+            <h2>Cozinha</h2>
+            <p>Guarde suas receitas com o link do vídeo, os ingredientes e o modo de preparo.</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          <button className="add" onClick={(e) => { e.stopPropagation(); setFormOpen("new"); }}><Plus size={16}/> Nova receita</button>
+        </div>
+      </div>
+
+      {data.length === 0 ? (
+        <div className="flashEmpty">
+          <div className="flashEmptyIcon"><ChefHat size={30}/></div>
+          <h3>Nenhuma receita ainda</h3>
+          <p>Adicione uma receita com o link do vídeo e cole a descrição pra preencher os ingredientes automaticamente.</p>
+          <button className="add" onClick={() => setFormOpen("new")}><Plus size={16}/> Adicionar minha primeira receita</button>
+        </div>
+      ) : (
+        <div className="recipeGrid">
+          {data.map(r => (
+            <div key={r.id} className="recipeCard" onClick={(e) => { e.stopPropagation(); setViewingId(r.id); }}>
+              <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
+              {openMenuId === r.id && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
+                <button onClick={() => { setOpenMenuId(null); setFormOpen(r); }}><Pencil size={13}/> Editar</button>
+                {(r.ingredients || []).length > 0 && <button onClick={() => sendToShopping(r)}><ShoppingCart size={13}/> Enviar p/ lista de compras</button>}
+                <button className="danger" onClick={() => confirmDelete(r)}><Trash2 size={13}/> Excluir</button>
+              </div>}
+              <b>{r.title}</b>
+              <small>{(r.ingredients || []).length} {(r.ingredients || []).length === 1 ? "ingrediente" : "ingredientes"}</small>
+              {r.link && (
+                <a className="ghost shoppingLinkBtn" href={r.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+                  <ExternalLink size={13}/> {isYoutubeLink(r.link) ? "Abrir vídeo" : "Abrir link"}
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {viewing && !formOpen && (
+        <div className="modalBack" onClick={() => setViewingId(null)}>
+          <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
+            <div className="modalHead"><h2>{viewing.title}</h2><button type="button" onClick={() => setViewingId(null)}><X/></button></div>
+            {viewing.link && (
+              <a className="ghost shoppingLinkBtn" href={viewing.link} target="_blank" rel="noopener noreferrer">
+                <ExternalLink size={13}/> {isYoutubeLink(viewing.link) ? "Abrir vídeo" : "Abrir link"}
+              </a>
+            )}
+            {(viewing.ingredients || []).length > 0 && <div>
+              <small className="recipeLabel">INGREDIENTES</small>
+              <ul className="recipeIngList">{viewing.ingredients.map((ing, i) => <li key={i}>{ing}</li>)}</ul>
+            </div>}
+            {viewing.steps && <div>
+              <small className="recipeLabel">MODO DE PREPARO</small>
+              <p className="recipeText">{viewing.steps}</p>
+            </div>}
+            {viewing.notes && <div>
+              <small className="recipeLabel">OBSERVAÇÕES</small>
+              <p className="recipeText">{viewing.notes}</p>
+            </div>}
+            <div className="modalActions">
+              {(viewing.ingredients || []).length > 0 && <button type="button" className="ghost" onClick={() => sendToShopping(viewing)}><ShoppingCart size={14}/> Enviar p/ lista de compras</button>}
+              <button type="button" className="add" onClick={() => setFormOpen(viewing)}><Pencil size={14}/> Editar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {formOpen && (
+        <RecipeFormModal
+          recipe={formOpen === "new" ? null : formOpen}
+          aiAvailable={aiAvailable}
+          onClose={() => setFormOpen(null)}
+          onSave={(payload) => {
+            if (formOpen === "new") add({ id: crypto.randomUUID(), ...payload });
+            else update(formOpen.id, payload);
+            setFormOpen(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
+  const [title, setTitle] = useState(recipe?.title || "");
+  const [link, setLink] = useState(recipe?.link || "");
+  const [ingText, setIngText] = useState((recipe?.ingredients || []).join("\n"));
+  const [steps, setSteps] = useState(recipe?.steps || "");
+  const [notes, setNotes] = useState(recipe?.notes || "");
+  const [pasted, setPasted] = useState("");
+  const [extracting, setExtracting] = useState(false);
+
+  // Primeiro tenta separar os blocos localmente (sem custo); a IA só é chamada
+  // se o texto não tiver um bloco "Ingredientes" reconhecível.
+  const extract = async () => {
+    const text = pasted.trim();
+    if (!text) return;
+    const local = parseRecipeText(text);
+    let ingredients = local.ingredients, stepsOut = local.steps, titleOut = "";
+    if (ingredients.length < 2) {
+      if (!aiAvailable) { toast("Não achei os ingredientes no texto. Preencha manualmente (a extração por IA precisa de login/sincronização).", "error"); return; }
+      setExtracting(true);
+      try {
+        const { data: res, error } = await supabase.functions.invoke("recipe-extract", { body: { text: text.slice(0, 8000) } });
+        if (error) throw error;
+        if (res?.error) throw new Error(res.error);
+        ingredients = (res?.ingredients || []).map(x => String(x).trim()).filter(Boolean);
+        stepsOut = typeof res?.steps === "string" ? res.steps : "";
+        titleOut = typeof res?.title === "string" ? res.title : "";
+      } catch (e) {
+        toast(e.message || "Não foi possível consultar a IA agora. Tente de novo ou preencha manualmente.", "error");
+        setExtracting(false);
+        return;
+      }
+      setExtracting(false);
+    }
+    if (!ingredients.length) { toast("Não encontrei ingredientes nesse texto.", "error"); return; }
+    setIngText(ingredients.join("\n"));
+    if (stepsOut) setSteps(stepsOut);
+    if (titleOut && !title.trim()) setTitle(titleOut);
+    setPasted("");
+  };
+
+  const handleSubmit = () => {
+    if (!title.trim()) return;
+    const l = link.trim();
+    onSave({
+      title: title.trim(),
+      link: l ? (/^https?:\/\//i.test(l) ? l : "https://" + l) : null,
+      ingredients: ingText.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
+      steps: steps.trim() || null,
+      notes: notes.trim() || null,
+    });
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{recipe ? "Editar receita" : "Nova receita"}</h2><button type="button" onClick={onClose}><X/></button></div>
+
+        <label>Nome da receita<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: Lasanha de frango"/></label>
+        <label>Link (YouTube ou site)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
+
+        <label>Colar descrição do vídeo (opcional)
+          <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo ou o texto da receita para preencher os ingredientes e o preparo."/>
+          <button type="button" className="ghost" disabled={!pasted.trim() || extracting} onClick={extract}><Sparkles size={13}/> {extracting ? "Extraindo..." : "Extrair ingredientes"}</button>
+        </label>
+
+        <label>Ingredientes (um por linha)<textarea rows={6} value={ingText} onChange={e => setIngText(e.target.value)} placeholder={"2 xícaras de farinha\n3 ovos"}/></label>
+        <label>Modo de preparo<textarea rows={6} value={steps} onChange={e => setSteps(e.target.value)}/></label>
+        <label>Observações<textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}/></label>
+
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!title.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
         </div>
       </div>
     </div>
