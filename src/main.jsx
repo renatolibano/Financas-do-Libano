@@ -9340,6 +9340,20 @@ function parseRecipeText(raw) {
   return { ingredients, steps: steps.join("\n") };
 }
 
+// Id do vídeo a partir de links watch?v=, youtu.be/, shorts/, embed/ e live/.
+function youtubeVideoId(url) {
+  const m = String(url || "").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/|v\/))([\w-]{11})/i);
+  return m ? m[1] : null;
+}
+
+// Capa da receita = miniatura do vídeo (carregada direto do YouTube, não passa pelo Supabase). Respeita o modo "Economizar dados".
+function RecipeThumb({ link }) {
+  const saver = React.useContext(EgressSaverContext);
+  const id = youtubeVideoId(link);
+  if (!id || saver) return null;
+  return <img className="recipeThumb" loading="lazy" alt="" src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} onError={(e) => { e.currentTarget.style.display = "none"; }}/>;
+}
+
 const isYoutubeLink = (url) => /(^|\/\/)(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(url || "");
 
 function Kitchen({ entity, shoppingEntity, session }) {
@@ -9402,6 +9416,7 @@ function Kitchen({ entity, shoppingEntity, session }) {
           {data.map(r => (
             <div key={r.id} className="recipeCard" onClick={(e) => { e.stopPropagation(); setViewingId(r.id); }}>
               <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
+              <RecipeThumb link={r.link}/>
               {openMenuId === r.id && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setFormOpen(r); }}><Pencil size={13}/> Editar</button>
                 {(r.ingredients || []).length > 0 && <button onClick={() => sendToShopping(r)}><ShoppingCart size={13}/> Enviar p/ lista de compras</button>}
@@ -9423,6 +9438,7 @@ function Kitchen({ entity, shoppingEntity, session }) {
         <div className="modalBack" onClick={() => setViewingId(null)}>
           <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
             <div className="modalHead"><h2>{viewing.title}</h2><button type="button" onClick={() => setViewingId(null)}><X/></button></div>
+            <RecipeThumb link={viewing.link}/>
             {viewing.link && (
               <a className="ghost shoppingLinkBtn" href={viewing.link} target="_blank" rel="noopener noreferrer">
                 <ExternalLink size={13}/> {isYoutubeLink(viewing.link) ? "Abrir vídeo" : "Abrir link"}
@@ -9464,7 +9480,11 @@ function Kitchen({ entity, shoppingEntity, session }) {
   );
 }
 
+const recipeDraftHasContent = (d) => !!(d && [d.title, d.link, d.ingText, d.steps, d.notes].some(v => String(v || "").trim()));
+
 function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
+  // Rascunho: guarda o que está sendo digitado no IndexedDB (mesmo esquema dos flashcards) pra não perder se fechar sem salvar.
+  const draftKey = recipe?.id ? `recipe_draft:${recipe.id}` : "recipe_draft:new";
   const [title, setTitle] = useState(recipe?.title || "");
   const [link, setLink] = useState(recipe?.link || "");
   const [ingText, setIngText] = useState((recipe?.ingredients || []).join("\n"));
@@ -9472,6 +9492,52 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
   const [notes, setNotes] = useState(recipe?.notes || "");
   const [pasted, setPasted] = useState("");
   const [extracting, setExtracting] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const dirtyRef = useRef(false);
+  const draftSaveTimer = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    idbGet(draftKey, null).then(draft => {
+      if (cancelled || !draft) return;
+      if (!recipeDraftHasContent(draft)) { idbDelete(draftKey); return; }
+      setTitle(draft.title || "");
+      setLink(draft.link || "");
+      setIngText(draft.ingText || "");
+      setSteps(draft.steps || "");
+      setNotes(draft.notes || "");
+      setDraftRestored(true);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    clearTimeout(draftSaveTimer.current);
+    const draft = { title, link, ingText, steps, notes };
+    draftSaveTimer.current = setTimeout(() => {
+      if (recipeDraftHasContent(draft)) idbSet(draftKey, draft);
+      else idbDelete(draftKey);
+    }, 500);
+    return () => clearTimeout(draftSaveTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title, link, ingText, steps, notes]);
+
+  const touch = (setter) => (e) => { dirtyRef.current = true; setter(e.target.value); };
+
+  const discardDraft = () => {
+    if (!confirm("Descartar o rascunho e voltar ao estado original?")) return;
+    clearTimeout(draftSaveTimer.current);
+    idbDelete(draftKey);
+    dirtyRef.current = false;
+    setDraftRestored(false);
+    setTitle(recipe?.title || "");
+    setLink(recipe?.link || "");
+    setIngText((recipe?.ingredients || []).join("\n"));
+    setSteps(recipe?.steps || "");
+    setNotes(recipe?.notes || "");
+  };
 
   // Primeiro tenta separar os blocos localmente (sem custo); a IA só é chamada
   // se o texto não tiver um bloco "Ingredientes" reconhecível.
@@ -9498,6 +9564,7 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
       setExtracting(false);
     }
     if (!ingredients.length) { toast("Não encontrei ingredientes nesse texto.", "error"); return; }
+    dirtyRef.current = true;
     setIngText(ingredients.join("\n"));
     if (stepsOut) setSteps(stepsOut);
     if (titleOut && !title.trim()) setTitle(titleOut);
@@ -9507,6 +9574,8 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
   const handleSubmit = () => {
     if (!title.trim()) return;
     const l = link.trim();
+    clearTimeout(draftSaveTimer.current);
+    idbDelete(draftKey);
     onSave({
       title: title.trim(),
       link: l ? (/^https?:\/\//i.test(l) ? l : "https://" + l) : null,
@@ -9520,18 +9589,24 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
     <div className="modalBack" onClick={onClose}>
       <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>{recipe ? "Editar receita" : "Nova receita"}</h2><button type="button" onClick={onClose}><X/></button></div>
+        {draftRestored && (
+          <div className="flashDraftBanner">
+            <span><Sparkle size={13}/> Rascunho restaurado — continue de onde parou.</span>
+            <button type="button" onClick={discardDraft}>Descartar rascunho</button>
+          </div>
+        )}
 
-        <label>Nome da receita<input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex.: Lasanha de frango"/></label>
-        <label>Link (YouTube ou site)<input value={link} onChange={e => setLink(e.target.value)} placeholder="https://..."/></label>
+        <label>Nome da receita<input autoFocus value={title} onChange={touch(setTitle)} placeholder="Ex.: Lasanha de frango"/></label>
+        <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/></label>
 
         <label>Colar descrição do vídeo (opcional)
           <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo ou o texto da receita para preencher os ingredientes e o preparo."/>
           <button type="button" className="ghost" disabled={!pasted.trim() || extracting} onClick={extract}><Sparkles size={13}/> {extracting ? "Extraindo..." : "Extrair ingredientes"}</button>
         </label>
 
-        <label>Ingredientes (um por linha)<textarea rows={6} value={ingText} onChange={e => setIngText(e.target.value)} placeholder={"2 xícaras de farinha\n3 ovos"}/></label>
-        <label>Modo de preparo<textarea rows={6} value={steps} onChange={e => setSteps(e.target.value)}/></label>
-        <label>Observações<textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}/></label>
+        <label>Ingredientes (um por linha)<textarea rows={6} value={ingText} onChange={touch(setIngText)} placeholder={"2 xícaras de farinha\n3 ovos"}/></label>
+        <label>Modo de preparo<textarea rows={6} value={steps} onChange={touch(setSteps)}/></label>
+        <label>Observações<textarea rows={2} value={notes} onChange={touch(setNotes)}/></label>
 
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
@@ -11248,6 +11323,12 @@ function FolderModal({ folder, onClose, onSave }) {
 const blankFlashRows = () => [{ id: rid(), term: "", definition: "", image: null, image_side: "term" }, { id: rid(), term: "", definition: "", image: null, image_side: "term" }];
 const rowsFromList = (l) => l?.cards?.length ? l.cards.map(c => ({ id: c.id || rid(), term: c.term || "", definition: c.definition || "", image: c.image || null, image_side: c.image_side === "definition" ? "definition" : "term" })) : blankFlashRows();
 
+// Um rascunho só vale a pena se tem algo escrito (título, descrição ou algum cartão com texto/imagem).
+const flashDraftHasContent = (d) => !!(d && (
+  String(d.title || "").trim() || String(d.description || "").trim() ||
+  (d.rows || []).some(r => stripHtml(r.term || "").trim() || stripHtml(r.definition || "").trim() || r.image)
+));
+
 function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave }) {
   // Rascunho: identifica esse formulário (lista nova, ou a lista sendo
   // editada) pra salvar o que está sendo digitado no IndexedDB e poder
@@ -11272,6 +11353,8 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
     let cancelled = false;
     idbGet(draftKey, null).then(draft => {
       if (cancelled || !draft) return;
+      // Rascunho vazio (gravado por versões antigas): descarta em vez de restaurar.
+      if (!flashDraftHasContent(draft)) { idbDelete(draftKey); return; }
       setTitle(draft.title || "");
       setDescription(draft.description || "");
       setTermLang(draft.termLang || null);
@@ -11296,8 +11379,11 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   useEffect(() => {
     if (!dirtyRef.current) return;
     clearTimeout(draftSaveTimer.current);
+    const draft = { title, description, termLang, defLang, rows };
     draftSaveTimer.current = setTimeout(() => {
-      idbSet(draftKey, { title, description, termLang, defLang, rows });
+      // Sem nada escrito, não guarda rascunho (e apaga o que existia).
+      if (flashDraftHasContent(draft)) idbSet(draftKey, draft);
+      else idbDelete(draftKey);
     }, 500);
     return () => clearTimeout(draftSaveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
