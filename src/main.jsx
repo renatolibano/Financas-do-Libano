@@ -9316,6 +9316,12 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
 
 // ---------- Cozinha (receitas: link do vídeo, ingredientes e modo de preparo) ----------
 
+// Mensagem real devolvida pela Edge Function (o supabase-js só diz "non-2xx" e esconde o corpo da resposta).
+async function edgeErrorMessage(e, fallback) {
+  try { const b = await e?.context?.json?.(); if (b?.error) return String(b.error); } catch {}
+  return e?.message || fallback;
+}
+
 // Extrai ingredientes e modo de preparo de um texto colado (ex.: descrição do
 // vídeo do YouTube) sem IA: procura os títulos "Ingredientes" e "Modo de
 // preparo" e separa as linhas de cada bloco.
@@ -9493,8 +9499,6 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
   const [pasted, setPasted] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
-  const [fetchingTranscript, setFetchingTranscript] = useState(false);
-  const [fromTranscript, setFromTranscript] = useState(false);
   const dirtyRef = useRef(false);
   const draftSaveTimer = useRef(null);
 
@@ -9559,7 +9563,7 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
         stepsOut = typeof res?.steps === "string" ? res.steps : "";
         titleOut = typeof res?.title === "string" ? res.title : "";
       } catch (e) {
-        toast(e.message || "Não foi possível consultar a IA agora. Tente de novo ou preencha manualmente.", "error");
+        toast(await edgeErrorMessage(e, "Não foi possível consultar a IA agora. Tente de novo ou preencha manualmente."), "error");
         setExtracting(false);
         return;
       }
@@ -9571,33 +9575,6 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
     if (stepsOut) setSteps(stepsOut);
     if (titleOut && !title.trim()) setTitle(titleOut);
     setPasted("");
-  };
-
-  // Busca a legenda do vídeo (servidor) e manda pra IA extrair — só no clique.
-  const extractFromTranscript = async () => {
-    const videoId = youtubeVideoId(link);
-    if (!videoId) return;
-    if (!aiAvailable) { toast("Buscar pela legenda precisa de login/sincronização.", "error"); return; }
-    setFetchingTranscript(true);
-    try {
-      const { data: tr, error: trErr } = await supabase.functions.invoke("recipe-transcript", { body: { videoId } });
-      if (trErr) throw trErr;
-      if (tr?.error) throw new Error(tr.error);
-      const { data: res, error } = await supabase.functions.invoke("recipe-extract", { body: { text: String(tr?.text || "").slice(0, 20000), source: "transcript" } });
-      if (error) throw error;
-      if (res?.error) throw new Error(res.error);
-      const ingredients = (res?.ingredients || []).map(x => String(x).trim()).filter(Boolean);
-      if (!ingredients.length) { toast("Não encontrei ingredientes na legenda desse vídeo.", "error"); return; }
-      dirtyRef.current = true;
-      setIngText(ingredients.join("\n"));
-      if (typeof res?.steps === "string" && res.steps) setSteps(res.steps);
-      if (typeof res?.title === "string" && res.title && !title.trim()) setTitle(res.title);
-      setFromTranscript(true);
-    } catch (e) {
-      toast(e.message || "Não foi possível buscar a legenda agora. Tente de novo ou preencha manualmente.", "error");
-    } finally {
-      setFetchingTranscript(false);
-    }
   };
 
   const handleSubmit = () => {
@@ -9626,15 +9603,17 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
         )}
 
         <label>Nome da receita<input autoFocus value={title} onChange={touch(setTitle)} placeholder="Ex.: Lasanha de frango"/></label>
-        <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/>
-          {youtubeVideoId(link) && <button type="button" className="ghost" disabled={fetchingTranscript} onClick={extractFromTranscript}><Sparkles size={13}/> {fetchingTranscript ? "Buscando legenda..." : "Buscar pela legenda do vídeo"}</button>}
-          {fromTranscript && <small className="emptyHint" style={{padding:0}}>⚠️ Extraído da legenda automática do vídeo — pode ter erros. Confira ingredientes e quantidades.</small>}
-        </label>
+        <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/></label>
 
-        <label>Colar descrição do vídeo (opcional)
-          <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo ou o texto da receita para preencher os ingredientes e o preparo."/>
+        <label>Colar descrição ou transcrição do vídeo (opcional)
+          <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo, a transcrição ou o texto da receita para preencher os ingredientes e o preparo."/>
           <button type="button" className="ghost" disabled={!pasted.trim() || extracting} onClick={extract}><Sparkles size={13}/> {extracting ? "Extraindo..." : "Extrair ingredientes"}</button>
         </label>
+        <div className="recipeHelp">
+          <b>O vídeo não tem os ingredientes na descrição?</b>
+          <span>Use o TurboScribe para gerar a transcrição do vídeo: cole o link do vídeo lá, copie o texto que ele gerar e cole na caixa acima. Depois é só clicar em "Extrair ingredientes". A transcrição é automática e pode ter erros, então confira ingredientes e quantidades antes de salvar.</span>
+          <a className="ghost" href="https://turboscribe.ai/pt/dashboard" target="_blank" rel="noopener noreferrer"><ExternalLink size={13}/> Abrir o TurboScribe</a>
+        </div>
 
         <label>Ingredientes (um por linha)<textarea rows={6} value={ingText} onChange={touch(setIngText)} placeholder={"2 xícaras de farinha\n3 ovos"}/></label>
         <label>Modo de preparo<textarea rows={6} value={steps} onChange={touch(setSteps)}/></label>
