@@ -43,6 +43,7 @@ import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
+import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl, optimizeExistingBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile, optimizeExistingStudyPdfFile } from "./lib/studyPdfs";
@@ -9367,6 +9368,8 @@ function Kitchen({ entity, shoppingEntity, session }) {
   const [formOpen, setFormOpen] = useState(null); // null | "new" | receita sendo editada
   const [viewingId, setViewingId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [exportMenuId, setExportMenuId] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
   const viewing = viewingId ? data.find(r => r.id === viewingId) : null;
   const aiAvailable = cloudConfigured && !!session;
 
@@ -9376,6 +9379,17 @@ function Kitchen({ entity, shoppingEntity, session }) {
       if (viewingId === r.id) setViewingId(null);
       remove(r.id);
     }
+  };
+
+  const copyRecipe = async (r) => {
+    setOpenMenuId(null);
+    try { await navigator.clipboard.writeText(recipeToText(r)); toast("Receita copiada!"); }
+    catch (e) { toast("Não foi possível copiar a receita.", "error"); }
+  };
+
+  const importRecipes = async (list) => {
+    for (const rec of list) await add({ id: crypto.randomUUID(), ...rec });
+    toast(`${list.length} ${list.length === 1 ? "receita importada" : "receitas importadas"}.`);
   };
 
   const sendToShopping = async (r) => {
@@ -9406,6 +9420,7 @@ function Kitchen({ entity, shoppingEntity, session }) {
           </div>
         </div>
         <div className="flashHeadActions">
+          <button className="ghost" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }}><Upload size={15}/> Importar</button>
           <button className="add" onClick={(e) => { e.stopPropagation(); setFormOpen("new"); }}><Plus size={16}/> Nova receita</button>
         </div>
       </div>
@@ -9421,11 +9436,17 @@ function Kitchen({ entity, shoppingEntity, session }) {
         <div className="recipeGrid">
           {data.map(r => (
             <div key={r.id} className="recipeCard" onClick={(e) => { e.stopPropagation(); setViewingId(r.id); }}>
-              <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
+              <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setExportMenuId(null); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
               <RecipeThumb link={r.link}/>
               {openMenuId === r.id && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setFormOpen(r); }}><Pencil size={13}/> Editar</button>
                 {(r.ingredients || []).length > 0 && <button onClick={() => sendToShopping(r)}><ShoppingCart size={13}/> Enviar p/ lista de compras</button>}
+                <button onClick={() => setExportMenuId(id => id === r.id ? null : r.id)}><Download size={13}/> Exportar {exportMenuId === r.id ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}</button>
+                {exportMenuId === r.id && <>
+                  <button className="sub" onClick={() => { setOpenMenuId(null); try { downloadRecipePdf(r); } catch (e) { console.error(e); toast("Não foi possível gerar o PDF.", "error"); } }}><FileText size={13}/> Exportar para PDF</button>
+                  <button className="sub" onClick={() => { setOpenMenuId(null); downloadRecipeFile(r); }}><Upload size={13}/> Para outra conta</button>
+                  <button className="sub" onClick={() => copyRecipe(r)}><Copy size={13}/> Copiar receita</button>
+                </>}
                 <button className="danger" onClick={() => confirmDelete(r)}><Trash2 size={13}/> Excluir</button>
               </div>}
               <b>{r.title}</b>
@@ -9470,6 +9491,8 @@ function Kitchen({ entity, shoppingEntity, session }) {
         </div>
       )}
 
+      {importOpen && <RecipeImportModal onClose={() => setImportOpen(false)} onImport={importRecipes}/>}
+
       {formOpen && (
         <RecipeFormModal
           recipe={formOpen === "new" ? null : formOpen}
@@ -9482,6 +9505,43 @@ function Kitchen({ entity, shoppingEntity, session }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function RecipeImportModal({ onClose, onImport }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    try { setText(await file.text()); }
+    catch (e) { toast("Não foi possível ler o arquivo.", "error"); }
+  };
+
+  const submit = async () => {
+    let list;
+    try { list = parseRecipeImport(text); }
+    catch (e) { toast(e.message, "error"); return; }
+    setBusy(true);
+    try { await onImport(list); onClose(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Importar receita</h2><button type="button" onClick={onClose}><X/></button></div>
+        <p className="emptyHint" style={{ padding: 0 }}>Escolha o arquivo de receita exportado de outra conta (Exportar → Para outra conta) ou cole o conteúdo dele abaixo.</p>
+        <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleFile(f); }}/>
+        <button type="button" className="ghost" onClick={() => fileRef.current?.click()}><Upload size={14}/> Escolher arquivo</button>
+        <label>Ou cole o conteúdo<textarea rows={6} value={text} onChange={e => setText(e.target.value)} placeholder='{"format":"libano-receita", ...}'/></label>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!text.trim() || busy} onClick={submit}><Check size={16}/> {busy ? "Importando..." : "Importar"}</button>
+        </div>
+      </div>
     </div>
   );
 }

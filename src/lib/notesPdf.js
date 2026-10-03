@@ -42,7 +42,7 @@ function htmlToLines(html) {
   return lines.length ? lines : [""];
 }
 
-const safeFileName = (title) =>
+export const safeFileName = (title) =>
   (title || "nota").trim().replace(/[^\p{L}\p{N}\-_ ]+/gu, "").replace(/\s+/g, "_").slice(0, 60) || "nota";
 
 // As fontes padrão do jsPDF (helvetica) só suportam a codificação WinAnsi
@@ -50,7 +50,7 @@ const safeFileName = (title) =>
 // doc.text/splitTextToSize, quebram tanto o glifo (vira "Ø=Þ" etc.) quanto o
 // cálculo de largura da linha inteira, espalhando as letras. Por isso
 // removemos emojis e outros símbolos fora do Latin-1 antes de desenhar.
-function sanitizeForPdf(text) {
+export function sanitizeForPdf(text) {
   return (text || "")
     // emojis, pictogramas, símbolos diversos, dingbats, variation selectors, ZWJ
     .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")
