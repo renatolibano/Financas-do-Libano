@@ -9493,6 +9493,8 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
   const [pasted, setPasted] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
+  const [fetchingTranscript, setFetchingTranscript] = useState(false);
+  const [fromTranscript, setFromTranscript] = useState(false);
   const dirtyRef = useRef(false);
   const draftSaveTimer = useRef(null);
 
@@ -9550,7 +9552,7 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
       if (!aiAvailable) { toast("Não achei os ingredientes no texto. Preencha manualmente (a extração por IA precisa de login/sincronização).", "error"); return; }
       setExtracting(true);
       try {
-        const { data: res, error } = await supabase.functions.invoke("recipe-extract", { body: { text: text.slice(0, 8000) } });
+        const { data: res, error } = await supabase.functions.invoke("recipe-extract", { body: { text: text.slice(0, 20000) } });
         if (error) throw error;
         if (res?.error) throw new Error(res.error);
         ingredients = (res?.ingredients || []).map(x => String(x).trim()).filter(Boolean);
@@ -9569,6 +9571,33 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
     if (stepsOut) setSteps(stepsOut);
     if (titleOut && !title.trim()) setTitle(titleOut);
     setPasted("");
+  };
+
+  // Busca a legenda do vídeo (servidor) e manda pra IA extrair — só no clique.
+  const extractFromTranscript = async () => {
+    const videoId = youtubeVideoId(link);
+    if (!videoId) return;
+    if (!aiAvailable) { toast("Buscar pela legenda precisa de login/sincronização.", "error"); return; }
+    setFetchingTranscript(true);
+    try {
+      const { data: tr, error: trErr } = await supabase.functions.invoke("recipe-transcript", { body: { videoId } });
+      if (trErr) throw trErr;
+      if (tr?.error) throw new Error(tr.error);
+      const { data: res, error } = await supabase.functions.invoke("recipe-extract", { body: { text: String(tr?.text || "").slice(0, 20000), source: "transcript" } });
+      if (error) throw error;
+      if (res?.error) throw new Error(res.error);
+      const ingredients = (res?.ingredients || []).map(x => String(x).trim()).filter(Boolean);
+      if (!ingredients.length) { toast("Não encontrei ingredientes na legenda desse vídeo.", "error"); return; }
+      dirtyRef.current = true;
+      setIngText(ingredients.join("\n"));
+      if (typeof res?.steps === "string" && res.steps) setSteps(res.steps);
+      if (typeof res?.title === "string" && res.title && !title.trim()) setTitle(res.title);
+      setFromTranscript(true);
+    } catch (e) {
+      toast(e.message || "Não foi possível buscar a legenda agora. Tente de novo ou preencha manualmente.", "error");
+    } finally {
+      setFetchingTranscript(false);
+    }
   };
 
   const handleSubmit = () => {
@@ -9597,7 +9626,10 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
         )}
 
         <label>Nome da receita<input autoFocus value={title} onChange={touch(setTitle)} placeholder="Ex.: Lasanha de frango"/></label>
-        <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/></label>
+        <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/>
+          {youtubeVideoId(link) && <button type="button" className="ghost" disabled={fetchingTranscript} onClick={extractFromTranscript}><Sparkles size={13}/> {fetchingTranscript ? "Buscando legenda..." : "Buscar pela legenda do vídeo"}</button>}
+          {fromTranscript && <small className="emptyHint" style={{padding:0}}>⚠️ Extraído da legenda automática do vídeo — pode ter erros. Confira ingredientes e quantidades.</small>}
+        </label>
 
         <label>Colar descrição do vídeo (opcional)
           <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo ou o texto da receita para preencher os ingredientes e o preparo."/>
