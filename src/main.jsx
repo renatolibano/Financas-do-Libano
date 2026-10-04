@@ -493,6 +493,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // salvo uma vez, na montagem — depois disso "page" navega normalmente e
   // não volta a seguir esse valor até o app ser reaberto/recarregado.
   const [homePage, setHomePage] = usePersistentState("libano-home-page", "Visão Geral");
+  // Abas ocultadas do menu (chaves de grupos e de páginas). Só esconde a entrada na navegação; os dados continuam salvos.
+  const [hiddenNav, setHiddenNav] = usePersistentState("libano-hidden-nav", []);
+  const [navEditOpen, setNavEditOpen] = useState(false);
+  const [navEditGroups, setNavEditGroups] = useState({});
   // Lê a URL uma única vez, na montagem (ex.: alguém abriu/recarregou em
   // "/notas/456") — se ela apontar pra uma página conhecida, o app abre
   // direto nela em vez de cair na página inicial das Configurações.
@@ -1156,6 +1160,16 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     { type:"single", key:"Cozinha", icon:ChefHat },
     { type:"single", key:"Gráfico", icon:PieChart },
   ];
+  const hiddenNavSet = new Set(Array.isArray(hiddenNav) ? hiddenNav : []);
+  const toggleNavHidden = (key) => setHiddenNav(h => {
+    const list = Array.isArray(h) ? h : [];
+    return list.includes(key) ? list.filter(k => k !== key) : [...list, key];
+  });
+  const visibleNavTree = navTree
+    .map(item => item.type === "group"
+      ? (hiddenNavSet.has(item.key) ? null : { ...item, children: item.children.filter(c => !hiddenNavSet.has(c.key)) })
+      : (hiddenNavSet.has(item.key) ? null : item))
+    .filter(item => item && (item.type !== "group" || item.children.length > 0));
   const [openGroups,setOpenGroups] = useState({});
   const goTo = (key)=>{
     setPage(key);
@@ -1185,7 +1199,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       <button className="sidebarToggle" onClick={(e)=>{e.stopPropagation();setMobileOpen(o=>!o)}}>
         <ChevronRight size={16}/>
       </button>
-      <nav>{navTree.map(item=>{
+      <nav>{visibleNavTree.map(item=>{
         if(item.type==="single"){
           const I = item.icon;
           return <button key={item.key} className={page===item.key?"active":""} onClick={()=>goTo(item.key)}>
@@ -1236,7 +1250,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       </button>
     </div>
 
-    {mobileMenuOpen && <MobileMenuOverlay navTree={navTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
+    {mobileMenuOpen && <MobileMenuOverlay navTree={visibleNavTree} page={page} goTo={(k)=>{goTo(k);setMobileMenuOpen(false);}} onClose={()=>setMobileMenuOpen(false)}/>}
 
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><span className="headerQuoteMark headerQuoteMarkOpen">&ldquo;</span><span className="headerQuoteText">{currentHeaderQuote}</span><span className="headerQuoteMark headerQuoteMarkClose">&rdquo;</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
@@ -1327,6 +1341,55 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
             ))}
           </select>
         </label>
+        <div className="notifSettingsBlock">
+          <button type="button" className="notifToggleRow navEditHead" onClick={()=>setNavEditOpen(o=>!o)}>
+            <span><LayoutGrid size={15}/> Abas do menu</span>
+            {navEditOpen ? <ChevronUp size={15}/> : <ChevronDown size={15}/>}
+          </button>
+          <small className="boardSettingsHint" style={{display:"block", marginTop:4}}>
+            Escolha quais abas aparecem no menu. Ocultar só tira a aba da navegação, nada do que está dentro dela é apagado.
+          </small>
+          {navEditOpen && (
+            <div className="notifKindsList">
+              {navTree.map(item => {
+                const groupOn = !hiddenNavSet.has(item.key);
+                const I = item.icon;
+                const expanded = item.type === "group" && !!navEditGroups[item.key];
+                return (
+                  <div key={item.key}>
+                    <div className="notifKindRow" style={{cursor:"default"}}>
+                      <span className="notifKindLabel" style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
+                        {item.type === "group" && (
+                          <button type="button" className="navEditChev" onClick={()=>setNavEditGroups(g=>({...g, [item.key]:!g[item.key]}))} aria-label="Mostrar abas do grupo">
+                            {expanded ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                          </button>
+                        )}
+                        <I size={14}/> {item.label || item.key}
+                      </span>
+                      <span className={"switchPill sm"+(groupOn?" on":"")}>
+                        <input type="checkbox" checked={groupOn} onChange={()=>toggleNavHidden(item.key)}/>
+                        <span className="switchKnob"/>
+                      </span>
+                    </div>
+                    {expanded && item.children.map(c => {
+                      const on = !hiddenNavSet.has(c.key);
+                      const CI = c.icon;
+                      return (
+                        <div key={c.key} className="notifKindRow" style={{cursor:"default", paddingLeft:26, opacity: groupOn ? 1 : 0.45}}>
+                          <span className="notifKindLabel" style={{display:"flex", alignItems:"center", gap:6, flex:1}}><CI size={13}/> {c.label || c.key}</span>
+                          <span className={"switchPill sm"+(on && groupOn?" on":"")}>
+                            <input type="checkbox" checked={on} disabled={!groupOn} onChange={()=>toggleNavHidden(c.key)}/>
+                            <span className="switchKnob"/>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <div className="notifSettingsBlock">
           <label className="notifToggleRow" style={{cursor:"default"}}>
             <span><Quote size={15}/> Frases da Visão Geral</span>

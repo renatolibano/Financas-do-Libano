@@ -2038,3 +2038,5 @@ h1{font-size:23px}
 .recipeHelp b{color:var(--text-1);font-size:13px}
 .recipeHelp a{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;text-decoration:none;margin-top:2px}
 .bookMenu button.sub{padding-left:26px}
+.modal button.navEditHead{width:100%;background:none;border:0;padding:0;color:var(--text-1);font:inherit;font-size:13px;cursor:pointer}
+.navEditChev{background:none;border:0;padding:2px;display:inline-flex;color:var(--text-2);cursor:pointer}
