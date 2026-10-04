@@ -1072,3 +1072,28 @@ do $$ declare t text; begin foreach t in array array['recipes'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+
+-- Cozinha: pastas e favoritos (rode este bloco no SQL Editor se a tabela recipes já existia)
+create table if not exists recipe_folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table recipe_folders enable row level security;
+
+alter table recipes add column if not exists folder_id uuid references recipe_folders(id) on delete set null;
+alter table recipes add column if not exists favorite boolean not null default false;
+
+do $$ declare t text; begin foreach t in array array['recipe_folders'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

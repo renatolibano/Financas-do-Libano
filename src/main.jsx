@@ -700,6 +700,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const shoppingItems = useEntity("shopping_items", [], session, "asc", {orderable:true, enabled: shoppingItemsVisitado});
   // Cozinha: receitas (link, ingredientes, modo de preparo). A Lista de Compras acima também é carregada ao visitar a Cozinha, pro botão "Enviar ingredientes" não gravar sobre um cache incompleto.
   const recipes = useEntity("recipes", [], session, "desc", {enabled: visitedPages.has("Cozinha")});
+  const recipeFolders = useEntity("recipe_folders", [], session, "asc", {orderable:true, enabled: visitedPages.has("Cozinha")});
   const mediaGroups = useEntity("media_groups", [], session, "asc", {orderable:true, enabled: filmesVisitado});
   // Obs.: "seasons" (progresso por temporada) fica de fora do listSelect só
   // não dá pra fazer aqui como em livros/PDFs — a própria linha da prateleira
@@ -1281,7 +1282,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
-      {page==="Cozinha" && <Kitchen entity={recipes} shoppingEntity={shoppingItems} session={session}/>}
+      {page==="Cozinha" && <Kitchen entity={recipes} foldersEntity={recipeFolders} shoppingEntity={shoppingItems} session={session}/>}
       {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos} session={session}/>}
 
       <ToastHost/>
@@ -9426,8 +9427,11 @@ function RecipeThumb({ link }) {
 
 const isYoutubeLink = (url) => /(^|\/\/)(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(url || "");
 
-function Kitchen({ entity, shoppingEntity, session }) {
+function Kitchen({ entity, foldersEntity, shoppingEntity, session }) {
   const { data, add, update, remove } = entity;
+  const { data: folders, add: addFolder, remove: removeFolder, update: updateFolder } = foldersEntity;
+  const [openFolderId, setOpenFolderId] = useState(null);
+  const [folderModal, setFolderModal] = useState(null); // null | "new" | pasta sendo renomeada
   const [formOpen, setFormOpen] = useState(null); // null | "new" | receita sendo editada
   const [viewingId, setViewingId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -9435,6 +9439,20 @@ function Kitchen({ entity, shoppingEntity, session }) {
   const [importOpen, setImportOpen] = useState(false);
   const viewing = viewingId ? data.find(r => r.id === viewingId) : null;
   const aiAvailable = cloudConfigured && !!session;
+  const currentFolder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
+  // Favoritas primeiro (a ordenação é estável, então o resto mantém a ordem original).
+  const visibleRecipes = data
+    .filter(r => (r.folder_id || null) === (currentFolder ? currentFolder.id : null))
+    .sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
+
+  const confirmDeleteFolder = (f) => {
+    setOpenMenuId(null);
+    if (confirm("Excluir esta pasta? As receitas dentro dela não serão apagadas.")) {
+      data.filter(r => r.folder_id === f.id).forEach(r => update(r.id, { folder_id: null }));
+      if (openFolderId === f.id) setOpenFolderId(null);
+      removeFolder(f.id);
+    }
+  };
 
   const confirmDelete = (r) => {
     setOpenMenuId(null);
@@ -9451,7 +9469,7 @@ function Kitchen({ entity, shoppingEntity, session }) {
   };
 
   const importRecipes = async (list) => {
-    for (const rec of list) await add({ id: crypto.randomUUID(), ...rec });
+    for (const rec of list) await add({ id: crypto.randomUUID(), ...(currentFolder ? { folder_id: currentFolder.id } : {}), ...rec });
     toast(`${list.length} ${list.length === 1 ? "receita importada" : "receitas importadas"}.`);
   };
 
@@ -9477,18 +9495,21 @@ function Kitchen({ entity, shoppingEntity, session }) {
         <div className="flashHeadInfo">
           <div className="flashHeadIcon"><ChefHat size={22}/></div>
           <div>
-            <small>RECEITAS</small>
-            <h2>Cozinha</h2>
-            <p>Guarde suas receitas com o link do vídeo, os ingredientes e o modo de preparo.</p>
+            <small>{currentFolder ? currentFolder.name.toUpperCase() : "RECEITAS"}</small>
+            <h2>{currentFolder ? currentFolder.name : "Cozinha"}</h2>
+            <p>{currentFolder ? `${visibleRecipes.length} receita(s) nesta pasta.` : "Guarde suas receitas com o link do vídeo, os ingredientes e o modo de preparo."}</p>
           </div>
         </div>
         <div className="flashHeadActions">
+          {currentFolder
+            ? <button className="ghost" onClick={() => setOpenFolderId(null)}><ChevronLeft size={16}/> Voltar</button>
+            : <button className="ghost" onClick={(e) => { e.stopPropagation(); setFolderModal("new"); }}><FolderPlus size={16}/> Criar pasta</button>}
           <button className="ghost" onClick={(e) => { e.stopPropagation(); setImportOpen(true); }}><Upload size={15}/> Importar</button>
           <button className="add" onClick={(e) => { e.stopPropagation(); setFormOpen("new"); }}><Plus size={16}/> Nova receita</button>
         </div>
       </div>
 
-      {data.length === 0 ? (
+      {!currentFolder && folders.length === 0 && data.length === 0 ? (
         <div className="flashEmpty">
           <div className="flashEmptyIcon"><ChefHat size={30}/></div>
           <h3>Nenhuma receita ainda</h3>
@@ -9496,14 +9517,52 @@ function Kitchen({ entity, shoppingEntity, session }) {
           <button className="add" onClick={() => setFormOpen("new")}><Plus size={16}/> Adicionar minha primeira receita</button>
         </div>
       ) : (
+        <>
+          {!currentFolder && folders.length > 0 && (
+            <div className="flashSection" style={{ marginTop: 18 }}>
+              <h3>Pastas</h3>
+              <div className="flashFolderGrid">
+                {folders.map(f => {
+                  const count = data.filter(r => r.folder_id === f.id).length;
+                  return (
+                    <div key={f.id} className="flashFolderTile" onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+                      <div className="flashFolderIcon"><Folder size={18}/></div>
+                      <div><b>{f.name}</b><small>{count} receita{count === 1 ? "" : "s"}</small></div>
+                      <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === `folder:${f.id}` ? null : `folder:${f.id}`); }}><MoreVertical size={16}/></button>
+                      {openMenuId === `folder:${f.id}` && (
+                        <div className="flashMenuPop" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => { setOpenMenuId(null); setFolderModal(f); }}><Pencil size={13}/> Renomear</button>
+                          <button className="danger" onClick={() => confirmDeleteFolder(f)}><Trash2 size={13}/> Excluir</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flashSection" style={{ marginTop: 18 }}>
+            {(folders.length > 0 || currentFolder) && <h3>{currentFolder ? "Receitas" : "Minhas receitas"}</h3>}
+            {visibleRecipes.length === 0 ? (
+              <p className="emptyHint">Nenhuma receita {currentFolder ? "nesta pasta" : "por aqui"} ainda.</p>
+            ) : (
         <div className="recipeGrid">
-          {data.map(r => (
+          {visibleRecipes.map(r => (
             <div key={r.id} className="recipeCard" onClick={(e) => { e.stopPropagation(); setViewingId(r.id); }}>
               <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setExportMenuId(null); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
+              <button className={"recipeStar" + (r.favorite ? " on" : "")} title={r.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"} onClick={(e) => { e.stopPropagation(); update(r.id, { favorite: !r.favorite }); }}><Star size={14} fill={r.favorite ? "currentColor" : "none"}/></button>
               <RecipeThumb link={r.link}/>
               {openMenuId === r.id && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setFormOpen(r); }}><Pencil size={13}/> Editar</button>
                 {(r.ingredients || []).length > 0 && <button onClick={() => sendToShopping(r)}><ShoppingCart size={13}/> Enviar p/ lista de compras</button>}
+                {folders.length > 0 && (
+                  <select defaultValue="__placeholder__" onClick={e => e.stopPropagation()} onChange={(e) => { const v = e.target.value; update(r.id, { folder_id: v === "__none__" ? null : v }); setOpenMenuId(null); }}>
+                    <option value="__placeholder__" disabled>Mover para pasta...</option>
+                    <option value="__none__">Sem pasta</option>
+                    {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </select>
+                )}
                 <button onClick={() => setExportMenuId(id => id === r.id ? null : r.id)}><Download size={13}/> Exportar {exportMenuId === r.id ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}</button>
                 {exportMenuId === r.id && <>
                   <button className="sub" onClick={() => { setOpenMenuId(null); try { downloadRecipePdf(r); } catch (e) { console.error(e); toast("Não foi possível gerar o PDF.", "error"); } }}><FileText size={13}/> Exportar para PDF</button>
@@ -9522,6 +9581,9 @@ function Kitchen({ entity, shoppingEntity, session }) {
             </div>
           ))}
         </div>
+            )}
+          </div>
+        </>
       )}
 
       {viewing && !formOpen && (
@@ -9556,13 +9618,24 @@ function Kitchen({ entity, shoppingEntity, session }) {
 
       {importOpen && <RecipeImportModal onClose={() => setImportOpen(false)} onImport={importRecipes}/>}
 
+      {folderModal && (
+        <FolderModal
+          folder={folderModal === "new" ? null : folderModal}
+          onClose={() => setFolderModal(null)}
+          onSave={(name) => {
+            if (folderModal === "new") addFolder({ name }); else updateFolder(folderModal.id, { name });
+            setFolderModal(null);
+          }}
+        />
+      )}
+
       {formOpen && (
         <RecipeFormModal
           recipe={formOpen === "new" ? null : formOpen}
           aiAvailable={aiAvailable}
           onClose={() => setFormOpen(null)}
           onSave={(payload) => {
-            if (formOpen === "new") add({ id: crypto.randomUUID(), ...payload });
+            if (formOpen === "new") add({ id: crypto.randomUUID(), ...(currentFolder ? { folder_id: currentFolder.id } : {}), ...payload });
             else update(formOpen.id, payload);
             setFormOpen(null);
           }}
