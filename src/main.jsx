@@ -9874,17 +9874,16 @@ function workoutSummaryText(it) {
   return parts.join(" · ");
 }
 
-// ---- Colar treino: organiza um texto livre em exercícios (séries, repetições, descanso) + observações ----
+// ---- Colar treino: organiza um texto livre (ou o texto do "Copiar treino") em exercícios + observações ----
 // Reconhece linhas como "Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s", "Agachamento 4x10 60s"
-// ou "Prancha: 3 séries de 30 s". Tudo que não for um exercício (título, dicas) vai para as observações.
-function parseWorkoutLine(line) {
-  let t = String(line || "")
-    .replace(/[\u{1F000}-\u{1FFFF}\u2600-\u27BF\uFE0E\uFE0F\u200D]/gu, "")
-    .replace(/^[\s\-–—•*·▪▫◦✓✔➡]+/u, "")
-    .replace(/^\d+\s*[.)]\s+/, "")
-    .replace(/[–—]/g, "-")
-    .trim();
-  if (!t) return null;
+// ou "Prancha: 3 séries de 30 s", e também o formato bonito gerado por "Copiar treino" (dias, descanso, metas,
+// link do GIF e observações). Tudo que não for exercício vai para as observações.
+const EMOJI_RE = /[\u{1F000}-\u{1FFFF}\u2300-\u23FF\u2600-\u27BF\uFE0E\uFE0F\u200D]/gu;
+const normalizeWorkoutLine = (t) => String(t || "").replace(EMOJI_RE, "").replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+
+// Séries, repetições, carga/tempo e descanso de um trecho já normalizado. `text` devolve o que sobrou.
+function parseWorkoutAttrs(input) {
+  let t = String(input || "").replace(/\s+/g, " ").trim(), m;
 
   // descanso
   let rest = { min: null, max: null };
@@ -9893,18 +9892,18 @@ function parseWorkoutLine(line) {
   t = t.replace(/[|;]+/g, " ").replace(/\s+/g, " ").trim();
 
   // séries (e repetições, quando vem no formato 3x12)
-  let sets = null, reps = { min: null, max: null }, m;
+  let sets = null, reps = { min: null, max: null };
   if ((m = t.match(/(\d+)\s*(?:s[ée]ries?|sets?)\b/i))) { sets = Number(m[1]); t = t.replace(m[0], " "); }
   else if ((m = t.match(/(\d+)\s*[x×]\s*(\d+(?:\s*-\s*\d+)?)\b/i))) { sets = Number(m[1]); reps = parseNumRange(m[2]); t = t.replace(m[0], " "); }
-  if (sets == null || sets < 1) return null;
 
-  if (reps.min == null && (m = t.match(/(?:de\s+)?(\d+(?:\s*-\s*\d+)?)\s*(?:repeti[cç][õo]es|repeti[cç][aã]o|reps?|vezes|x)\b/i))) {
-    reps = parseNumRange(m[1]); t = t.replace(m[0], " ");
-  }
-
-  // tempo solto depois de "3x12" (ex.: "Agachamento 4x10 60s") é o descanso
-  if (reps.min != null && rest.min == null && (m = t.match(/(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(minutos?|min|segundos?|seg|s)\b/i))) {
-    rest = parseNumRange(m[1] + m[2], true); t = t.replace(m[0], " ");
+  if (sets != null) {
+    if (reps.min == null && (m = t.match(/(?:de\s+)?(\d+(?:\s*-\s*\d+)?)\s*(?:repeti[cç][õo]es|repeti[cç][aã]o|reps?|vezes|x)\b/i))) {
+      reps = parseNumRange(m[1]); t = t.replace(m[0], " ");
+    }
+    // tempo solto depois de "3x12" (ex.: "Agachamento 4x10 60s") é o descanso
+    if (reps.min != null && rest.min == null && (m = t.match(/(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(minutos?|min|segundos?|seg|s)\b/i))) {
+      rest = parseNumRange(m[1] + m[2], true); t = t.replace(m[0], " ");
+    }
   }
 
   // carga (kg) ou tempo por série
@@ -9915,8 +9914,23 @@ function parseWorkoutLine(line) {
     amount = Math.round(parseFloat(m[1].replace(",", ".")) * (/^m/i.test(m[2]) ? 60 : 1)); metric = "tempo"; t = t.replace(m[0], " ");
   }
 
+  return { sets, reps, rest, metric, amount, text: t };
+}
+
+function parseWorkoutLine(line) {
+  const t = String(line || "")
+    .replace(EMOJI_RE, "")
+    .replace(/^[\s\-–—•*·▪▫◦✓✔➡]+/u, "")
+    .replace(/^\d+\s*[.)]\s+/, "")
+    .replace(/[–—]/g, "-")
+    .trim();
+  if (!t) return null;
+
+  const a = parseWorkoutAttrs(t);
+  if (a.sets == null || a.sets < 1) return null;
+
   // nome = texto antes do ":" (ou do " - "); o que sobrar vira meta
-  const parts = t.split(/\s*:\s*|\s+-\s+/).map(x => x.replace(/^[\s\-:]+|[\s\-:]+$/g, "")).filter(Boolean);
+  const parts = a.text.split(/\s*:\s*|\s+-\s+/).map(x => x.replace(/^[\s\-:]+|[\s\-:]+$/g, "")).filter(Boolean);
   const name = (parts[0] || "").trim();
   if ((name.match(/\p{L}/gu) || []).length < 2) return null;
   const leftover = parts.slice(1).join(" ")
@@ -9925,18 +9939,76 @@ function parseWorkoutLine(line) {
     .trim();
   const goals = (leftover.match(/\p{L}/gu) || []).length >= 3 ? [leftover.charAt(0).toUpperCase() + leftover.slice(1)] : [];
 
-  return { name, sets, metric, reps: reps.min, reps_max: reps.max, amount, rest_seconds: rest.min, rest_max: rest.max, goals };
+  return { name, sets: a.sets, metric: a.metric, reps: a.reps.min, reps_max: a.reps.max, amount: a.amount, rest_seconds: a.rest.min, rest_max: a.rest.max, goals };
 }
 
+const stripAccents = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const DAY_WORDS = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, sexta: 5, sabado: 6 };
+function weekdayIn(text) {
+  const m = stripAccents(text).toLowerCase().match(/\b(domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/);
+  return m ? DAY_WORDS[m[1]] : null;
+}
+// Linha que é só o nome do dia (ex.: "Segunda-feira", "📅 *Quarta-feira*", "Sexta:").
+const isDayHeader = (line) => /^(domingo|segunda|terca|quarta|quinta|sexta|sabado)(-feira)?$/.test(stripAccents(line).toLowerCase().replace(/[^a-z\s-]/g, "").trim());
+
+// Devolve { groups: [{ day: 0..6 | null, exercises, notes }] } — `day` null = usar o dia escolhido na janela.
 function parseWorkoutText(raw) {
-  const exercises = [], noteLines = [];
-  String(raw || "").split(/\r?\n/).forEach(l => {
-    const line = l.trim();
+  const groups = [];
+  let cur = null, openEx = null, notesMode = false;
+  const startGroup = (day) => {
+    if (cur && !cur.exercises.length && !cur.noteLines.length) { cur.day = day; return cur; }
+    cur = { day, exercises: [], noteLines: [] };
+    groups.push(cur);
+    return cur;
+  };
+  const group = () => cur || startGroup(null);
+  const newEx = (name) => ({ name, sets: null, metric: null, reps: null, reps_max: null, amount: null, rest_seconds: null, rest_max: null, goals: [] });
+
+  String(raw || "").split(/\r?\n/).forEach(rawLine => {
+    const line = rawLine.replace(/[\uFE0E\uFE0F\u200D]/g, "").trim();
     if (!line) return;
+    let m;
+
+    if (/^[━─═\-_=~*·\s]{3,}$/.test(line)) { openEx = null; notesMode = false; return; }               // divisória
+    if (/^\u{1F3CB}/u.test(line)) { openEx = null; notesMode = false; startGroup(weekdayIn(line)); return; } // 🏋 título
+    if (isDayHeader(line)) { openEx = null; notesMode = false; startGroup(weekdayIn(line)); return; }       // 📅 dia
+    if (/^\u{1F4DD}?\s*\*{0,2}\s*observa[cç][õo]es\s*\*{0,2}\s*:?$/iu.test(line)) { openEx = null; notesMode = true; group(); return; }
+
+    // exercício no formato bonito: "1️⃣ *Nome*"
+    if ((m = line.match(/^(?:\d\u20E3|\d+[.)])\s*\*(.+?)\*\s*$/u))) {
+      notesMode = false;
+      openEx = newEx(m[1].trim());
+      group().exercises.push(openEx);
+      return;
+    }
+
+    if (notesMode) { group().noteLines.push(line); return; }
+
+    if (openEx) {
+      if (/^\u{1F4AA}/u.test(line)) {                                    // 💪 séries, repetições, carga/tempo
+        const a = parseWorkoutAttrs(normalizeWorkoutLine(line));
+        if (a.sets) { openEx.sets = a.sets; openEx.metric = a.metric; openEx.reps = a.reps.min; openEx.reps_max = a.reps.max; openEx.amount = a.amount; }
+        return;
+      }
+      if (/^\u23F1/.test(line)) {                                        // ⏱ descanso
+        const a = parseWorkoutAttrs(normalizeWorkoutLine(line));
+        openEx.rest_seconds = a.rest.min; openEx.rest_max = a.rest.max;
+        return;
+      }
+      if ((m = line.match(/^\u{1F3AC}\s*(https?:\/\/\S+)/u))) { openEx.gif_url = normalizeGifLink(m[1]); return; } // 🎬 link do GIF
+      if ((m = line.match(/^[•·]\s*(.+)$/))) { openEx.goals.push(m[1].trim()); return; }                  // • meta
+    }
+
+    openEx = null;
     const ex = parseWorkoutLine(line);
-    if (ex) exercises.push(ex); else noteLines.push(line);
+    if (ex) group().exercises.push(ex); else group().noteLines.push(line);
   });
-  return { exercises, notes: noteLines.join("\n") };
+
+  return {
+    groups: groups
+      .filter(g => g.exercises.length || g.noteLines.length)
+      .map(g => ({ day: g.day, exercises: g.exercises, notes: g.noteLines.join("\n") })),
+  };
 }
 
 // Links de página do Giphy (giphy.com/gifs/...) não são imagens; converte pro link direto do GIF.
@@ -10068,14 +10140,22 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
     else await addDayNote({ id: crypto.randomUUID(), day_of_week: d, text: clean });
   };
 
-  const importWorkout = async ({ day, exercises, notes }) => {
-    for (const ex of exercises) await addItem({ id: crypto.randomUUID(), day_of_week: day, ...ex });
-    if (notes.trim()) {
-      const prev = notesOf(day);
-      await saveDayNotes(day, prev ? `${prev}\n\n${notes.trim()}` : notes.trim());
+  const importWorkout = async ({ groups }) => {
+    const notesByDay = {};
+    let total = 0;
+    for (const g of groups) {
+      for (const ex of g.exercises) { await addItem({ id: crypto.randomUUID(), day_of_week: g.day, ...ex }); total += 1; }
+      if (g.notes.trim()) notesByDay[g.day] = (notesByDay[g.day] ? notesByDay[g.day] + "\n\n" : "") + g.notes.trim();
     }
-    setSelectedDay(day);
-    toast(`${exercises.length} ${exercises.length === 1 ? "exercício importado" : "exercícios importados"} para ${WEEKDAY_LABELS[day]}.`);
+    for (const d of Object.keys(notesByDay)) {
+      const prev = notesOf(Number(d));
+      await saveDayNotes(Number(d), prev ? `${prev}\n\n${notesByDay[d]}` : notesByDay[d]);
+    }
+    const days = new Set(groups.map(g => g.day));
+    setSelectedDay(groups[0].day);
+    toast(total
+      ? `${total} ${total === 1 ? "exercício importado" : "exercícios importados"} ${days.size > 1 ? `em ${days.size} dias` : `para ${WEEKDAY_FULL[groups[0].day]}`}.`
+      : "Observações importadas.");
   };
 
   // Copia o treino formatado pra compartilhar (um dia ou a semana inteira, começando na segunda).
@@ -10281,21 +10361,23 @@ function WorkoutDayNotes({ text, onSave }) {
 function WorkoutImportModal({ defaultDay, onClose, onImport }) {
   const [day, setDay] = useState(defaultDay);
   const [text, setText] = useState("");
-  const [parsed, setParsed] = useState(null); // { exercises, notes }
-  const [notes, setNotes] = useState("");
+  const [groups, setGroups] = useState(null); // [{ day, exercises, notes }]
   const [busy, setBusy] = useState(false);
 
   const organize = () => {
     const r = parseWorkoutText(text);
-    if (!r.exercises.length && !r.notes) { toast("Cole o texto do treino primeiro.", "error"); return; }
-    setParsed(r);
-    setNotes(r.notes);
+    if (!r.groups.length) { toast("Cole o texto do treino primeiro.", "error"); return; }
+    setGroups(r.groups);
   };
 
+  const setGroupNotes = (gi, v) => setGroups(gs => gs.map((g, i) => i === gi ? { ...g, notes: v } : g));
+  const total = groups ? groups.reduce((n, g) => n + g.exercises.length, 0) : 0;
+  const targetDays = groups ? new Set(groups.map(g => g.day ?? day)) : new Set();
+
   const submit = async () => {
-    if (!parsed || busy) return;
+    if (!groups || busy) return;
     setBusy(true);
-    try { await onImport({ day, exercises: parsed.exercises, notes }); onClose(); }
+    try { await onImport({ groups: groups.map(g => ({ ...g, day: g.day ?? day })) }); onClose(); }
     finally { setBusy(false); }
   };
 
@@ -10304,7 +10386,7 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
       <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>Colar treino</h2><button type="button" onClick={onClose}><X/></button></div>
 
-        <label>Dia da semana
+        <label>Dia da semana <small>(usado quando o texto não indica o dia)</small>
           <div className="workoutDayPicker">
             {WEEKDAY_LABELS.map((label, d) => (
               <button type="button" key={d} className={day === d ? "active" : ""} onClick={() => setDay(d)}>{label}</button>
@@ -10313,29 +10395,34 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
         </label>
 
         <label>Texto do treino
-          <textarea rows={7} value={text} onChange={e => { setText(e.target.value); setParsed(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s"}/>
+          <textarea rows={7} value={text} onChange={e => { setText(e.target.value); setGroups(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s\n\nOu cole aqui um treino copiado pelo botão \"Copiar treino\"."}/>
         </label>
         <button type="button" className="ghost" disabled={!text.trim()} onClick={organize}><Sparkles size={13}/> Organizar</button>
 
-        {parsed && (
+        {groups && (
           <>
-            <div>
-              <small className="recipeLabel">EXERCÍCIOS ENCONTRADOS ({parsed.exercises.length})</small>
-              {parsed.exercises.length === 0
-                ? <p className="emptyHint" style={{ padding: 0 }}>Não encontrei exercícios nesse texto. Se importar assim, tudo vai para as observações.</p>
-                : <ul className="recipeIngList">{parsed.exercises.map((ex, i) => (
-                    <li key={i}><b>{ex.name}</b> — {workoutSummaryText(ex)}{ex.goals.length ? ` · ${ex.goals[0]}` : ""}</li>
-                  ))}</ul>}
-            </div>
-            <label>Observações
-              <textarea rows={4} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Nada para observações."/>
-            </label>
+            {total === 0 && <p className="emptyHint" style={{ padding: 0 }}>Não encontrei exercícios nesse texto. Se importar assim, tudo vai para as observações.</p>}
+            {groups.map((g, gi) => (
+              <div key={gi} style={{ display: "grid", gap: 8 }}>
+                <small className="recipeLabel">{WEEKDAY_FULL[g.day ?? day].toUpperCase()} · {g.exercises.length} {g.exercises.length === 1 ? "EXERCÍCIO" : "EXERCÍCIOS"}</small>
+                {g.exercises.length > 0 && (
+                  <ul className="recipeIngList">{g.exercises.map((ex, i) => (
+                    <li key={i}><b>{ex.name}</b>{workoutSummaryText(ex) ? ` — ${workoutSummaryText(ex)}` : ""}{ex.goals.length ? ` · ${ex.goals.join(" · ")}` : ""}{ex.gif_url ? " · 🎬 GIF" : ""}</li>
+                  ))}</ul>
+                )}
+                <label>Observações
+                  <textarea rows={3} value={g.notes} onChange={e => setGroupNotes(gi, e.target.value)} placeholder="Nada para observações."/>
+                </label>
+              </div>
+            ))}
           </>
         )}
 
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
-          <button type="button" className="add" disabled={!parsed || busy} onClick={submit}><Check size={16}/> {busy ? "Importando..." : `Importar para ${WEEKDAY_LABELS[day]}`}</button>
+          <button type="button" className="add" disabled={!groups || busy} onClick={submit}>
+            <Check size={16}/> {busy ? "Importando..." : targetDays.size > 1 ? `Importar em ${targetDays.size} dias` : `Importar para ${WEEKDAY_FULL[[...targetDays][0] ?? day]}`}
+          </button>
         </div>
       </div>
     </div>
