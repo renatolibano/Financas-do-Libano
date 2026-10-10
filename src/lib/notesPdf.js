@@ -1,43 +1,75 @@
 import { jsPDF } from "jspdf";
 
 // Converte o HTML de uma nota (contentEditable) em linhas de texto simples,
-// preservando checklists e listas com marcadores/numeradas.
+// preservando quebras de linha (<br>, <div>, <p>), checklists e listas
+// (com marcadores, numeradas e aninhadas).
+const BLOCK_TAGS = new Set(["DIV", "P", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "SECTION", "ARTICLE", "HEADER", "FOOTER", "TR", "TABLE", "TBODY"]);
+const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "IMG", "SVG", "CANVAS", "VIDEO", "AUDIO", "IFRAME"]);
+
 function htmlToLines(html) {
   const container = document.createElement("div");
   container.innerHTML = html || "";
   const lines = [];
+  let cur = "";
+  let prefix = ""; // marcador (•, 1., [x]) aplicado só à primeira linha emitida
 
-  const handleElement = (node) => {
+  // Empurra a linha atual. `force` cria uma linha em branco quando não há texto (caso do <br>).
+  const emit = (force = false) => {
+    const text = cur.replace(/[\u00a0\s]+/g, " ").trim();
+    if (text) { lines.push(prefix + text); prefix = ""; }
+    else if (force) lines.push("");
+    cur = "";
+  };
+
+  const walk = (node, listDepth) => {
+    if (node.nodeType === Node.TEXT_NODE) { cur += node.textContent; return; }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName;
+    if (SKIP_TAGS.has(tag)) return;
+
+    if (tag === "BR") { emit(true); return; }
+
     if (node.classList?.contains("checklist-item")) {
+      emit();
       const checked = node.classList.contains("checked");
-      const text = node.querySelector(".check-text")?.textContent?.trim() || "";
-      lines.push((checked ? "[x] " : "[ ] ") + text);
+      const text = node.querySelector(".check-text")?.textContent || node.textContent;
+      prefix = checked ? "[x] " : "[ ] ";
+      cur = text;
+      emit();
+      prefix = "";
       return;
     }
-    if (node.tagName === "UL" || node.tagName === "OL") {
-      const ordered = node.tagName === "OL";
-      Array.from(node.children).forEach((li, i) => {
-        const text = li.textContent.trim();
-        if (text) lines.push((ordered ? `${i + 1}. ` : "• ") + text);
+
+    if (tag === "UL" || tag === "OL") {
+      emit();
+      const ordered = tag === "OL";
+      let n = 0;
+      Array.from(node.children).forEach((li) => {
+        if (li.tagName !== "LI") { walk(li, listDepth + 1); return; }
+        n += 1;
+        emit();
+        prefix = ordered ? `${n}. ` : (listDepth === 0 ? "\u2022 " : "- ");
+        Array.from(li.childNodes).forEach((c) => walk(c, listDepth + 1));
+        emit();
+        prefix = "";
       });
       return;
     }
-    if (node.tagName === "BR") {
-      lines.push("");
+
+    if (BLOCK_TAGS.has(tag)) {
+      emit();
+      Array.from(node.childNodes).forEach((c) => walk(c, listDepth));
+      emit();
       return;
     }
-    const text = node.textContent.trim();
-    if (text) lines.push(text);
+
+    // Inline (span, b, i, u, a, font...) e células: só continua a linha atual.
+    Array.from(node.childNodes).forEach((c) => walk(c, listDepth));
+    if (tag === "TD" || tag === "TH") cur += " ";
   };
 
-  Array.from(container.childNodes).forEach((node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const t = node.textContent.trim();
-      if (t) lines.push(t);
-    } else if (node.nodeType === Node.ELEMENT_NODE) {
-      handleElement(node);
-    }
-  });
+  Array.from(container.childNodes).forEach((c) => walk(c, 0));
+  emit();
 
   return lines.length ? lines : [""];
 }
