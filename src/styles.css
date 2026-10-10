@@ -2077,3 +2077,4 @@ h1{font-size:23px}
 .workoutPlayerActions{display:flex;justify-content:flex-end}
 .workoutPlayerFooter{position:sticky;bottom:0;margin-top:16px;padding:12px 0;background:linear-gradient(to top,var(--bg) 70%,transparent)}
 .workoutPlayerFooter .add{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;border-radius:999px;font-size:14px}
+.workoutGifThumb.empty{background:var(--bg-surface-2);color:var(--text-3)}

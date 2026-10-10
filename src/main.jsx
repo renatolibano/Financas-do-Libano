@@ -9850,6 +9850,13 @@ function workoutSummaryText(it) {
   return parts.join(" · ");
 }
 
+// Links de página do Giphy (giphy.com/gifs/...) não são imagens; converte pro link direto do GIF.
+function normalizeGifLink(raw) {
+  const url = String(raw || "").trim();
+  const m = url.match(/^https?:\/\/(?:www\.)?giphy\.com\/(?:gifs|stickers|embed)\/(?:[\w-]*-)?([A-Za-z0-9]+)(?:[/?#].*)?$/i);
+  return m ? `https://media.giphy.com/media/${m[1]}/giphy.gif` : url;
+}
+
 // GIF escolhido do aparelho fica só no IndexedDB deste aparelho (nenhum byte vai pro Supabase → egress zero).
 // Já o GIF por link é carregado direto do site de origem (também não passa pelo Supabase) e respeita o modo "Economizar dados".
 function useLocalWorkoutGif(id) {
@@ -9884,11 +9891,14 @@ function useWorkoutGifUrl(item) {
 
 function WorkoutGifThumb({ item, placeholder = false, size = 56 }) {
   const url = useWorkoutGifUrl(item);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [url]);
   if (!url && !placeholder) return null;
+  const showImg = !!url && !failed;
   return (
-    <div className="workoutGifThumb" style={{ width: size, height: size }}>
-      {url
-        ? <img src={url} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }}/>
+    <div className={"workoutGifThumb" + (showImg ? "" : " empty")} style={{ width: size, height: size }}>
+      {showImg
+        ? <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)}/>
         : <Dumbbell size={Math.round(size * 0.4)}/>}
     </div>
   );
@@ -10243,6 +10253,7 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
   const [gifFileUrl, setGifFileUrl] = useState(null);
   const [gifRemoved, setGifRemoved] = useState(false);
   const [gifUrl, setGifUrl] = useState(item?.gif_url || "");
+  const [gifBroken, setGifBroken] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => () => { if (gifFileUrl) URL.revokeObjectURL(gifFileUrl); }, [gifFileUrl]);
@@ -10255,7 +10266,8 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
     setGifRemoved(false);
   };
   const removeGif = () => { setGifFile(null); setGifFileUrl(null); setGifRemoved(true); setGifUrl(""); };
-  const gifPreview = gifFile ? gifFileUrl : (gifUrl.trim() ? gifUrl.trim() : (gifRemoved ? null : existingLocal));
+  const gifPreview = gifFile ? gifFileUrl : (gifUrl.trim() ? normalizeGifLink(gifUrl) : (gifRemoved ? null : existingLocal));
+  useEffect(() => { setGifBroken(false); }, [gifPreview]);
 
   const setGoal = (i, v) => setGoals(g => g.map((x, idx) => idx===i ? v : x));
   const addGoal = () => setGoals(g => [...g, ""]);
@@ -10277,7 +10289,7 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
       }
       if (gifFile || gifRemoved) window.dispatchEvent(new Event("libano-workout-gif"));
     } catch (e) { console.error(e); }
-    const link = gifUrl.trim();
+    const link = normalizeGifLink(gifUrl);
     const cleanGoals = goals.map(g => g.trim()).filter(Boolean);
     onSave({
       id,
@@ -10356,12 +10368,13 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
 
         <label>GIF do exercício (opcional)
           <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => gifRef.current?.click()}>
-            {gifPreview ? <img src={gifPreview} alt="Prévia do GIF"/> : <Dumbbell size={28}/>}
+            {gifPreview && !gifBroken ? <img src={gifPreview} alt="Prévia do GIF" referrerPolicy="no-referrer" onError={() => setGifBroken(true)}/> : <Dumbbell size={28}/>}
           </div>
           <input ref={gifRef} type="file" accept="image/gif,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleGifFile(f); }}/>
           <button type="button" className="ghost" onClick={() => gifRef.current?.click()}>{gifPreview ? "Trocar GIF" : "Escolher GIF do aparelho"}</button>
           {gifPreview && <button type="button" className="ghost" onClick={removeGif}><X size={13}/> Remover GIF</button>}
           <input value={gifUrl} onChange={e => { setGifUrl(e.target.value); setGifRemoved(false); }} placeholder="Ou cole o link de um GIF (https://...)"/>
+          {gifBroken && <small style={{ color: "#ff9d9d" }}>Não consegui carregar esse link. Use o endereço direto da imagem (clique com o botão direito no GIF → "Copiar endereço da imagem"), não o link da página.</small>}
           <small>O GIF escolhido do aparelho fica salvo só neste aparelho e não gasta egress do Supabase. O link é carregado direto do site de origem.</small>
         </label>
 
