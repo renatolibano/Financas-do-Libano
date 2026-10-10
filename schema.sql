@@ -1097,3 +1097,13 @@ do $$ declare t text; begin foreach t in array array['recipe_folders'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+
+-- Treino: séries, tipo de esforço (carga/quantidade/tempo), repetições, intervalo e link de GIF.
+-- (o GIF escolhido do aparelho fica só no IndexedDB do aparelho — não vai pro banco)
+alter table workout_plan_items add column if not exists sets int;
+alter table workout_plan_items add column if not exists metric text;
+alter table workout_plan_items add column if not exists reps int;
+alter table workout_plan_items add column if not exists amount numeric;
+alter table workout_plan_items add column if not exists rest_seconds int;
+alter table workout_plan_items add column if not exists gif_url text;

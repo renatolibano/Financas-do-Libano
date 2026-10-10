@@ -26,7 +26,7 @@ import {
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
   Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
-  Share2, Info, Heart, ChefHat
+  Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight
 } from "lucide-react";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
@@ -9826,6 +9826,74 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
 
 // ---------- Treino (plano semanal de treinos, com metas por dia e sequência de dias concluídos, estilo Strava) ----------
 
+// ---- Treino: séries, tipo de esforço (carga/quantidade/tempo) e GIF do exercício ----
+const WORKOUT_METRICS = [["carga", "Carga"], ["quantidade", "Quantidade"], ["tempo", "Tempo"]];
+const fmtNum = (v) => String(Number(v) || 0);
+function fmtWorkoutSeconds(v) {
+  const s = Math.max(0, Math.round(Number(v) || 0));
+  if (s < 60) return `${s}"`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return r ? `${m}'${String(r).padStart(2, "0")}"` : `${m}'`;
+}
+function workoutValueLabel(it) {
+  if (it.metric === "tempo") return fmtWorkoutSeconds(it.amount);
+  if (it.metric === "quantidade") return `${fmtNum(it.amount)}x`;
+  return `${fmtNum(it.amount)}kg`;
+}
+function workoutSummaryText(it) {
+  if (!it.metric) return "";
+  const n = Math.max(1, Number(it.sets) || 1);
+  const parts = [`${n} ${n === 1 ? "série" : "séries"}`];
+  if (it.metric === "carga" && it.reps) parts.push(`${fmtNum(it.reps)}x`);
+  parts.push(workoutValueLabel(it));
+  if (Number(it.rest_seconds) > 0) parts.push(`intervalo ${fmtWorkoutSeconds(it.rest_seconds)}`);
+  return parts.join(" · ");
+}
+
+// GIF escolhido do aparelho fica só no IndexedDB deste aparelho (nenhum byte vai pro Supabase → egress zero).
+// Já o GIF por link é carregado direto do site de origem (também não passa pelo Supabase) e respeita o modo "Economizar dados".
+function useLocalWorkoutGif(id) {
+  const [url, setUrl] = useState(null);
+  const [rev, setRev] = useState(0);
+  useEffect(() => {
+    const h = () => setRev(r => r + 1);
+    window.addEventListener("libano-workout-gif", h);
+    return () => window.removeEventListener("libano-workout-gif", h);
+  }, []);
+  useEffect(() => {
+    let cancelled = false, objUrl = null;
+    setUrl(null);
+    if (!id) return;
+    idbGet(`workout_gif:${id}`, null).then(blob => {
+      if (cancelled || !blob) return;
+      objUrl = URL.createObjectURL(blob);
+      setUrl(objUrl);
+    });
+    return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
+  }, [id, rev]);
+  return url;
+}
+
+function useWorkoutGifUrl(item) {
+  const saver = React.useContext(EgressSaverContext);
+  const hasLink = !!item?.gif_url;
+  const local = useLocalWorkoutGif(hasLink ? null : item?.id);
+  if (hasLink) return saver ? null : item.gif_url;
+  return local;
+}
+
+function WorkoutGifThumb({ item, placeholder = false, size = 56 }) {
+  const url = useWorkoutGifUrl(item);
+  if (!url && !placeholder) return null;
+  return (
+    <div className="workoutGifThumb" style={{ width: size, height: size }}>
+      {url
+        ? <img src={url} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }}/>
+        : <Dumbbell size={Math.round(size * 0.4)}/>}
+    </div>
+  );
+}
+
 function WorkoutShelf({ itemsEntity, completionsEntity }) {
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: completions, add: addCompletion, remove: removeCompletion } = completionsEntity;
@@ -9834,6 +9902,10 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
   const [selectedDay, setSelectedDay] = useState(todayDow);
   const [itemModal, setItemModal] = useState(null); // null | "new" | item sendo editado
   const [openMenuId, setOpenMenuId] = useState(null);
+  // Player "Iniciar treino": o progresso (séries concluídas) fica só neste aparelho, por data + dia do plano.
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [playerOpenId, setPlayerOpenId] = useState(null);
+  const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
 
   const todayStr = todayISO();
   const completedDates = useMemo(() => new Set(completions.map(c => c.date)), [completions]);
@@ -9865,7 +9937,33 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
 
   const confirmDeleteItem = (it) => {
     setOpenMenuId(null);
-    if (confirm(`Excluir "${it.name}" de ${WEEKDAY_LABELS[it.day_of_week]}?`)) removeItem(it.id);
+    if (confirm(`Excluir "${it.name}" de ${WEEKDAY_LABELS[it.day_of_week]}?`)) {
+      removeItem(it.id);
+      idbDelete(`workout_gif:${it.id}`);
+    }
+  };
+
+  const sessionKey = `${todayStr}:${selectedDay}`;
+  const progress = (sessions && sessions[sessionKey]) || {};
+  const setProgress = (updater) => setSessions(all => {
+    const next = {};
+    Object.keys(all || {}).forEach(k => { if (k.startsWith(todayStr)) next[k] = all[k]; }); // descarta dias antigos
+    const cur = next[sessionKey] || {};
+    next[sessionKey] = typeof updater === "function" ? updater(cur) : updater;
+    return next;
+  });
+
+  const startWorkout = () => {
+    const first = selectedItems.find(i => !progress[i.id]?.done) || selectedItems[0];
+    setPlayerOpenId(first ? first.id : null);
+    setPlayerOpen(true);
+  };
+
+  const finishWorkout = () => {
+    if (!doneToday) addCompletion({ id: crypto.randomUUID(), date: todayStr });
+    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
+    setPlayerOpen(false);
+    toast("Treino concluído! 💪");
   };
 
   const moveItem = (it, dir) => {
@@ -9887,10 +9985,25 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
       defaultDay={selectedDay}
       onCancel={() => setItemModal(null)}
       onSave={(payload) => {
-        if (itemModal === "new") addItem({ id: crypto.randomUUID(), ...payload });
-        else updateItem(itemModal.id, payload);
+        const { id: payloadId, ...rest } = payload;
+        if (itemModal === "new") addItem({ id: payloadId || crypto.randomUUID(), ...rest });
+        else updateItem(itemModal.id, rest);
         setItemModal(null);
       }}
+    />;
+  }
+
+  if (playerOpen) {
+    return <WorkoutPlayer
+      day={selectedDay}
+      items={selectedItems}
+      progress={progress}
+      setProgress={setProgress}
+      openId={playerOpenId}
+      setOpenId={setPlayerOpenId}
+      onClose={() => setPlayerOpen(false)}
+      onEditItem={(it) => setItemModal(it)}
+      onFinish={finishWorkout}
     />;
   }
 
@@ -9938,6 +10051,10 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
         ))}
       </div>
 
+      {selectedItems.length > 0 && (
+        <button className="add workoutStartBtn" onClick={startWorkout}><Play size={16}/> Iniciar treino</button>
+      )}
+
       {selectedItems.length === 0 ? (
         <div className="flashEmpty">
           <div className="flashEmptyIcon"><Dumbbell size={30}/></div>
@@ -9950,6 +10067,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
           {selectedItems.map((it, idx) => (
             <div className="workoutItemCard" key={it.id}>
               <div className="workoutItemHead">
+                <WorkoutGifThumb item={it} size={44}/>
                 <h4>{it.name}</h4>
                 <div className="exerciseOrderBtns">
                   <button className="ghost" disabled={idx===0} onClick={() => moveItem(it, -1)}><ArrowUp size={13}/></button>
@@ -9963,6 +10081,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
                   </div>
                 )}
               </div>
+              {workoutSummaryText(it) && <div className="workoutItemStats">{workoutSummaryText(it)}</div>}
               {it.goals?.length > 0 && (
                 <ul className="workoutGoalsList">
                   {it.goals.map((g, i) => <li key={i}>{g}</li>)}
@@ -9976,19 +10095,202 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
   );
 }
 
+function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish }) {
+  const stateOf = (it) => progress[it.id] || { sets: 0, done: false };
+  const totalOf = (it) => (it.metric ? Math.max(1, Number(it.sets) || 1) : 1);
+  const doneCount = items.filter(it => stateOf(it).done).length;
+
+  const setItemState = (id, patch) => setProgress(p => ({ ...p, [id]: { sets: 0, done: false, ...(p[id] || {}), ...patch } }));
+
+  const openNext = (id) => {
+    const idx = items.findIndex(x => x.id === id);
+    const next = items.slice(idx + 1).find(x => !stateOf(x).done) || items.find(x => x.id !== id && !stateOf(x).done);
+    setOpenId(next ? next.id : null);
+  };
+
+  const clickSet = (it, i) => {
+    const st = stateOf(it);
+    const total = totalOf(it);
+    if (st.done) { setItemState(it.id, { sets: i - 1, done: false }); return; }
+    if (i === st.sets + 1) {
+      const done = i >= total; // concluiu todas as séries → exercício concluído automaticamente
+      setItemState(it.id, { sets: i, done });
+      if (done) openNext(it.id);
+    } else if (i <= st.sets) {
+      setItemState(it.id, { sets: i - 1, done: false });
+    }
+  };
+
+  const toggleConclude = (it) => {
+    const st = stateOf(it);
+    if (st.done) { setItemState(it.id, { sets: 0, done: false }); return; }
+    setItemState(it.id, { sets: totalOf(it), done: true });
+    openNext(it.id);
+  };
+
+  const finish = () => {
+    if (doneCount < items.length && !confirm("Ainda há exercícios não concluídos. Finalizar o treino mesmo assim?")) return;
+    onFinish();
+  };
+
+  const statBoxes = (it) => {
+    const boxes = [];
+    if (it.metric === "carga") {
+      boxes.push([<Repeat size={16}/>, "Repetições", it.reps ? `${fmtNum(it.reps)}x` : "—"]);
+      boxes.push([<Weight size={16}/>, "Carga", `${fmtNum(it.amount)}kg`]);
+    } else if (it.metric === "quantidade") {
+      boxes.push([<Hash size={16}/>, "Quantidade", `${fmtNum(it.amount)}x`]);
+    } else if (it.metric === "tempo") {
+      boxes.push([<Timer size={16}/>, "Tempo", fmtWorkoutSeconds(it.amount)]);
+    }
+    boxes.push([<Clock3 size={16}/>, "Intervalo", fmtWorkoutSeconds(it.rest_seconds)]);
+    return boxes;
+  };
+
+  return (
+    <div className="content workoutPlayer">
+      <div className="workoutPlayerTop">
+        <button className="ghost" onClick={onClose} aria-label="Voltar"><ArrowLeft size={18}/></button>
+        <h2>Treino</h2>
+      </div>
+      <div className="workoutPlayerBar">
+        <span>{WEEKDAY_LABELS[day]}</span>
+        <small>{doneCount}/{items.length} concluído{doneCount === 1 ? "" : "s"}</small>
+      </div>
+
+      <div className="workoutPlayerList">
+        {items.map(it => {
+          const st = stateOf(it);
+          const total = totalOf(it);
+          const open = openId === it.id;
+          return (
+            <div key={it.id} className={"workoutPlayerItem" + (st.done ? " done" : "")}>
+              <button type="button" className="workoutPlayerItemHead" onClick={() => setOpenId(id => id === it.id ? null : it.id)}>
+                <WorkoutGifThumb item={it} placeholder size={52}/>
+                <span className="workoutPlayerItemName">{it.name}</span>
+                {st.done && <CheckCircle2 size={18} className="workoutPlayerCheck"/>}
+                {open ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}
+              </button>
+
+              {open && (
+                <div className="workoutPlayerItemBody">
+                  {it.metric ? (
+                    <>
+                      <div className="workoutSetRow">
+                        {Array.from({ length: total }, (_, k) => k + 1).map(i => {
+                          const isDone = st.done || i <= st.sets;
+                          const isCurrent = !st.done && i === st.sets + 1;
+                          return (
+                            <button key={i} type="button"
+                              className={"workoutSetBtn" + (isDone ? " done" : "") + (isCurrent ? " current" : "")}
+                              onClick={() => clickSet(it, i)}>
+                              {isDone ? <Check size={14}/> : (isCurrent ? `Concluir série ${i}` : i)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="workoutStatBoxes">
+                        {statBoxes(it).map(([icon, label, value], k) => (
+                          <div key={k} className="workoutStatBox">
+                            {icon}
+                            <small>{label}</small>
+                            <b>{value}</b>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    it.goals?.length > 0 && <ul className="workoutGoalsList">{it.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                  )}
+
+                  <button type="button" className={"workoutConcludeBtn" + (st.done ? " done" : "")} onClick={() => toggleConclude(it)}>
+                    {st.done ? <><Check size={16}/> Exercício concluído · desfazer</> : "Concluir exercício"}
+                  </button>
+                  <div className="workoutPlayerActions">
+                    <button type="button" className="ghost" onClick={() => onEditItem(it)}><Pencil size={14}/> Editar</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="workoutPlayerFooter">
+        <button type="button" className="add" onClick={finish}><Flame size={16}/> Finalizar treino</button>
+      </div>
+    </div>
+  );
+}
+
 function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
   const [day, setDay] = useState(item?.day_of_week ?? defaultDay ?? new Date().getDay());
   const [name, setName] = useState(item?.name || "");
   const [goals, setGoals] = useState(item?.goals?.length ? [...item.goals] : [""]);
 
+  // Séries/carga: ligado por padrão em treinos novos; treinos antigos (só com metas) continuam sem isso até a pessoa ligar.
+  const [useStats, setUseStats] = useState(item ? !!item.metric : true);
+  const [sets, setSets] = useState(item?.sets ?? 3);
+  const [metric, setMetric] = useState(item?.metric || "carga");
+  const [reps, setReps] = useState(item?.reps != null ? String(item.reps) : "12");
+  const [amount, setAmount] = useState(item?.amount != null ? String(Number(item.amount)) : "");
+  const [rest, setRest] = useState(item?.rest_seconds != null ? String(item.rest_seconds) : "60");
+
+  // GIF: arquivo do aparelho (IndexedDB, egress zero) ou link.
+  const gifRef = useRef(null);
+  const existingLocal = useLocalWorkoutGif(item?.id);
+  const [gifFile, setGifFile] = useState(null);
+  const [gifFileUrl, setGifFileUrl] = useState(null);
+  const [gifRemoved, setGifRemoved] = useState(false);
+  const [gifUrl, setGifUrl] = useState(item?.gif_url || "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => () => { if (gifFileUrl) URL.revokeObjectURL(gifFileUrl); }, [gifFileUrl]);
+
+  const handleGifFile = (file) => {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { alert("Esse GIF tem mais de 8 MB. Escolha um arquivo menor."); return; }
+    setGifFile(file);
+    setGifFileUrl(URL.createObjectURL(file));
+    setGifRemoved(false);
+  };
+  const removeGif = () => { setGifFile(null); setGifFileUrl(null); setGifRemoved(true); setGifUrl(""); };
+  const gifPreview = gifFile ? gifFileUrl : (gifUrl.trim() ? gifUrl.trim() : (gifRemoved ? null : existingLocal));
+
   const setGoal = (i, v) => setGoals(g => g.map((x, idx) => idx===i ? v : x));
   const addGoal = () => setGoals(g => [...g, ""]);
   const removeGoal = (i) => setGoals(g => g.length>1 ? g.filter((_, idx) => idx!==i) : g);
 
-  const handleSubmit = () => {
-    if (!name.trim()) return;
+  const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+
+  const handleSubmit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    const id = item?.id || crypto.randomUUID();
+    const key = `workout_gif:${id}`;
+    try {
+      if (gifFile) {
+        const ok = await idbSet(key, gifFile);
+        if (!ok) alert("Não foi possível guardar o GIF neste aparelho (sem espaço?). O restante do treino foi salvo.");
+      } else if (gifRemoved) {
+        await idbDelete(key);
+      }
+      if (gifFile || gifRemoved) window.dispatchEvent(new Event("libano-workout-gif"));
+    } catch (e) { console.error(e); }
+    const link = gifUrl.trim();
     const cleanGoals = goals.map(g => g.trim()).filter(Boolean);
-    onSave({ day_of_week: day, name: name.trim(), goals: cleanGoals });
+    onSave({
+      id,
+      day_of_week: day,
+      name: name.trim(),
+      goals: cleanGoals,
+      sets: useStats ? Math.max(1, Number(sets) || 1) : null,
+      metric: useStats ? metric : null,
+      reps: useStats && metric === "carga" ? num(reps) : null,
+      amount: useStats ? num(amount) : null,
+      rest_seconds: useStats ? num(rest) : null,
+      gif_url: /^https?:\/\//i.test(link) ? link : null,
+    });
   };
 
   return (
@@ -9999,12 +10301,12 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
           <div>
             <small>TREINO</small>
             <h2>{item ? "Editar treino" : "Novo treino"}</h2>
-            <p>Escolha o dia da semana, dê um nome e liste as metas dessa atividade.</p>
+            <p>Escolha o dia da semana, dê um nome e defina séries, carga e metas dessa atividade.</p>
           </div>
         </div>
         <div className="flashHeadActions">
           <button className="ghost" onClick={onCancel}>Cancelar</button>
-          <button className="add" disabled={!name.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+          <button className="add" disabled={!name.trim() || saving} onClick={handleSubmit}><Check size={16}/> Salvar</button>
         </div>
       </div>
 
@@ -10017,7 +10319,51 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
           </div>
         </label>
 
-        <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Barra..."/></label>
+        <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Agachamento..."/></label>
+
+        <div className="workoutStatsToggle" onClick={() => setUseStats(v => !v)}>
+          <span>Usar séries, repetições e carga</span>
+          <span className={"switchPill sm" + (useStats ? " on" : "")}><span className="switchKnob"/></span>
+        </div>
+
+        {useStats && (
+          <>
+            <label>Séries
+              <div className="workoutStepper">
+                <button type="button" className="ghost" onClick={() => setSets(n => Math.max(1, (Number(n) || 1) - 1))}><Minus size={14}/></button>
+                <b>{sets}</b>
+                <button type="button" className="ghost" onClick={() => setSets(n => Math.min(20, (Number(n) || 1) + 1))}><Plus size={14}/></button>
+              </div>
+            </label>
+
+            <label>Tipo de esforço
+              <div className="workoutDayPicker">
+                {WORKOUT_METRICS.map(([k, label]) => (
+                  <button type="button" key={k} className={metric === k ? "active" : ""} onClick={() => setMetric(k)}>{label}</button>
+                ))}
+              </div>
+            </label>
+
+            {metric === "carga" && (
+              <label>Repetições por série<input type="number" min="1" value={reps} onChange={e => setReps(e.target.value)} placeholder="12"/></label>
+            )}
+            <label>{metric === "carga" ? "Carga (kg)" : metric === "quantidade" ? "Quantidade por série" : "Tempo por série (segundos)"}
+              <input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)} placeholder={metric === "carga" ? "25" : metric === "quantidade" ? "15" : "30"}/>
+            </label>
+            <label>Intervalo entre séries (segundos)<input type="number" min="0" value={rest} onChange={e => setRest(e.target.value)} placeholder="60"/></label>
+          </>
+        )}
+
+        <label>GIF do exercício (opcional)
+          <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => gifRef.current?.click()}>
+            {gifPreview ? <img src={gifPreview} alt="Prévia do GIF"/> : <Dumbbell size={28}/>}
+          </div>
+          <input ref={gifRef} type="file" accept="image/gif,image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; handleGifFile(f); }}/>
+          <button type="button" className="ghost" onClick={() => gifRef.current?.click()}>{gifPreview ? "Trocar GIF" : "Escolher GIF do aparelho"}</button>
+          {gifPreview && <button type="button" className="ghost" onClick={removeGif}><X size={13}/> Remover GIF</button>}
+          <input value={gifUrl} onChange={e => { setGifUrl(e.target.value); setGifRemoved(false); }} placeholder="Ou cole o link de um GIF (https://...)"/>
+          <small>O GIF escolhido do aparelho fica salvo só neste aparelho e não gasta egress do Supabase. O link é carregado direto do site de origem.</small>
+        </label>
 
         <label>Metas
           <div className="workoutGoalRows">
