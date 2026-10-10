@@ -1107,3 +1107,29 @@ alter table workout_plan_items add column if not exists reps int;
 alter table workout_plan_items add column if not exists amount numeric;
 alter table workout_plan_items add column if not exists rest_seconds int;
 alter table workout_plan_items add column if not exists gif_url text;
+
+
+-- Treino: faixas de repetição/descanso (ex.: 10-12 reps, 90-120 s) e observações por dia (Colar treino).
+alter table workout_plan_items add column if not exists reps_max int;
+alter table workout_plan_items add column if not exists rest_max int;
+
+create table if not exists workout_day_notes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  day_of_week int not null check (day_of_week between 0 and 6),
+  text text not null default '',
+  created_at timestamptz not null default now(),
+  unique(user_id, day_of_week)
+);
+alter table workout_day_notes enable row level security;
+
+do $$ declare t text; begin foreach t in array array['workout_day_notes'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

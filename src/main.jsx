@@ -689,6 +689,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const workoutHistoryCutoff = isoAddDays(todayISO(), -370);
   const workoutPlanItems = useEntity("workout_plan_items", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   const workoutCompletions = useEntity("workout_completions", [], session, "asc", {enabled: treinoVisitado, gteColumn: "date", gteValue: workoutHistoryCutoff});
+  const workoutDayNotes = useEntity("workout_day_notes", [], session, "asc", {enabled: treinoVisitado});
   // Lista de compras: usada na própria aba e também no preview "Quadro
   // possível" do Dashboard (Visão Geral) — por isso a busca é adiada até
   // uma dessas duas telas ser visitada nesta sessão, em vez de sempre na
@@ -1056,7 +1057,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           metas_de_estudo: studyGoals.data, pdfs: studyPdfs.data, pastas_de_pdfs: studyPdfGroups.data,
           flashcards: studyFlashcards.data, listas_de_flashcards: studyFlashcardLists.data, pastas_de_flashcards: studyFlashcardFolders.data,
         },
-        treino: { itens: workoutPlanItems.data, dias_concluidos: workoutCompletions.data },
+        treino: { itens: workoutPlanItems.data, dias_concluidos: workoutCompletions.data, observacoes: workoutDayNotes.data },
         lista_de_compras: shoppingItems.data,
         filmes_e_series: { pastas: mediaGroups.data, itens: mediaItems.data },
         jogos: { pastas: gameGroups.data, itens: gameItems.data },
@@ -1278,7 +1279,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
       {page==="Word" && <WordDocs entity={wordDocs} openDocId={wordOpenTrigger} onConsumeOpenDoc={()=>setWordOpenTrigger(null)} onOpenChange={setActiveWordUrlId} closeSignal={wordCloseSignal}/>}
-      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions}/>}
+      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions} notesEntity={workoutDayNotes}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
@@ -9835,19 +9836,106 @@ function fmtWorkoutSeconds(v) {
   const m = Math.floor(s / 60), r = s % 60;
   return r ? `${m}'${String(r).padStart(2, "0")}"` : `${m}'`;
 }
+// "10-12" / "90-120 s" / "2-3 min" → { min, max } (max só quando for maior que o min). Em timeMode devolve segundos.
+function parseNumRange(str, timeMode = false) {
+  const m = String(str || "").trim().toLowerCase().replace(/[–—]/g, "-")
+    .match(/^(\d+(?:[.,]\d+)?)\s*(?:-\s*(\d+(?:[.,]\d+)?))?\s*(minutos?|min|m|segundos?|seg|s|")?$/);
+  if (!m) return { min: null, max: null };
+  const mult = timeMode && m[3] && /^m/.test(m[3]) ? 60 : 1;
+  const a = Math.round(parseFloat(m[1].replace(",", ".")) * mult);
+  const b = m[2] ? Math.round(parseFloat(m[2].replace(",", ".")) * mult) : null;
+  return { min: a, max: b != null && b > a ? b : null };
+}
+const fmtRangeNum = (a, b) => (b != null && Number(b) !== Number(a) ? `${fmtNum(a)}–${fmtNum(b)}` : fmtNum(a));
+function workoutRepsLabel(it) {
+  if (it.reps != null) return `${fmtRangeNum(it.reps, it.reps_max)}x`;
+  if (it.metric === "quantidade" && it.amount != null) return `${fmtNum(it.amount)}x`; // treinos salvos antes das faixas
+  return "—";
+}
+function workoutRestLabel(it) {
+  if (it.rest_seconds == null) return fmtWorkoutSeconds(0);
+  return it.rest_max != null && Number(it.rest_max) !== Number(it.rest_seconds)
+    ? `${fmtWorkoutSeconds(it.rest_seconds)}–${fmtWorkoutSeconds(it.rest_max)}`
+    : fmtWorkoutSeconds(it.rest_seconds);
+}
 function workoutValueLabel(it) {
   if (it.metric === "tempo") return fmtWorkoutSeconds(it.amount);
-  if (it.metric === "quantidade") return `${fmtNum(it.amount)}x`;
+  if (it.metric === "quantidade") return workoutRepsLabel(it);
   return `${fmtNum(it.amount)}kg`;
 }
 function workoutSummaryText(it) {
   if (!it.metric) return "";
   const n = Math.max(1, Number(it.sets) || 1);
   const parts = [`${n} ${n === 1 ? "série" : "séries"}`];
-  if (it.metric === "carga" && it.reps) parts.push(`${fmtNum(it.reps)}x`);
+  if (it.metric === "carga" && it.reps != null) parts.push(workoutRepsLabel(it));
   parts.push(workoutValueLabel(it));
-  if (Number(it.rest_seconds) > 0) parts.push(`intervalo ${fmtWorkoutSeconds(it.rest_seconds)}`);
+  if (Number(it.rest_seconds) > 0) parts.push(`intervalo ${workoutRestLabel(it)}`);
   return parts.join(" · ");
+}
+
+// ---- Colar treino: organiza um texto livre em exercícios (séries, repetições, descanso) + observações ----
+// Reconhece linhas como "Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s", "Agachamento 4x10 60s"
+// ou "Prancha: 3 séries de 30 s". Tudo que não for um exercício (título, dicas) vai para as observações.
+function parseWorkoutLine(line) {
+  let t = String(line || "")
+    .replace(/[\u{1F000}-\u{1FFFF}\u2600-\u27BF\uFE0E\uFE0F\u200D]/gu, "")
+    .replace(/^[\s\-–—•*·▪▫◦✓✔➡]+/u, "")
+    .replace(/^\d+\s*[.)]\s+/, "")
+    .replace(/[–—]/g, "-")
+    .trim();
+  if (!t) return null;
+
+  // descanso
+  let rest = { min: null, max: null };
+  const restM = t.match(/(?:descanso|intervalo|pausa|rest)\s*[:\-]?\s*(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(minutos?|min|segundos?|seg|s|m|")?/i);
+  if (restM) { rest = parseNumRange(restM[1] + (restM[2] || ""), true); t = t.replace(restM[0], " "); }
+  t = t.replace(/[|;]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // séries (e repetições, quando vem no formato 3x12)
+  let sets = null, reps = { min: null, max: null }, m;
+  if ((m = t.match(/(\d+)\s*(?:s[ée]ries?|sets?)\b/i))) { sets = Number(m[1]); t = t.replace(m[0], " "); }
+  else if ((m = t.match(/(\d+)\s*[x×]\s*(\d+(?:\s*-\s*\d+)?)\b/i))) { sets = Number(m[1]); reps = parseNumRange(m[2]); t = t.replace(m[0], " "); }
+  if (sets == null || sets < 1) return null;
+
+  if (reps.min == null && (m = t.match(/(?:de\s+)?(\d+(?:\s*-\s*\d+)?)\s*(?:repeti[cç][õo]es|repeti[cç][aã]o|reps?|vezes|x)\b/i))) {
+    reps = parseNumRange(m[1]); t = t.replace(m[0], " ");
+  }
+
+  // tempo solto depois de "3x12" (ex.: "Agachamento 4x10 60s") é o descanso
+  if (reps.min != null && rest.min == null && (m = t.match(/(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(minutos?|min|segundos?|seg|s)\b/i))) {
+    rest = parseNumRange(m[1] + m[2], true); t = t.replace(m[0], " ");
+  }
+
+  // carga (kg) ou tempo por série
+  let metric = "quantidade", amount = null;
+  if ((m = t.match(/(\d+(?:[.,]\d+)?)\s*kg\b/i))) {
+    amount = parseFloat(m[1].replace(",", ".")); metric = "carga"; t = t.replace(m[0], " ");
+  } else if (reps.min == null && (m = t.match(/(?:de\s+)?(\d+(?:[.,]\d+)?)(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(minutos?|min|segundos?|seg|s)\b/i))) {
+    amount = Math.round(parseFloat(m[1].replace(",", ".")) * (/^m/i.test(m[2]) ? 60 : 1)); metric = "tempo"; t = t.replace(m[0], " ");
+  }
+
+  // nome = texto antes do ":" (ou do " - "); o que sobrar vira meta
+  const parts = t.split(/\s*:\s*|\s+-\s+/).map(x => x.replace(/^[\s\-:]+|[\s\-:]+$/g, "")).filter(Boolean);
+  const name = (parts[0] || "").trim();
+  if ((name.match(/\p{L}/gu) || []).length < 2) return null;
+  const leftover = parts.slice(1).join(" ")
+    .replace(/^(?:(?:de|da|do|com|em|por|e)\b\s*)+/i, "")
+    .replace(/(?:\s*\b(?:de|da|do|com|em|por|e))+$/i, "")
+    .trim();
+  const goals = (leftover.match(/\p{L}/gu) || []).length >= 3 ? [leftover.charAt(0).toUpperCase() + leftover.slice(1)] : [];
+
+  return { name, sets, metric, reps: reps.min, reps_max: reps.max, amount, rest_seconds: rest.min, rest_max: rest.max, goals };
+}
+
+function parseWorkoutText(raw) {
+  const exercises = [], noteLines = [];
+  String(raw || "").split(/\r?\n/).forEach(l => {
+    const line = l.trim();
+    if (!line) return;
+    const ex = parseWorkoutLine(line);
+    if (ex) exercises.push(ex); else noteLines.push(line);
+  });
+  return { exercises, notes: noteLines.join("\n") };
 }
 
 // Links de página do Giphy (giphy.com/gifs/...) não são imagens; converte pro link direto do GIF.
@@ -9889,14 +9977,17 @@ function useWorkoutGifUrl(item) {
   return local;
 }
 
-function WorkoutGifThumb({ item, placeholder = false, size = 56 }) {
+function WorkoutGifThumb({ item, placeholder = false, size = 56, onZoom }) {
   const url = useWorkoutGifUrl(item);
   const [failed, setFailed] = useState(false);
   useEffect(() => { setFailed(false); }, [url]);
   if (!url && !placeholder) return null;
   const showImg = !!url && !failed;
+  const zoomable = showImg && !!onZoom;
   return (
-    <div className={"workoutGifThumb" + (showImg ? "" : " empty")} style={{ width: size, height: size }}>
+    <div className={"workoutGifThumb" + (showImg ? "" : " empty") + (zoomable ? " zoomable" : "")} style={{ width: size, height: size }}
+      onClick={zoomable ? (e) => { e.stopPropagation(); onZoom(); } : undefined}
+      role={zoomable ? "button" : undefined} aria-label={zoomable ? "Ampliar GIF" : undefined}>
       {showImg
         ? <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)}/>
         : <Dumbbell size={Math.round(size * 0.4)}/>}
@@ -9904,9 +9995,10 @@ function WorkoutGifThumb({ item, placeholder = false, size = 56 }) {
   );
 }
 
-function WorkoutShelf({ itemsEntity, completionsEntity }) {
+function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: completions, add: addCompletion, remove: removeCompletion } = completionsEntity;
+  const { data: dayNotes, add: addDayNote, update: updateDayNote, remove: removeDayNote } = notesEntity;
 
   const todayDow = new Date().getDay();
   const [selectedDay, setSelectedDay] = useState(todayDow);
@@ -9914,6 +10006,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
   const [openMenuId, setOpenMenuId] = useState(null);
   // Player "Iniciar treino": o progresso (séries concluídas) fica só neste aparelho, por data + dia do plano.
   const [playerOpen, setPlayerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [playerOpenId, setPlayerOpenId] = useState(null);
   const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
 
@@ -9962,6 +10055,26 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
     next[sessionKey] = typeof updater === "function" ? updater(cur) : updater;
     return next;
   });
+
+  const noteRowOf = (d) => dayNotes.find(n => n.day_of_week === d);
+  const notesOf = (d) => noteRowOf(d)?.text || "";
+  const saveDayNotes = async (d, text) => {
+    const row = noteRowOf(d);
+    const clean = String(text || "").trim();
+    if (!clean) { if (row) removeDayNote(row.id); return; }
+    if (row) updateDayNote(row.id, { text: clean });
+    else await addDayNote({ id: crypto.randomUUID(), day_of_week: d, text: clean });
+  };
+
+  const importWorkout = async ({ day, exercises, notes }) => {
+    for (const ex of exercises) await addItem({ id: crypto.randomUUID(), day_of_week: day, ...ex });
+    if (notes.trim()) {
+      const prev = notesOf(day);
+      await saveDayNotes(day, prev ? `${prev}\n\n${notes.trim()}` : notes.trim());
+    }
+    setSelectedDay(day);
+    toast(`${exercises.length} ${exercises.length === 1 ? "exercício importado" : "exercícios importados"} para ${WEEKDAY_LABELS[day]}.`);
+  };
 
   const startWorkout = () => {
     const first = selectedItems.find(i => !progress[i.id]?.done) || selectedItems[0];
@@ -10012,6 +10125,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
       openId={playerOpenId}
       setOpenId={setPlayerOpenId}
       onClose={() => setPlayerOpen(false)}
+      notes={notesOf(selectedDay)}
       onEditItem={(it) => setItemModal(it)}
       onFinish={finishWorkout}
     />;
@@ -10035,6 +10149,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
               : `Sequência de ${streak} ${streak===1?"dia":"dias"} — marque o treino de hoje pra não perder.`}>
             <Flame size={15} fill={doneToday?STREAK_COLOR:"none"}/> {streak} {streak===1?"dia":"dias"}
           </span>}
+          <button className="ghost" onClick={() => setImportOpen(true)}><ClipboardPaste size={15}/> Colar treino</button>
           <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
         </div>
       </div>
@@ -10101,11 +10216,126 @@ function WorkoutShelf({ itemsEntity, completionsEntity }) {
           ))}
         </div>
       )}
+
+      <WorkoutDayNotes key={selectedDay} text={notesOf(selectedDay)} onSave={(t) => saveDayNotes(selectedDay, t)}/>
+
+      {importOpen && <WorkoutImportModal defaultDay={selectedDay} onClose={() => setImportOpen(false)} onImport={importWorkout}/>}
     </div>
   );
 }
 
-function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish }) {
+function WorkoutDayNotes({ text, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  useEffect(() => { if (!editing) setDraft(text); }, [text, editing]);
+  if (!editing && !text) {
+    return <div className="workoutNotes"><button type="button" className="ghost" onClick={() => setEditing(true)}><Plus size={13}/> Adicionar observações</button></div>;
+  }
+  return (
+    <div className="workoutNotes card">
+      <div className="workoutNotesHead">
+        <b>Observações</b>
+        {!editing && <button type="button" className="ghost" onClick={() => setEditing(true)}><Pencil size={13}/> Editar</button>}
+      </div>
+      {editing ? (
+        <>
+          <textarea rows={5} autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Dicas, orientações e anotações desse dia..."/>
+          <div className="workoutNotesActions">
+            <button type="button" className="ghost" onClick={() => { setDraft(text); setEditing(false); }}>Cancelar</button>
+            <button type="button" className="add" onClick={() => { onSave(draft); setEditing(false); }}><Check size={15}/> Salvar</button>
+          </div>
+        </>
+      ) : (
+        <p className="workoutNotesText">{text}</p>
+      )}
+    </div>
+  );
+}
+
+function WorkoutImportModal({ defaultDay, onClose, onImport }) {
+  const [day, setDay] = useState(defaultDay);
+  const [text, setText] = useState("");
+  const [parsed, setParsed] = useState(null); // { exercises, notes }
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const organize = () => {
+    const r = parseWorkoutText(text);
+    if (!r.exercises.length && !r.notes) { toast("Cole o texto do treino primeiro.", "error"); return; }
+    setParsed(r);
+    setNotes(r.notes);
+  };
+
+  const submit = async () => {
+    if (!parsed || busy) return;
+    setBusy(true);
+    try { await onImport({ day, exercises: parsed.exercises, notes }); onClose(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Colar treino</h2><button type="button" onClick={onClose}><X/></button></div>
+
+        <label>Dia da semana
+          <div className="workoutDayPicker">
+            {WEEKDAY_LABELS.map((label, d) => (
+              <button type="button" key={d} className={day === d ? "active" : ""} onClick={() => setDay(d)}>{label}</button>
+            ))}
+          </div>
+        </label>
+
+        <label>Texto do treino
+          <textarea rows={7} value={text} onChange={e => { setText(e.target.value); setParsed(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s"}/>
+        </label>
+        <button type="button" className="ghost" disabled={!text.trim()} onClick={organize}><Sparkles size={13}/> Organizar</button>
+
+        {parsed && (
+          <>
+            <div>
+              <small className="recipeLabel">EXERCÍCIOS ENCONTRADOS ({parsed.exercises.length})</small>
+              {parsed.exercises.length === 0
+                ? <p className="emptyHint" style={{ padding: 0 }}>Não encontrei exercícios nesse texto. Se importar assim, tudo vai para as observações.</p>
+                : <ul className="recipeIngList">{parsed.exercises.map((ex, i) => (
+                    <li key={i}><b>{ex.name}</b> — {workoutSummaryText(ex)}{ex.goals.length ? ` · ${ex.goals[0]}` : ""}</li>
+                  ))}</ul>}
+            </div>
+            <label>Observações
+              <textarea rows={4} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Nada para observações."/>
+            </label>
+          </>
+        )}
+
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!parsed || busy} onClick={submit}><Check size={16}/> {busy ? "Importando..." : `Importar para ${WEEKDAY_LABELS[day]}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// GIF em tela cheia (toque em qualquer lugar ou Esc fecha).
+function WorkoutGifLightbox({ item, onClose }) {
+  const url = useWorkoutGifUrl(item);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!url) return null;
+  return (
+    <div className="workoutLightbox" onClick={onClose}>
+      <button type="button" className="workoutLightboxClose" onClick={onClose} aria-label="Fechar"><X size={22}/></button>
+      <img src={url} alt={item.name} referrerPolicy="no-referrer" onClick={(e) => e.stopPropagation()}/>
+      <div className="workoutLightboxName">{item.name}</div>
+    </div>
+  );
+}
+
+function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish, notes }) {
+  const [zoomItem, setZoomItem] = useState(null);
   const stateOf = (it) => progress[it.id] || { sets: 0, done: false };
   const totalOf = (it) => (it.metric ? Math.max(1, Number(it.sets) || 1) : 1);
   const doneCount = items.filter(it => stateOf(it).done).length;
@@ -10146,14 +10376,14 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
   const statBoxes = (it) => {
     const boxes = [];
     if (it.metric === "carga") {
-      boxes.push([<Repeat size={16}/>, "Repetições", it.reps ? `${fmtNum(it.reps)}x` : "—"]);
+      boxes.push([<Repeat size={16}/>, "Repetições", workoutRepsLabel(it)]);
       boxes.push([<Weight size={16}/>, "Carga", `${fmtNum(it.amount)}kg`]);
     } else if (it.metric === "quantidade") {
-      boxes.push([<Hash size={16}/>, "Quantidade", `${fmtNum(it.amount)}x`]);
+      boxes.push([<Hash size={16}/>, "Quantidade", workoutRepsLabel(it)]);
     } else if (it.metric === "tempo") {
       boxes.push([<Timer size={16}/>, "Tempo", fmtWorkoutSeconds(it.amount)]);
     }
-    boxes.push([<Clock3 size={16}/>, "Intervalo", fmtWorkoutSeconds(it.rest_seconds)]);
+    boxes.push([<Clock3 size={16}/>, "Intervalo", workoutRestLabel(it)]);
     return boxes;
   };
 
@@ -10168,6 +10398,13 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
         <small>{doneCount}/{items.length} concluído{doneCount === 1 ? "" : "s"}</small>
       </div>
 
+      {notes && (
+        <details className="workoutPlayerNotes">
+          <summary>Observações</summary>
+          <p>{notes}</p>
+        </details>
+      )}
+
       <div className="workoutPlayerList">
         {items.map(it => {
           const st = stateOf(it);
@@ -10176,7 +10413,7 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
           return (
             <div key={it.id} className={"workoutPlayerItem" + (st.done ? " done" : "")}>
               <button type="button" className="workoutPlayerItemHead" onClick={() => setOpenId(id => id === it.id ? null : it.id)}>
-                <WorkoutGifThumb item={it} placeholder size={52}/>
+                <WorkoutGifThumb item={it} placeholder size={52} onZoom={() => setZoomItem(it)}/>
                 <span className="workoutPlayerItemName">{it.name}</span>
                 {st.done && <CheckCircle2 size={18} className="workoutPlayerCheck"/>}
                 {open ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}
@@ -10229,6 +10466,8 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
       <div className="workoutPlayerFooter">
         <button type="button" className="add" onClick={finish}><Flame size={16}/> Finalizar treino</button>
       </div>
+
+      {zoomItem && <WorkoutGifLightbox item={zoomItem} onClose={() => setZoomItem(null)}/>}
     </div>
   );
 }
@@ -10242,9 +10481,12 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
   const [useStats, setUseStats] = useState(item ? !!item.metric : true);
   const [sets, setSets] = useState(item?.sets ?? 3);
   const [metric, setMetric] = useState(item?.metric || "carga");
-  const [reps, setReps] = useState(item?.reps != null ? String(item.reps) : "12");
+  const rangeStr = (a, b) => (a == null ? "" : (b != null && Number(b) !== Number(a) ? `${a}-${b}` : String(a)));
+  const [reps, setReps] = useState(item
+    ? (item.reps == null && item.metric === "quantidade" && item.amount != null ? String(Number(item.amount)) : rangeStr(item.reps, item.reps_max))
+    : "12");
   const [amount, setAmount] = useState(item?.amount != null ? String(Number(item.amount)) : "");
-  const [rest, setRest] = useState(item?.rest_seconds != null ? String(item.rest_seconds) : "60");
+  const [rest, setRest] = useState(item?.rest_seconds != null ? rangeStr(item.rest_seconds, item.rest_max) : "60");
 
   // GIF: arquivo do aparelho (IndexedDB, egress zero) ou link.
   const gifRef = useRef(null);
@@ -10290,6 +10532,8 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
       if (gifFile || gifRemoved) window.dispatchEvent(new Event("libano-workout-gif"));
     } catch (e) { console.error(e); }
     const link = normalizeGifLink(gifUrl);
+    const repsR = parseNumRange(reps);
+    const restR = parseNumRange(rest, true);
     const cleanGoals = goals.map(g => g.trim()).filter(Boolean);
     onSave({
       id,
@@ -10298,9 +10542,11 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
       goals: cleanGoals,
       sets: useStats ? Math.max(1, Number(sets) || 1) : null,
       metric: useStats ? metric : null,
-      reps: useStats && metric === "carga" ? num(reps) : null,
-      amount: useStats ? num(amount) : null,
-      rest_seconds: useStats ? num(rest) : null,
+      reps: useStats && metric !== "tempo" ? repsR.min : null,
+      reps_max: useStats && metric !== "tempo" ? repsR.max : null,
+      amount: useStats && metric !== "quantidade" ? num(amount) : null,
+      rest_seconds: useStats ? restR.min : null,
+      rest_max: useStats ? restR.max : null,
       gif_url: /^https?:\/\//i.test(link) ? link : null,
     });
   };
@@ -10356,13 +10602,17 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
               </div>
             </label>
 
-            {metric === "carga" && (
-              <label>Repetições por série<input type="number" min="1" value={reps} onChange={e => setReps(e.target.value)} placeholder="12"/></label>
+            {metric !== "tempo" && (
+              <label>{metric === "carga" ? "Repetições por série" : "Quantidade por série"}
+                <input value={reps} onChange={e => setReps(e.target.value)} placeholder={metric === "carga" ? "12 ou 10-12" : "15 ou 10-12"}/>
+              </label>
             )}
-            <label>{metric === "carga" ? "Carga (kg)" : metric === "quantidade" ? "Quantidade por série" : "Tempo por série (segundos)"}
-              <input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)} placeholder={metric === "carga" ? "25" : metric === "quantidade" ? "15" : "30"}/>
-            </label>
-            <label>Intervalo entre séries (segundos)<input type="number" min="0" value={rest} onChange={e => setRest(e.target.value)} placeholder="60"/></label>
+            {metric !== "quantidade" && (
+              <label>{metric === "carga" ? "Carga (kg)" : "Tempo por série (segundos)"}
+                <input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)} placeholder={metric === "carga" ? "25" : "30"}/>
+              </label>
+            )}
+            <label>Intervalo entre séries (segundos)<input value={rest} onChange={e => setRest(e.target.value)} placeholder="60 ou 90-120"/></label>
           </>
         )}
 
