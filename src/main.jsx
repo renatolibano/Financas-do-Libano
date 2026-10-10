@@ -44,6 +44,7 @@ import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
+import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
 import { jsPDF } from "jspdf";
 import { uploadBookFile, downloadBookFile, deleteBookFile, peekCachedBookFile, getBookFileUrl, optimizeExistingBookFile } from "./lib/books";
 import { uploadStudyPdfFile, downloadStudyPdfFile, deleteStudyPdfFile, optimizeExistingStudyPdfFile } from "./lib/studyPdfs";
@@ -10007,6 +10008,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
   // Player "Iniciar treino": o progresso (séries concluídas) fica só neste aparelho, por data + dia do plano.
   const [playerOpen, setPlayerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const [playerOpenId, setPlayerOpenId] = useState(null);
   const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
 
@@ -10074,6 +10076,20 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
     }
     setSelectedDay(day);
     toast(`${exercises.length} ${exercises.length === 1 ? "exercício importado" : "exercícios importados"} para ${WEEKDAY_LABELS[day]}.`);
+  };
+
+  // Copia o treino formatado pra compartilhar (um dia ou a semana inteira, começando na segunda).
+  const copyWorkout = async (scope) => {
+    setCopyMenuOpen(false);
+    const dayList = scope === "week" ? [1, 2, 3, 4, 5, 6, 0] : [selectedDay];
+    const days = dayList.map(d => ({ day: d, items: dayItems(d), notes: notesOf(d) })).filter(x => x.items.length);
+    if (!days.length) { toast("Nenhum treino para copiar.", "error"); return; }
+    try {
+      await navigator.clipboard.writeText(buildWorkoutShareText(days));
+      toast(scope === "week" ? "Treino da semana copiado!" : `Treino de ${WEEKDAY_FULL[selectedDay]} copiado!`);
+    } catch (e) {
+      toast("Não foi possível copiar o treino.", "error");
+    }
   };
 
   const startWorkout = () => {
@@ -10149,6 +10165,16 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
               : `Sequência de ${streak} ${streak===1?"dia":"dias"} — marque o treino de hoje pra não perder.`}>
             <Flame size={15} fill={doneToday?STREAK_COLOR:"none"}/> {streak} {streak===1?"dia":"dias"}
           </span>}
+          <div className="workoutCopyWrap">
+            <button className="ghost" onClick={() => setCopyMenuOpen(o => !o)}><Share2 size={15}/> Copiar treino</button>
+            {copyMenuOpen && <>
+              <div className="workoutCopyBackdrop" onClick={() => setCopyMenuOpen(false)}/>
+              <div className="workoutCopyMenu">
+                <button type="button" disabled={!selectedItems.length} onClick={() => copyWorkout("day")}><Copy size={13}/> Copiar {WEEKDAY_FULL[selectedDay]}</button>
+                <button type="button" disabled={!items.length} onClick={() => copyWorkout("week")}><Copy size={13}/> Copiar semana inteira</button>
+              </div>
+            </>}
+          </div>
           <button className="ghost" onClick={() => setImportOpen(true)}><ClipboardPaste size={15}/> Colar treino</button>
           <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
         </div>
