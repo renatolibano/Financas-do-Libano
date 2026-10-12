@@ -691,6 +691,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const workoutPlanItems = useEntity("workout_plan_items", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   const workoutCompletions = useEntity("workout_completions", [], session, "asc", {enabled: treinoVisitado, gteColumn: "date", gteValue: workoutHistoryCutoff});
   const workoutDayNotes = useEntity("workout_day_notes", [], session, "asc", {enabled: treinoVisitado});
+  const workoutFolders = useEntity("workout_library_folders", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   // Lista de compras: usada na própria aba e também no preview "Quadro
   // possível" do Dashboard (Visão Geral) — por isso a busca é adiada até
   // uma dessas duas telas ser visitada nesta sessão, em vez de sempre na
@@ -1058,7 +1059,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           metas_de_estudo: studyGoals.data, pdfs: studyPdfs.data, pastas_de_pdfs: studyPdfGroups.data,
           flashcards: studyFlashcards.data, listas_de_flashcards: studyFlashcardLists.data, pastas_de_flashcards: studyFlashcardFolders.data,
         },
-        treino: { itens: workoutPlanItems.data, dias_concluidos: workoutCompletions.data, observacoes: workoutDayNotes.data },
+        treino: { itens: workoutPlanItems.data, dias_concluidos: workoutCompletions.data, observacoes: workoutDayNotes.data, biblioteca: workoutFolders.data },
         lista_de_compras: shoppingItems.data,
         filmes_e_series: { pastas: mediaGroups.data, itens: mediaItems.data },
         jogos: { pastas: gameGroups.data, itens: gameItems.data },
@@ -1280,7 +1281,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
       {page==="Word" && <WordDocs entity={wordDocs} openDocId={wordOpenTrigger} onConsumeOpenDoc={()=>setWordOpenTrigger(null)} onOpenChange={setActiveWordUrlId} closeSignal={wordCloseSignal}/>}
-      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions} notesEntity={workoutDayNotes}/>}
+      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions} notesEntity={workoutDayNotes} foldersEntity={workoutFolders} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
@@ -9996,6 +9997,7 @@ function parseWorkoutText(raw) {
         return;
       }
       if ((m = line.match(/^\u{1F3AC}\s*(https?:\/\/\S+)/u))) { openEx.gif_url = normalizeGifLink(m[1]); return; } // 🎬 link do GIF
+      if ((m = line.match(/^\u25B6\s*(https?:\/\/\S+)/u))) { openEx.video_url = m[1]; return; }                // ▶ link do vídeo
       if ((m = line.match(/^[•·]\s*(.+)$/))) { openEx.goals.push(m[1].trim()); return; }                  // • meta
     }
 
@@ -10068,7 +10070,7 @@ function WorkoutGifThumb({ item, placeholder = false, size = 56, onZoom }) {
   );
 }
 
-function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
+function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEntity, session }) {
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: completions, add: addCompletion, remove: removeCompletion } = completionsEntity;
   const { data: dayNotes, add: addDayNote, update: updateDayNote, remove: removeDayNote } = notesEntity;
@@ -10081,6 +10083,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
   const [playerOpen, setPlayerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const [view, setView] = useState("week"); // "week" | "library"
   const [playerOpenId, setPlayerOpenId] = useState(null);
   const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
 
@@ -10198,6 +10201,20 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
     reorderItems(newFull);
   };
 
+  if (view === "library") {
+    return <WorkoutLibrary
+      foldersEntity={foldersEntity}
+      itemsEntity={itemsEntity}
+      notesEntity={notesEntity}
+      session={session}
+      sessions={sessions}
+      setSessions={setSessions}
+      todayStr={todayStr}
+      markDoneToday={() => { if (!doneToday) addCompletion({ id: crypto.randomUUID(), date: todayStr }); }}
+      onBack={() => setView("week")}
+    />;
+  }
+
   if (itemModal !== null) {
     return <WorkoutItemForm
       item={itemModal === "new" ? null : itemModal}
@@ -10255,6 +10272,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
               </div>
             </>}
           </div>
+          <button className="ghost" onClick={() => setView("library")}><Folder size={15}/> Biblioteca</button>
           <button className="ghost" onClick={() => setImportOpen(true)}><ClipboardPaste size={15}/> Colar treino</button>
           <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
         </div>
@@ -10330,6 +10348,333 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity }) {
   );
 }
 
+// ---------- Treino › Biblioteca: pastas (com capa) e treinos específicos dentro delas ----------
+function WorkoutFolderModal({ folder, onClose, onSave }) {
+  const [id] = useState(() => folder?.id || crypto.randomUUID());
+  const [name, setName] = useState(folder?.name || "");
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [removed, setRemoved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  const shown = preview || (removed ? null : folder?.cover_image) || null;
+  const pick = (f) => { if (!f) return; setFile(f); setPreview(URL.createObjectURL(f)); setRemoved(false); };
+  const clear = () => { setFile(null); setPreview(null); setRemoved(true); };
+  const submit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try { await onSave({ id, name: name.trim(), coverFile: file, removeCover: removed && !file }); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" style={{ width: "min(520px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{folder ? "Editar pasta" : "Nova pasta"}</h2><button type="button" onClick={onClose}><X/></button></div>
+        <label>Nome da pasta<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Fortalecimento muscular"/></label>
+        <div>
+          <small className="recipeLabel">CAPA (PRÉVIA)</small>
+          <div className="libFolderCard preview" onClick={() => inputRef.current?.click()}>
+            {shown && <img className="libFolderImg" src={shown} alt="" referrerPolicy="no-referrer"/>}
+            <div className="libFolderName">{name.trim() || "Nome da pasta"}</div>
+          </div>
+        </div>
+        <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; pick(f); }}/>
+        <div className="modalActions" style={{ justifyContent: "flex-start" }}>
+          <button type="button" className="ghost" onClick={() => inputRef.current?.click()}><ImagePlus size={14}/> {shown ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
+          {shown && <button type="button" className="ghost" onClick={clear}><X size={13}/> Remover foto</button>}
+        </div>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" disabled={!name.trim() || saving} onClick={submit}><Check size={16}/> {saving ? "Salvando..." : "Salvar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sessions, setSessions, todayStr, markDoneToday, onBack }) {
+  const { data: folders, add: addFolder, update: updateFolder, remove: removeFolder } = foldersEntity;
+  const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
+  const { data: notes, add: addNote, update: updateNote, remove: removeNote } = notesEntity;
+
+  const [folderModal, setFolderModal] = useState(null); // null | "new" | pasta sendo editada
+  const [openFolderId, setOpenFolderId] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [itemModal, setItemModal] = useState(null);     // null | "new" | item sendo editado
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [playerOpenId, setPlayerOpenId] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
+
+  const cloud = cloudConfigured && !!session?.user?.id;
+  const folder = openFolderId ? folders.find(f => f.id === openFolderId) : null;
+  const itemsOf = (fid) => items.filter(i => i.folder_id === fid).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const list = folder ? itemsOf(folder.id) : [];
+
+  // Observações da pasta (mesma tabela das observações por dia, indexada por folder_id).
+  const noteRow = (fid) => notes.find(n => n.folder_id === fid);
+  const notesOf = (fid) => noteRow(fid)?.text || "";
+  const saveNotes = async (fid, text) => {
+    const row = noteRow(fid);
+    const clean = String(text || "").trim();
+    if (!clean) { if (row) removeNote(row.id); return; }
+    if (row) updateNote(row.id, { text: clean });
+    else await addNote({ id: crypto.randomUUID(), folder_id: fid, text: clean });
+  };
+
+  const saveFolder = async ({ id, name, coverFile, removeCover }) => {
+    const existing = folders.find(f => f.id === id);
+    let cover; // undefined = não mexe
+    try {
+      if (coverFile) {
+        if (cloud) {
+          const blob = await resizeImageToBlob(coverFile, 900, 900, 0.8);
+          cover = await uploadMediaGroupCover(session.user.id, id, blob);
+        } else {
+          cover = await resizeImageToDataUrl(coverFile, 900, 900, 0.8);
+        }
+      } else if (removeCover) {
+        if (cloud && existing?.cover_image?.includes("/media_images/")) deleteMediaGroupCover(session.user.id, id).catch(() => {});
+        cover = null;
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível usar essa imagem. A pasta foi salva sem alterar a capa.");
+    }
+    if (existing) await updateFolder(id, { name, ...(cover !== undefined ? { cover_image: cover } : {}) });
+    else await addFolder({ id, name, cover_image: cover ?? null });
+    setFolderModal(null);
+  };
+
+  const confirmDeleteFolder = (f) => {
+    setOpenMenuId(null);
+    const inside = itemsOf(f.id);
+    const msg = inside.length
+      ? `Excluir a pasta "${f.name}"? Os ${inside.length} treino(s) dentro dela também serão apagados.`
+      : `Excluir a pasta "${f.name}"?`;
+    if (!confirm(msg)) return;
+    if (cloud && f.cover_image?.includes("/media_images/")) deleteMediaGroupCover(session.user.id, f.id).catch(() => {});
+    inside.forEach(it => { removeItem(it.id); idbDelete(`workout_gif:${it.id}`); });
+    const row = noteRow(f.id);
+    if (row) removeNote(row.id);
+    removeFolder(f.id);
+    if (openFolderId === f.id) setOpenFolderId(null);
+  };
+
+  const confirmDeleteItem = (it) => {
+    setOpenMenuId(null);
+    if (confirm(`Excluir "${it.name}"?`)) { removeItem(it.id); idbDelete(`workout_gif:${it.id}`); }
+  };
+
+  const moveItem = (it, dir) => {
+    const idx = list.findIndex(x => x.id === it.id);
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= list.length) return;
+    const a = list[idx], b = list[swapIdx];
+    const ia = items.findIndex(x => x.id === a.id), ib = items.findIndex(x => x.id === b.id);
+    const next = [...items];
+    [next[ia], next[ib]] = [next[ib], next[ia]];
+    reorderItems(next);
+  };
+
+  // Progresso do treino em andamento (só neste aparelho), igual ao dos dias da semana.
+  const sessionKey = `${todayStr}:lib:${folder?.id}`;
+  const progress = (sessions && sessions[sessionKey]) || {};
+  const setProgress = (updater) => setSessions(all => {
+    const next = {};
+    Object.keys(all || {}).forEach(k => { if (k.startsWith(todayStr)) next[k] = all[k]; });
+    const cur = next[sessionKey] || {};
+    next[sessionKey] = typeof updater === "function" ? updater(cur) : updater;
+    return next;
+  });
+  const startWorkout = () => {
+    const first = list.find(i => !progress[i.id]?.done) || list[0];
+    setPlayerOpenId(first ? first.id : null);
+    setPlayerOpen(true);
+  };
+  const finishWorkout = () => {
+    markDoneToday();
+    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
+    setPlayerOpen(false);
+    toast("Treino concluído! 💪");
+  };
+
+  const copyFolder = async () => {
+    if (!list.length) { toast("Nenhum treino para copiar.", "error"); return; }
+    try {
+      await navigator.clipboard.writeText(buildWorkoutShareText([{ day: null, items: list, notes: notesOf(folder.id) }], { title: folder.name }));
+      toast(`Treino "${folder.name}" copiado!`);
+    } catch (e) { toast("Não foi possível copiar o treino.", "error"); }
+  };
+
+  const importIntoFolder = async ({ groups }) => {
+    let total = 0;
+    const noteParts = [];
+    for (const g of groups) {
+      for (const ex of g.exercises) { await addItem({ id: crypto.randomUUID(), folder_id: folder.id, day_of_week: null, ...ex }); total += 1; }
+      if (g.notes.trim()) noteParts.push(g.notes.trim());
+    }
+    if (noteParts.length) {
+      const prev = notesOf(folder.id);
+      await saveNotes(folder.id, prev ? `${prev}\n\n${noteParts.join("\n\n")}` : noteParts.join("\n\n"));
+    }
+    toast(total ? `${total} ${total === 1 ? "exercício importado" : "exercícios importados"} para ${folder.name}.` : "Observações importadas.");
+  };
+
+  if (itemModal !== null && folder) {
+    return <WorkoutItemForm
+      item={itemModal === "new" ? null : itemModal}
+      folderId={folder.id}
+      onCancel={() => setItemModal(null)}
+      onSave={(payload) => {
+        const { id: payloadId, ...rest } = payload;
+        if (itemModal === "new") addItem({ id: payloadId || crypto.randomUUID(), ...rest });
+        else updateItem(itemModal.id, rest);
+        setItemModal(null);
+      }}
+    />;
+  }
+
+  if (playerOpen && folder) {
+    return <WorkoutPlayer
+      title={folder.name}
+      items={list}
+      progress={progress}
+      setProgress={setProgress}
+      openId={playerOpenId}
+      setOpenId={setPlayerOpenId}
+      onClose={() => setPlayerOpen(false)}
+      notes={notesOf(folder.id)}
+      onEditItem={(it) => setItemModal(it)}
+      onFinish={finishWorkout}
+    />;
+  }
+
+  // ----- dentro de uma pasta -----
+  if (folder) {
+    return (
+      <div className="content" onClick={() => setOpenMenuId(null)}>
+        <div className="flashHead">
+          <div className="flashHeadInfo">
+            <div className="flashHeadIcon"><Dumbbell size={22}/></div>
+            <div>
+              <small>BIBLIOTECA</small>
+              <h2>{folder.name}</h2>
+              <p>{list.length} {list.length === 1 ? "treino" : "treinos"} nesta pasta.</p>
+            </div>
+          </div>
+          <div className="flashHeadActions">
+            <button className="ghost" onClick={() => setOpenFolderId(null)}><ChevronLeft size={16}/> Voltar</button>
+            <button className="ghost" disabled={!list.length} onClick={copyFolder}><Share2 size={15}/> Copiar treino</button>
+            <button className="ghost" onClick={() => setImportOpen(true)}><ClipboardPaste size={15}/> Colar treino</button>
+            <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
+          </div>
+        </div>
+
+        {list.length > 0 && <button className="add workoutStartBtn" onClick={startWorkout}><Play size={16}/> Iniciar treino</button>}
+
+        {list.length === 0 ? (
+          <div className="flashEmpty">
+            <div className="flashEmptyIcon"><Dumbbell size={30}/></div>
+            <h3>Nenhum treino nesta pasta</h3>
+            <p>Adicione os exercícios com séries, carga, GIF e link de vídeo.</p>
+            <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>
+          </div>
+        ) : (
+          <div className="workoutItemList">
+            {list.map((it, idx) => (
+              <div className="workoutItemCard" key={it.id}>
+                <div className="workoutItemHead">
+                  <WorkoutGifThumb item={it} size={44}/>
+                  <h4>{it.name}</h4>
+                  <div className="exerciseOrderBtns">
+                    <button className="ghost" disabled={idx === 0} onClick={() => moveItem(it, -1)}><ArrowUp size={13}/></button>
+                    <button className="ghost" disabled={idx === list.length - 1} onClick={() => moveItem(it, 1)}><ArrowDown size={13}/></button>
+                  </div>
+                  <button className="flashTileMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === it.id ? null : it.id); }}><MoreVertical size={16}/></button>
+                  {openMenuId === it.id && (
+                    <div className="flashMenuPop" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => { setOpenMenuId(null); setItemModal(it); }}><Pencil size={13}/> Editar</button>
+                      <button className="danger" onClick={() => confirmDeleteItem(it)}><Trash2 size={13}/> Excluir</button>
+                    </div>
+                  )}
+                </div>
+                {workoutSummaryText(it) && <div className="workoutItemStats">{workoutSummaryText(it)}</div>}
+                {it.goals?.length > 0 && <ul className="workoutGoalsList">{it.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>}
+                {it.video_url && (
+                  <a className="ghost workoutVideoBtn" href={it.video_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}><ExternalLink size={13}/> Abrir vídeo</a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <WorkoutDayNotes key={folder.id} text={notesOf(folder.id)} onSave={(t) => saveNotes(folder.id, t)}/>
+
+        {importOpen && <WorkoutImportModal targetLabel={folder.name} onClose={() => setImportOpen(false)} onImport={importIntoFolder}/>}
+      </div>
+    );
+  }
+
+  // ----- lista de pastas (cartões grandes com capa e nome) -----
+  return (
+    <div className="content" onClick={() => setOpenMenuId(null)}>
+      <div className="flashHead">
+        <div className="flashHeadInfo">
+          <div className="flashHeadIcon"><Folder size={22}/></div>
+          <div>
+            <small>TREINO</small>
+            <h2>Biblioteca</h2>
+            <p>Crie pastas de treinos específicos (força, circuito, peso corporal...) com capa e nome.</p>
+          </div>
+        </div>
+        <div className="flashHeadActions">
+          <button className="ghost" onClick={onBack}><ChevronLeft size={16}/> Plano da semana</button>
+          <button className="add" onClick={(e) => { e.stopPropagation(); setFolderModal("new"); }}><FolderPlus size={16}/> Nova pasta</button>
+        </div>
+      </div>
+
+      {folders.length === 0 ? (
+        <div className="flashEmpty">
+          <div className="flashEmptyIcon"><Folder size={30}/></div>
+          <h3>Nenhuma pasta ainda</h3>
+          <p>Crie uma pasta, escolha uma foto para a capa e coloque os treinos dentro dela.</p>
+          <button className="add" onClick={() => setFolderModal("new")}><FolderPlus size={16}/> Criar minha primeira pasta</button>
+        </div>
+      ) : (
+        <div className="libFolderList">
+          {folders.map(f => {
+            const count = itemsOf(f.id).length;
+            return (
+              <div key={f.id} className="libFolderCard" onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+                <SaverImg src={f.cover_image} alt={f.name} className="libFolderImg" fallback={null}/>
+                <button className="libFolderMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === "f:" + f.id ? null : "f:" + f.id); }}><MoreVertical size={16}/></button>
+                {openMenuId === "f:" + f.id && (
+                  <div className="flashMenuPop" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => { setOpenMenuId(null); setFolderModal(f); }}><Pencil size={13}/> Editar nome e capa</button>
+                    <button className="danger" onClick={() => confirmDeleteFolder(f)}><Trash2 size={13}/> Excluir</button>
+                  </div>
+                )}
+                <div className="libFolderName">{f.name}<small>{count} {count === 1 ? "treino" : "treinos"}</small></div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {folderModal && (
+        <WorkoutFolderModal
+          folder={folderModal === "new" ? null : folderModal}
+          onClose={() => setFolderModal(null)}
+          onSave={saveFolder}
+        />
+      )}
+    </div>
+  );
+}
+
 function WorkoutDayNotes({ text, onSave }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
@@ -10358,7 +10703,7 @@ function WorkoutDayNotes({ text, onSave }) {
   );
 }
 
-function WorkoutImportModal({ defaultDay, onClose, onImport }) {
+function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
   const [day, setDay] = useState(defaultDay);
   const [text, setText] = useState("");
   const [groups, setGroups] = useState(null); // [{ day, exercises, notes }]
@@ -10377,7 +10722,7 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
   const submit = async () => {
     if (!groups || busy) return;
     setBusy(true);
-    try { await onImport({ groups: groups.map(g => ({ ...g, day: g.day ?? day })) }); onClose(); }
+    try { await onImport({ groups: groups.map(g => ({ ...g, day: targetLabel ? null : (g.day ?? day) })) }); onClose(); }
     finally { setBusy(false); }
   };
 
@@ -10386,13 +10731,15 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
       <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>Colar treino</h2><button type="button" onClick={onClose}><X/></button></div>
 
-        <label>Dia da semana <small>(usado quando o texto não indica o dia)</small>
-          <div className="workoutDayPicker">
-            {WEEKDAY_LABELS.map((label, d) => (
-              <button type="button" key={d} className={day === d ? "active" : ""} onClick={() => setDay(d)}>{label}</button>
-            ))}
-          </div>
-        </label>
+        {!targetLabel && (
+          <label>Dia da semana <small>(usado quando o texto não indica o dia)</small>
+            <div className="workoutDayPicker">
+              {WEEKDAY_LABELS.map((label, d) => (
+                <button type="button" key={d} className={day === d ? "active" : ""} onClick={() => setDay(d)}>{label}</button>
+              ))}
+            </div>
+          </label>
+        )}
 
         <label>Texto do treino
           <textarea rows={7} value={text} onChange={e => { setText(e.target.value); setGroups(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s\n\nOu cole aqui um treino copiado pelo botão \"Copiar treino\"."}/>
@@ -10404,7 +10751,7 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
             {total === 0 && <p className="emptyHint" style={{ padding: 0 }}>Não encontrei exercícios nesse texto. Se importar assim, tudo vai para as observações.</p>}
             {groups.map((g, gi) => (
               <div key={gi} style={{ display: "grid", gap: 8 }}>
-                <small className="recipeLabel">{WEEKDAY_FULL[g.day ?? day].toUpperCase()} · {g.exercises.length} {g.exercises.length === 1 ? "EXERCÍCIO" : "EXERCÍCIOS"}</small>
+                <small className="recipeLabel">{(targetLabel || WEEKDAY_FULL[g.day ?? day]).toUpperCase()} · {g.exercises.length} {g.exercises.length === 1 ? "EXERCÍCIO" : "EXERCÍCIOS"}</small>
                 {g.exercises.length > 0 && (
                   <ul className="recipeIngList">{g.exercises.map((ex, i) => (
                     <li key={i}><b>{ex.name}</b>{workoutSummaryText(ex) ? ` — ${workoutSummaryText(ex)}` : ""}{ex.goals.length ? ` · ${ex.goals.join(" · ")}` : ""}{ex.gif_url ? " · 🎬 GIF" : ""}</li>
@@ -10421,7 +10768,7 @@ function WorkoutImportModal({ defaultDay, onClose, onImport }) {
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
           <button type="button" className="add" disabled={!groups || busy} onClick={submit}>
-            <Check size={16}/> {busy ? "Importando..." : targetDays.size > 1 ? `Importar em ${targetDays.size} dias` : `Importar para ${WEEKDAY_FULL[[...targetDays][0] ?? day]}`}
+            <Check size={16}/> {busy ? "Importando..." : targetLabel ? `Importar para ${targetLabel}` : targetDays.size > 1 ? `Importar em ${targetDays.size} dias` : `Importar para ${WEEKDAY_FULL[[...targetDays][0] ?? day]}`}
           </button>
         </div>
       </div>
@@ -10447,7 +10794,7 @@ function WorkoutGifLightbox({ item, onClose }) {
   );
 }
 
-function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish, notes }) {
+function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish, notes }) {
   const [zoomItem, setZoomItem] = useState(null);
   const stateOf = (it) => progress[it.id] || { sets: 0, done: false };
   const totalOf = (it) => (it.metric ? Math.max(1, Number(it.sets) || 1) : 1);
@@ -10507,7 +10854,7 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
         <h2>Treino</h2>
       </div>
       <div className="workoutPlayerBar">
-        <span>{WEEKDAY_LABELS[day]}</span>
+        <span>{title ?? WEEKDAY_LABELS[day]}</span>
         <small>{doneCount}/{items.length} concluído{doneCount === 1 ? "" : "s"}</small>
       </div>
 
@@ -10563,6 +10910,9 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
                     it.goals?.length > 0 && <ul className="workoutGoalsList">{it.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
                   )}
 
+                  {it.video_url && (
+                    <a className="ghost workoutVideoBtn" href={it.video_url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14}/> Abrir vídeo</a>
+                  )}
                   <button type="button" className={"workoutConcludeBtn" + (st.done ? " done" : "")} onClick={() => toggleConclude(it)}>
                     {st.done ? <><Check size={16}/> Exercício concluído · desfazer</> : "Concluir exercício"}
                   </button>
@@ -10585,9 +10935,10 @@ function WorkoutPlayer({ day, items, progress, setProgress, openId, setOpenId, o
   );
 }
 
-function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
+function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
   const [day, setDay] = useState(item?.day_of_week ?? defaultDay ?? new Date().getDay());
   const [name, setName] = useState(item?.name || "");
+  const [video, setVideo] = useState(item?.video_url || "");
   const [goals, setGoals] = useState(item?.goals?.length ? [...item.goals] : [""]);
 
   // Séries/carga: ligado por padrão em treinos novos; treinos antigos (só com metas) continuam sem isso até a pessoa ligar.
@@ -10650,7 +11001,8 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
     const cleanGoals = goals.map(g => g.trim()).filter(Boolean);
     onSave({
       id,
-      day_of_week: day,
+      day_of_week: folderId ? null : day,
+      ...(folderId ? { folder_id: folderId, video_url: /^https?:\/\//i.test(video.trim()) ? video.trim() : null } : {}),
       name: name.trim(),
       goals: cleanGoals,
       sets: useStats ? Math.max(1, Number(sets) || 1) : null,
@@ -10672,7 +11024,7 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
           <div>
             <small>TREINO</small>
             <h2>{item ? "Editar treino" : "Novo treino"}</h2>
-            <p>Escolha o dia da semana, dê um nome e defina séries, carga e metas dessa atividade.</p>
+            <p>{folderId ? "Dê um nome e defina séries, carga, vídeo e metas desse treino." : "Escolha o dia da semana, dê um nome e defina séries, carga e metas dessa atividade."}</p>
           </div>
         </div>
         <div className="flashHeadActions">
@@ -10682,15 +11034,21 @@ function WorkoutItemForm({ item, defaultDay, onCancel, onSave }) {
       </div>
 
       <div className="exerciseFormFields">
-        <label>Dia da semana
-          <div className="workoutDayPicker">
-            {WEEKDAY_LABELS.map((label, d) => (
-              <button type="button" key={d} className={day===d?"active":""} onClick={() => setDay(d)}>{label}</button>
-            ))}
-          </div>
-        </label>
+        {!folderId && (
+          <label>Dia da semana
+            <div className="workoutDayPicker">
+              {WEEKDAY_LABELS.map((label, d) => (
+                <button type="button" key={d} className={day===d?"active":""} onClick={() => setDay(d)}>{label}</button>
+              ))}
+            </div>
+          </label>
+        )}
 
         <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Agachamento..."/></label>
+
+        {folderId && (
+          <label>Link do vídeo (YouTube)<input value={video} onChange={e => setVideo(e.target.value)} placeholder="https://www.youtube.com/watch?v=..."/></label>
+        )}
 
         <div className="workoutStatsToggle" onClick={() => setUseStats(v => !v)}>
           <span>Usar séries, repetições e carga</span>

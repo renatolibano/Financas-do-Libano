@@ -1133,3 +1133,36 @@ do $$ declare t text; begin foreach t in array array['workout_day_notes'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+
+-- Treino › Biblioteca: pastas com capa e treinos específicos dentro delas.
+-- Os treinos da pasta usam a mesma tabela workout_plan_items (com folder_id e sem dia da semana),
+-- e as observações da pasta usam workout_day_notes (com folder_id).
+create table if not exists workout_library_folders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  cover_image text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+alter table workout_library_folders enable row level security;
+
+alter table workout_plan_items alter column day_of_week drop not null;
+alter table workout_plan_items add column if not exists folder_id uuid references workout_library_folders(id) on delete cascade;
+alter table workout_plan_items add column if not exists video_url text;
+
+alter table workout_day_notes alter column day_of_week drop not null;
+alter table workout_day_notes add column if not exists folder_id uuid references workout_library_folders(id) on delete cascade;
+create unique index if not exists workout_day_notes_user_folder on workout_day_notes(user_id, folder_id);
+
+do $$ declare t text; begin foreach t in array array['workout_library_folders'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

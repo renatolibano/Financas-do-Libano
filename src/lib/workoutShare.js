@@ -41,6 +41,7 @@ function exerciseLines(it, n) {
 
   (it.goals || []).filter(Boolean).forEach((g) => out.push(`   • ${g}`));
   if (it.gif_url) out.push(`   🎬 ${it.gif_url}`);
+  if (it.video_url) out.push(`   ▶️ ${it.video_url}`);
   return out;
 }
 
@@ -50,10 +51,10 @@ function notesLines(notes) {
 }
 
 // days: [{ day: 0..6, items: [...], notes: "..." }] — um dia (copiar dia) ou vários (semana inteira).
-export function buildWorkoutShareText(days) {
+export function buildWorkoutShareText(days, opts = {}) {
   const out = [];
   if (days.length === 1) {
-    out.push(`🏋️ *TREINO · ${WEEKDAY_FULL[days[0].day]}*`, DIVIDER, "");
+    out.push(`🏋️ *TREINO · ${opts.title ?? WEEKDAY_FULL[days[0].day]}*`, DIVIDER, "");
     days[0].items.forEach((it, i) => { out.push(...exerciseLines(it, i + 1), ""); });
     const n = notesLines(days[0].notes);
     if (n.length) out.push(...n);

@@ -2099,3 +2099,27 @@ h1{font-size:23px}
 .workoutCopyMenu button{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;background:none;border:0;color:var(--text-1);font-size:13px;text-align:left;cursor:pointer}
 .workoutCopyMenu button:hover:not(:disabled){background:var(--bg-surface-3)}
 .workoutCopyMenu button:disabled{opacity:.45;cursor:default}
+
+/* Lista de filmes/séries/jogos avulsos (estilos que tinham se perdido: fotos gigantes e menu ⋮ sem posição) */
+.exerciseList{display:grid;gap:10px}
+.exerciseRow{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 52px 10px 12px;border-radius:14px;background:var(--bg-surface);border:1px solid var(--border)}
+.exerciseThumb{flex-shrink:0;width:56px;height:78px;border-radius:9px;overflow:hidden;background:var(--bg-surface-3);display:grid;place-items:center;color:var(--text-3)}
+.exerciseThumb img{width:100%;height:100%;object-fit:cover;display:block}
+.exerciseInfo{flex:1 1 150px;min-width:0;display:grid;gap:4px}
+.exerciseInfo b{font-size:14px;color:var(--text-1);overflow-wrap:anywhere}
+.exerciseInfo small{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--text-2);font-size:12px}
+.exerciseMenuBtn{position:absolute;top:10px;right:10px;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--bg-surface-2);color:var(--text-2)}
+.exerciseMenuBtn:hover{background:var(--bg-hover-2)}
+.exerciseGifPreview{display:grid;place-items:center;overflow:hidden;border-radius:12px;background:var(--bg-surface-3);border:1px dashed var(--border);color:var(--text-3)}
+.exerciseGifPreview img{width:100%;height:100%;object-fit:contain}
+
+/* Treino › Biblioteca: cartões grandes de pasta (capa + nome em destaque) */
+.libFolderList{display:grid;gap:6px;max-width:560px}
+.libFolderCard{position:relative;height:132px;border-radius:8px;overflow:hidden;cursor:pointer;background:linear-gradient(135deg,#222b3a,#0d1117);display:flex;align-items:flex-end;isolation:isolate}
+.libFolderCard.preview{max-width:100%}
+.libFolderImg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-2}
+.libFolderCard::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.7),rgba(0,0,0,.12) 65%,rgba(0,0,0,.3));z-index:-1}
+.libFolderName{padding:16px 18px;font-weight:800;font-size:18px;line-height:1.15;letter-spacing:.2px;text-transform:uppercase;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.65);max-width:82%;overflow-wrap:anywhere;display:grid;gap:4px}
+.libFolderName small{font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;opacity:.85}
+.libFolderMenuBtn{position:absolute;top:10px;right:10px;z-index:3;width:32px;height:32px;border-radius:999px;display:grid;place-items:center;background:rgba(0,0,0,.55);color:#fff}
+.workoutVideoBtn{display:inline-flex;align-items:center;gap:6px;justify-content:center;font-size:12.5px;text-decoration:none;margin-top:8px;align-self:flex-start}
