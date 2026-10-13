@@ -9988,7 +9988,7 @@ const isDayHeader = (line) => /^(domingo|segunda|terca|quarta|quinta|sexta|sabad
 // Formato em blocos: "4x agachamento frontal" (nome pode quebrar em várias linhas) + "12 rep | 25 kg" / "1800 seg | - kg".
 // Converte cada bloco numa linha única ("Nome: 4x12 25kg" / "Nome: 1 séries de 1800 s") que o parser padrão já entende.
 const WORKOUT_BLOCK_HEAD_RE = /^(\d+)\s*[x×]\s*(\p{L}.*)$/u;
-const WORKOUT_BLOCK_STAT_RE = /^(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(reps?|repeti\S*|segundos?|seg|s|minutos?|min)\s*\|\s*(?:(\d+(?:[.,]\d+)?)\s*kg|-\s*kg|-)?\s*$/iu;
+const WORKOUT_BLOCK_STAT_RE = /^(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?|null|nulo|nan|undefined|-)\s*(reps?|repeti\S*|segundos?|seg|s|minutos?|min)\s*\|\s*(?:(\d+(?:[.,]\d+)?)\s*kg|(?:null|nulo|nan|undefined|-)\s*kg|-)?\s*$/iu;
 function joinWorkoutBlocks(raw) {
   const lines = String(raw || "").split(/\r?\n/);
   const out = [];
@@ -10005,8 +10005,9 @@ function joinWorkoutBlocks(raw) {
       }
       if (stat) {
         const name = nameParts.join(" ").replace(/\s+/g, " ").replace(/^./u, c => c.toUpperCase());
-        const val = stat[1].replace(/\s+/g, ""), unit = stat[2].toLowerCase(), kg = stat[3];
-        if (/^rep/.test(unit)) out.push(`${name}: ${head[1]}x${val}${kg ? ` ${kg}kg` : ""}`);
+        const val = /^[\d]/.test(stat[1]) ? stat[1].replace(/\s+/g, "") : null, unit = stat[2].toLowerCase(), kg = stat[3];
+        if (val == null) out.push(`${name}: ${head[1]} séries${kg ? ` ${kg}kg` : ""}`);
+        else if (/^rep/.test(unit)) out.push(`${name}: ${head[1]}x${val}${kg ? ` ${kg}kg` : ""}`);
         else out.push(`${name}: ${head[1]} séries de ${val} ${/^m/.test(unit) ? "min" : "s"}`);
         i = j;
         continue;
