@@ -10823,7 +10823,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
               style: dragFolderId === f.id ? { opacity: 0.45 } : undefined,
             } : {};
             return (
-              <div key={f.id} className="libFolderCard" {...dragProps} onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+              <div key={f.id} className={"libFolderCard" + (openMenuId === "f:" + f.id ? " menuOpen" : "")} {...dragProps} onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
                 <SaverImg src={f.cover_image} alt={f.name} className="libFolderImg" fallback={null}/>
                 <button className="libFolderMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === "f:" + f.id ? null : "f:" + f.id); }}><MoreVertical size={16}/></button>
                 {openMenuId === "f:" + f.id && (
