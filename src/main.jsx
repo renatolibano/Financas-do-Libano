@@ -10376,7 +10376,8 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
         <label>Nome da pasta<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Fortalecimento muscular"/></label>
         <div>
           <small className="recipeLabel">CAPA (PRÉVIA)</small>
-          <div className="libFolderCard preview" onClick={() => inputRef.current?.click()}>
+          <div className={"libFolderCard preview" + (shown ? "" : " noCover")} onClick={() => inputRef.current?.click()}>
+            {shown && <img className="libFolderBg" src={shown} alt="" referrerPolicy="no-referrer"/>}
             {shown && <img className="libFolderImg" src={shown} alt="" referrerPolicy="no-referrer"/>}
             <div className="libFolderName">{name.trim() || "Nome da pasta"}</div>
           </div>
@@ -10648,7 +10649,8 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
           {folders.map(f => {
             const count = itemsOf(f.id).length;
             return (
-              <div key={f.id} className="libFolderCard" onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+              <div key={f.id} className={"libFolderCard" + (f.cover_image ? "" : " noCover")} onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+                <SaverImg src={f.cover_image} alt="" className="libFolderBg" fallback={null}/>
                 <SaverImg src={f.cover_image} alt={f.name} className="libFolderImg" fallback={null}/>
                 <button className="libFolderMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === "f:" + f.id ? null : "f:" + f.id); }}><MoreVertical size={16}/></button>
                 {openMenuId === "f:" + f.id && (
