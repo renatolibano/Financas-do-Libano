@@ -10124,6 +10124,34 @@ function normalizeGifLink(raw) {
   return m ? `https://media.giphy.com/media/${m[1]}/giphy.gif` : url;
 }
 
+// Busca automática pelo nome no gifdotreino.com: o endereço é .../Exercicios/<Categoria>/<Nome>.gif.
+// Testa o carregamento da imagem direto no navegador (não passa pelo Supabase) e devolve o 1º link que existir.
+const GIFDOTREINO_BASE = "https://www.gifdotreino.com/Exercicios";
+const GIFDOTREINO_CATEGORIAS = ["Calistenia"]; // pastas do site onde procurar; acrescente aqui as demais
+function probeImage(url, ms = 8000) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const done = (ok) => { clearTimeout(t); img.onload = img.onerror = null; resolve(ok); };
+    const t = setTimeout(() => done(false), ms);
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => done(img.naturalWidth > 0);
+    img.onerror = () => done(false);
+    img.src = url;
+  });
+}
+async function findGifDoTreino(rawName) {
+  const base = String(rawName || "").replace(/\s+/g, " ").trim();
+  if (!base) return null;
+  const first = base.charAt(0).toUpperCase() + base.slice(1);
+  const words = base.toLowerCase().replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+  const urls = [];
+  for (const n of new Set([base, first, words]))
+    for (const c of GIFDOTREINO_CATEGORIAS) urls.push(`${GIFDOTREINO_BASE}/${encodeURIComponent(c)}/${encodeURIComponent(n)}.gif`);
+  const found = await Promise.all(urls.map(u => probeImage(u)));
+  const i = found.findIndex(Boolean);
+  return i >= 0 ? urls[i] : null;
+}
+
 // GIF escolhido do aparelho fica só no IndexedDB deste aparelho (nenhum byte vai pro Supabase → egress zero).
 // Já o GIF por link é carregado direto do site de origem (também não passa pelo Supabase) e respeita o modo "Economizar dados".
 function useLocalWorkoutGif(id) {
@@ -11154,7 +11182,14 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
   const [gifRemoved, setGifRemoved] = useState(false);
   const [gifUrl, setGifUrl] = useState(item?.gif_url || "");
   const [gifBroken, setGifBroken] = useState(false);
+  const [gifSearch, setGifSearch] = useState(null); // null | "loading" | "notfound"
   const [saving, setSaving] = useState(false);
+  const searchGifByName = async () => {
+    setGifSearch("loading");
+    const url = await findGifDoTreino(name);
+    if (!url) { setGifSearch("notfound"); return; }
+    setGifFile(null); setGifFileUrl(null); setGifRemoved(false); setGifUrl(url); setGifSearch(null);
+  };
 
   useEffect(() => () => { if (gifFileUrl) URL.revokeObjectURL(gifFileUrl); }, [gifFileUrl]);
 
@@ -11289,6 +11324,8 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
           <button type="button" className="ghost" onClick={() => gifRef.current?.click()}>{gifPreview ? "Trocar GIF" : "Escolher GIF do aparelho"}</button>
           {gifPreview && <button type="button" className="ghost" onClick={removeGif}><X size={13}/> Remover GIF</button>}
           <input value={gifUrl} onChange={e => { setGifUrl(e.target.value); setGifRemoved(false); }} placeholder="Ou cole o link de um GIF (https://...)"/>
+          <button type="button" className="ghost" disabled={!name.trim() || gifSearch === "loading"} onClick={searchGifByName}><Search size={13}/> {gifSearch === "loading" ? "Buscando..." : "Buscar GIF pelo nome"}</button>
+          {gifSearch === "notfound" && <small style={{ color: "#ff9d9d" }}>GIF não encontrado.</small>}
           {gifBroken && <small style={{ color: "#ff9d9d" }}>Não consegui carregar esse link. Use o endereço direto da imagem (clique com o botão direito no GIF → "Copiar endereço da imagem"), não o link da página.</small>}
           <small>O GIF escolhido do aparelho fica salvo só neste aparelho e não gasta egress do Supabase. O link é carregado direto do site de origem.</small>
         </label>
