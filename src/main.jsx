@@ -2272,6 +2272,39 @@ function resizeImageToBlob(file, maxWidth, maxHeight, quality = 0.85) {
   });
 }
 
+// Recorta a foto para ocupar exatamente o espaço da capa (tw x th), como o "cover" do CSS, mas já gravando
+// a imagem no tamanho final. `pos` (0-100) escolhe qual parte fica visível no eixo que sobra.
+function cropImageToCover(file, tw, th, pos = 50, asBlob = true, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Arquivo não é uma imagem válida"));
+      img.onload = () => {
+        const iw = img.naturalWidth, ih = img.naturalHeight;
+        const scale = Math.max(tw / iw, th / ih);
+        const dw = iw * scale, dh = ih * scale;
+        const p = Math.min(100, Math.max(0, Number(pos) || 0)) / 100;
+        const dx = dw > tw ? (tw - dw) * p : (tw - dw) / 2;
+        const dy = dh > th ? (th - dh) * p : (th - dh) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = tw;
+        canvas.height = th;
+        canvas.getContext("2d").drawImage(img, dx, dy, dw, dh);
+        if (!asBlob) { resolve(canvas.toDataURL("image/jpeg", quality)); return; }
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error("Falha ao gerar imagem")); return; }
+          resolve(blob);
+        }, "image/jpeg", quality);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+const FOLDER_COVER_W = 1120, FOLDER_COVER_H = 264; // mesma proporção do cartão da pasta (560 x 132)
+
 // Lê um arquivo (ex.: GIF) como data URL sem reprocessar em canvas — usar canvas
 // "achataria" um GIF animado numa única imagem estática, então aqui é leitura crua.
 function fileToRawDataUrl(file) {
@@ -10356,16 +10389,19 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
   const [preview, setPreview] = useState(null);
   const [removed, setRemoved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pos, setPos] = useState(50);        // qual parte da foto fica visível (0-100)
+  const [ratio, setRatio] = useState(null);  // proporção da foto nova (largura / altura)
   const inputRef = useRef(null);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   const shown = preview || (removed ? null : folder?.cover_image) || null;
-  const pick = (f) => { if (!f) return; setFile(f); setPreview(URL.createObjectURL(f)); setRemoved(false); };
+  const pick = (f) => { if (!f) return; setFile(f); setPreview(URL.createObjectURL(f)); setRemoved(false); setPos(50); setRatio(null); };
   const clear = () => { setFile(null); setPreview(null); setRemoved(true); };
+  const wide = ratio != null && ratio > FOLDER_COVER_W / FOLDER_COVER_H; // foto mais larga que a capa: ajusta na horizontal
   const submit = async () => {
     if (!name.trim() || saving) return;
     setSaving(true);
-    try { await onSave({ id, name: name.trim(), coverFile: file, removeCover: removed && !file }); }
+    try { await onSave({ id, name: name.trim(), coverFile: file, coverPos: pos, removeCover: removed && !file }); }
     finally { setSaving(false); }
   };
 
@@ -10376,13 +10412,20 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
         <label>Nome da pasta<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Fortalecimento muscular"/></label>
         <div>
           <small className="recipeLabel">CAPA (PRÉVIA)</small>
-          <div className={"libFolderCard preview" + (shown ? "" : " noCover")} onClick={() => inputRef.current?.click()}>
-            {shown && <img className="libFolderBg" src={shown} alt="" referrerPolicy="no-referrer"/>}
-            {shown && <img className="libFolderImg" src={shown} alt="" referrerPolicy="no-referrer"/>}
+          <div className="libFolderCard preview" onClick={() => inputRef.current?.click()}>
+            {shown && <img className="libFolderImg" src={shown} alt="" referrerPolicy="no-referrer"
+              style={preview ? { objectPosition: wide ? `${pos}% 50%` : `50% ${pos}%` } : undefined}
+              onLoad={preview ? (e) => setRatio(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight) : undefined}/>}
             <div className="libFolderName">{name.trim() || "Nome da pasta"}</div>
           </div>
         </div>
         <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; pick(f); }}/>
+        {file && (
+          <label>{wide ? "Posição da foto (esquerda ↔ direita)" : "Posição da foto (cima ↕ baixo)"}
+            <input type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}/>
+            <small>A foto é ajustada automaticamente ao tamanho da capa. Mova para escolher qual parte aparece.</small>
+          </label>
+        )}
         <div className="modalActions" style={{ justifyContent: "flex-start" }}>
           <button type="button" className="ghost" onClick={() => inputRef.current?.click()}><ImagePlus size={14}/> {shown ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
           {shown && <button type="button" className="ghost" onClick={clear}><X size={13}/> Remover foto</button>}
@@ -10425,16 +10468,16 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     else await addNote({ id: crypto.randomUUID(), folder_id: fid, text: clean });
   };
 
-  const saveFolder = async ({ id, name, coverFile, removeCover }) => {
+  const saveFolder = async ({ id, name, coverFile, coverPos, removeCover }) => {
     const existing = folders.find(f => f.id === id);
     let cover; // undefined = não mexe
     try {
       if (coverFile) {
         if (cloud) {
-          const blob = await resizeImageToBlob(coverFile, 900, 900, 0.8);
+          const blob = await cropImageToCover(coverFile, FOLDER_COVER_W, FOLDER_COVER_H, coverPos, true, 0.85);
           cover = await uploadMediaGroupCover(session.user.id, id, blob);
         } else {
-          cover = await resizeImageToDataUrl(coverFile, 900, 900, 0.8);
+          cover = await cropImageToCover(coverFile, FOLDER_COVER_W, FOLDER_COVER_H, coverPos, false, 0.85);
         }
       } else if (removeCover) {
         if (cloud && existing?.cover_image?.includes("/media_images/")) deleteMediaGroupCover(session.user.id, id).catch(() => {});
@@ -10649,8 +10692,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
           {folders.map(f => {
             const count = itemsOf(f.id).length;
             return (
-              <div key={f.id} className={"libFolderCard" + (f.cover_image ? "" : " noCover")} onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
-                <SaverImg src={f.cover_image} alt="" className="libFolderBg" fallback={null}/>
+              <div key={f.id} className="libFolderCard" onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
                 <SaverImg src={f.cover_image} alt={f.name} className="libFolderImg" fallback={null}/>
                 <button className="libFolderMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === "f:" + f.id ? null : "f:" + f.id); }}><MoreVertical size={16}/></button>
                 {openMenuId === "f:" + f.id && (
