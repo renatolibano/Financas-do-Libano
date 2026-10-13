@@ -10912,11 +10912,34 @@ function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
   const [text, setText] = useState("");
   const [groups, setGroups] = useState(null); // [{ day, exercises, notes }]
   const [busy, setBusy] = useState(false);
+  const [gifBusy, setGifBusy] = useState(false);
+  const runId = useRef(0);
 
-  const organize = () => {
+  // Organiza o texto e, nos exercícios sem link de GIF, busca o GIF pelo nome no gifdotreino.com (os não encontrados ficam sem).
+  const organize = async () => {
     const r = parseWorkoutText(text);
     if (!r.groups.length) { toast("Cole o texto do treino primeiro.", "error"); return; }
+    const id = ++runId.current;
     setGroups(r.groups);
+    const todo = [];
+    r.groups.forEach((g, gi) => g.exercises.forEach((ex, ei) => { if (!ex.gif_url) todo.push([gi, ei, ex.name]); }));
+    if (!todo.length) { setGifBusy(false); return; }
+    setGifBusy(true);
+    const cache = new Map();
+    let k = 0;
+    const worker = async () => {
+      while (k < todo.length) {
+        const [gi, ei, nm] = todo[k++];
+        const key = nm.toLowerCase();
+        if (!cache.has(key)) cache.set(key, findGifDoTreino(nm).catch(() => null));
+        const url = await cache.get(key);
+        if (url && runId.current === id) {
+          setGroups(gs => gs && gs.map((g, i) => i !== gi ? g : { ...g, exercises: g.exercises.map((ex, j) => (j === ei && ex.name === nm && !ex.gif_url) ? { ...ex, gif_url: url } : ex) }));
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (runId.current === id) setGifBusy(false);
   };
 
   const setGroupNotes = (gi, v) => setGroups(gs => gs.map((g, i) => i === gi ? { ...g, notes: v } : g));
@@ -10946,9 +10969,10 @@ function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
         )}
 
         <label>Texto do treino
-          <textarea rows={7} value={text} onChange={e => { setText(e.target.value); setGroups(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s\n\nOu cole aqui um treino copiado pelo botão \"Copiar treino\"."}/>
+          <textarea rows={7} value={text} onChange={e => { runId.current++; setGifBusy(false); setText(e.target.value); setGroups(null); }} placeholder={"Flexões: 4 séries de 10–12 repetições | Descanso: 90–120 s\nAbdominais: 3 séries de 15 repetições | Descanso: 60 s\n\nOu cole aqui um treino copiado pelo botão \"Copiar treino\"."}/>
         </label>
         <button type="button" className="ghost" disabled={!text.trim()} onClick={organize}><Sparkles size={13}/> Organizar</button>
+        {gifBusy && <small>Buscando GIFs dos exercícios...</small>}
 
         {groups && (
           <>
@@ -10971,7 +10995,7 @@ function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
 
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
-          <button type="button" className="add" disabled={!groups || busy} onClick={submit}>
+          <button type="button" className="add" disabled={!groups || busy || gifBusy} onClick={submit}>
             <Check size={16}/> {busy ? "Importando..." : targetLabel ? `Importar para ${targetLabel}` : targetDays.size > 1 ? `Importar em ${targetDays.size} dias` : `Importar para ${WEEKDAY_FULL[[...targetDays][0] ?? day]}`}
           </button>
         </div>
