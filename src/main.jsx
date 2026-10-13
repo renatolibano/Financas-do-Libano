@@ -9985,6 +9985,38 @@ function weekdayIn(text) {
 // Linha que é só o nome do dia (ex.: "Segunda-feira", "📅 *Quarta-feira*", "Sexta:").
 const isDayHeader = (line) => /^(domingo|segunda|terca|quarta|quinta|sexta|sabado)(-feira)?$/.test(stripAccents(line).toLowerCase().replace(/[^a-z\s-]/g, "").trim());
 
+// Formato em blocos: "4x agachamento frontal" (nome pode quebrar em várias linhas) + "12 rep | 25 kg" / "1800 seg | - kg".
+// Converte cada bloco numa linha única ("Nome: 4x12 25kg" / "Nome: 1 séries de 1800 s") que o parser padrão já entende.
+const WORKOUT_BLOCK_HEAD_RE = /^(\d+)\s*[x×]\s*(\p{L}.*)$/u;
+const WORKOUT_BLOCK_STAT_RE = /^(\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?)\s*(reps?|repeti\S*|segundos?|seg|s|minutos?|min)\s*\|\s*(?:(\d+(?:[.,]\d+)?)\s*kg|-\s*kg|-)?\s*$/iu;
+function joinWorkoutBlocks(raw) {
+  const lines = String(raw || "").split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i].replace(/[\uFE0E\uFE0F\u200D]/g, "").trim().match(WORKOUT_BLOCK_HEAD_RE);
+    if (head) {
+      const nameParts = [head[2].trim()];
+      let j = i + 1, stat = null;
+      for (; j < lines.length && j <= i + 4; j++) {
+        const l = lines[j].replace(/[–—]/g, "-").trim();
+        if (!l) break;
+        if ((stat = l.match(WORKOUT_BLOCK_STAT_RE))) break;
+        nameParts.push(l);
+      }
+      if (stat) {
+        const name = nameParts.join(" ").replace(/\s+/g, " ").replace(/^./u, c => c.toUpperCase());
+        const val = stat[1].replace(/\s+/g, ""), unit = stat[2].toLowerCase(), kg = stat[3];
+        if (/^rep/.test(unit)) out.push(`${name}: ${head[1]}x${val}${kg ? ` ${kg}kg` : ""}`);
+        else out.push(`${name}: ${head[1]} séries de ${val} ${/^m/.test(unit) ? "min" : "s"}`);
+        i = j;
+        continue;
+      }
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n");
+}
+
 // Devolve { groups: [{ day: 0..6 | null, exercises, notes }] } — `day` null = usar o dia escolhido na janela.
 function parseWorkoutText(raw) {
   const groups = [];
@@ -9998,7 +10030,7 @@ function parseWorkoutText(raw) {
   const group = () => cur || startGroup(null);
   const newEx = (name) => ({ name, sets: null, metric: null, reps: null, reps_max: null, amount: null, rest_seconds: null, rest_max: null, goals: [] });
 
-  String(raw || "").split(/\r?\n/).forEach(rawLine => {
+  joinWorkoutBlocks(raw).split(/\r?\n/).forEach(rawLine => {
     const line = rawLine.replace(/[\uFE0E\uFE0F\u200D]/g, "").trim();
     if (!line) return;
     let m;
