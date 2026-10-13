@@ -10473,11 +10473,23 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
 }
 
 function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sessions, setSessions, todayStr, markDoneToday, onBack }) {
-  const { data: folders, add: addFolder, update: updateFolder, remove: removeFolder } = foldersEntity;
+  const { data: folders, add: addFolder, update: updateFolder, remove: removeFolder, reorder: reorderFolders } = foldersEntity;
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: notes, add: addNote, update: updateNote, remove: removeNote } = notesEntity;
 
   const [folderModal, setFolderModal] = useState(null); // null | "new" | pasta sendo editada
+  // Coluna da direita (só PC): preferência guardada neste aparelho, sem mexer no banco.
+  const [sides, setSides] = useState(() => loadLocal("workout_folder_side", {}) || {});
+  const [dragFolderId, setDragFolderId] = useState(null);
+  const DESK_Q = "(min-width: 1000px) and (hover: hover) and (pointer: fine)";
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia(DESK_Q).matches);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(DESK_Q);
+    const h = () => setIsDesktop(mq.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, []);
   const [openFolderId, setOpenFolderId] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [itemModal, setItemModal] = useState(null);     // null | "new" | item sendo editado
@@ -10523,6 +10535,44 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     if (existing) await updateFolder(id, { name, ...(cover !== undefined ? { cover_image: cover } : {}) });
     else await addFolder({ id, name, cover_image: cover ?? null });
     setFolderModal(null);
+  };
+
+  const sideOf = (id) => (sides[id] === "right" ? "right" : "left");
+  const setSide = (id, side) => setSides(s0 => {
+    const n = { ...s0 };
+    if (side === "right") n[id] = "right"; else delete n[id];
+    saveLocal("workout_folder_side", n);
+    return n;
+  });
+  const moveFolder = (f, dir) => {
+    setOpenMenuId(null);
+    const pool = isDesktop ? folders.filter(x => sideOf(x.id) === sideOf(f.id)) : folders;
+    const idx = pool.findIndex(x => x.id === f.id);
+    const nb = pool[idx + dir];
+    if (!nb) return;
+    const next = [...folders];
+    const ia = next.findIndex(x => x.id === f.id), ib = next.findIndex(x => x.id === nb.id);
+    [next[ia], next[ib]] = [next[ib], next[ia]];
+    reorderFolders(next);
+  };
+  const moveFolderSide = (f, side) => { setOpenMenuId(null); setSide(f.id, side); };
+  const dropOnFolder = (target) => {
+    const dragged = folders.find(x => x.id === dragFolderId);
+    setDragFolderId(null);
+    if (!dragged || dragged.id === target.id) return;
+    const sameSide = sideOf(dragged.id) === sideOf(target.id);
+    const dIdx = folders.findIndex(x => x.id === dragged.id), tIdx = folders.findIndex(x => x.id === target.id);
+    if (!sameSide) setSide(dragged.id, sideOf(target.id));
+    const rest = folders.filter(x => x.id !== dragged.id);
+    const at = rest.findIndex(x => x.id === target.id) + (sameSide && dIdx < tIdx ? 1 : 0);
+    reorderFolders([...rest.slice(0, at), dragged, ...rest.slice(at)]);
+  };
+  const dropOnColumn = (side) => {
+    const dragged = folders.find(x => x.id === dragFolderId);
+    setDragFolderId(null);
+    if (!dragged) return;
+    setSide(dragged.id, side);
+    reorderFolders([...folders.filter(x => x.id !== dragged.id), dragged]);
   };
 
   const confirmDeleteFolder = (f) => {
@@ -10721,15 +10771,30 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
           <button className="add" onClick={() => setFolderModal("new")}><FolderPlus size={16}/> Criar minha primeira pasta</button>
         </div>
       ) : (
-        <div className="libFolderList">
-          {folders.map(f => {
+        (() => {
+          const renderCard = (f) => {
             const count = itemsOf(f.id).length;
+            const pool = isDesktop ? folders.filter(x => sideOf(x.id) === sideOf(f.id)) : folders;
+            const pi = pool.findIndex(x => x.id === f.id);
+            const dragProps = isDesktop ? {
+              draggable: true,
+              onDragStart: (e) => { e.stopPropagation(); setDragFolderId(f.id); e.dataTransfer.effectAllowed = "move"; },
+              onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; },
+              onDrop: (e) => { e.preventDefault(); e.stopPropagation(); dropOnFolder(f); },
+              onDragEnd: () => setDragFolderId(null),
+              style: dragFolderId === f.id ? { opacity: 0.45 } : undefined,
+            } : {};
             return (
-              <div key={f.id} className="libFolderCard" onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
+              <div key={f.id} className="libFolderCard" {...dragProps} onClick={(e) => { e.stopPropagation(); setOpenFolderId(f.id); }}>
                 <SaverImg src={f.cover_image} alt={f.name} className="libFolderImg" fallback={null}/>
                 <button className="libFolderMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === "f:" + f.id ? null : "f:" + f.id); }}><MoreVertical size={16}/></button>
                 {openMenuId === "f:" + f.id && (
                   <div className="flashMenuPop" onClick={e => e.stopPropagation()}>
+                    <button disabled={pi <= 0} onClick={() => moveFolder(f, -1)}><ArrowUp size={13}/> Subir</button>
+                    <button disabled={pi < 0 || pi >= pool.length - 1} onClick={() => moveFolder(f, 1)}><ArrowDown size={13}/> Descer</button>
+                    {isDesktop && (sideOf(f.id) === "left"
+                      ? <button onClick={() => moveFolderSide(f, "right")}><ArrowRight size={13}/> Mover para a direita</button>
+                      : <button onClick={() => moveFolderSide(f, "left")}><ArrowLeft size={13}/> Mover para a esquerda</button>)}
                     <button onClick={() => { setOpenMenuId(null); setFolderModal(f); }}><Pencil size={13}/> Editar nome e capa</button>
                     <button className="danger" onClick={() => confirmDeleteFolder(f)}><Trash2 size={13}/> Excluir</button>
                   </div>
@@ -10737,8 +10802,22 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
                 <div className="libFolderName">{f.name}<small>{count} {count === 1 ? "treino" : "treinos"}</small></div>
               </div>
             );
-          })}
-        </div>
+          };
+          if (!isDesktop) return <div className="libFolderList">{folders.map(renderCard)}</div>;
+          return (
+            <div className="libFolderCols">
+              {["left", "right"].map(side => {
+                const col = folders.filter(f => sideOf(f.id) === side);
+                return (
+                  <div key={side} className="libFolderList libFolderCol" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); dropOnColumn(side); }}>
+                    {col.map(renderCard)}
+                    {side === "right" && col.length === 0 && <div className="libColEmpty">Arraste uma pasta para cá ou use ⋮ → Mover para a direita</div>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()
       )}
 
       {folderModal && (

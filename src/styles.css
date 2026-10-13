@@ -2117,9 +2117,13 @@ h1{font-size:23px}
 .libFolderList{display:grid;gap:6px;max-width:560px}
 .libFolderCard{position:relative;aspect-ratio:560/132;min-height:112px;border-radius:8px;overflow:hidden;cursor:pointer;background:linear-gradient(135deg,#222b3a,#0d1117);display:flex;align-items:flex-end;isolation:isolate}
 .libFolderCard.preview{max-width:100%}
+.libFolderCols{display:grid;grid-template-columns:repeat(2,minmax(0,560px));gap:6px 16px;align-items:start}
+.libFolderCols .libFolderList{max-width:none;align-content:start;min-height:120px}
+.libColEmpty{border:2px dashed rgba(255,255,255,.18);border-radius:8px;padding:28px 16px;text-align:center;font-size:13px;opacity:.7}
 .libFolderImg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-2}
 .libFolderCard::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.7),rgba(0,0,0,.12) 65%,rgba(0,0,0,.3));z-index:-1}
 .libFolderName{padding:16px 18px;font-weight:800;font-size:18px;line-height:1.15;letter-spacing:.2px;text-transform:uppercase;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.65);max-width:82%;overflow-wrap:anywhere;display:grid;gap:4px}
 .libFolderName small{font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;opacity:.85}
 .libFolderMenuBtn{position:absolute;top:10px;right:10px;z-index:3;width:32px;height:32px;border-radius:999px;display:grid;place-items:center;background:rgba(0,0,0,.55);color:#fff}
 .workoutVideoBtn{display:inline-flex;align-items:center;gap:6px;justify-content:center;font-size:12.5px;text-decoration:none;margin-top:8px;align-self:flex-start}
+.flashMenuPop button:disabled{opacity:.4;cursor:default;background:none}
