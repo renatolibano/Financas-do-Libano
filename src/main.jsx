@@ -10018,6 +10018,38 @@ function joinWorkoutBlocks(raw) {
   return out.join("\n");
 }
 
+// Linhas só com o nome do exercício (ex.: "Agachamento smith", "Leg press + afundo"), sem séries/repetições.
+// Só viram exercício quando aparecem em sequência (2 ou mais linhas seguidas) ou quando são o texto inteiro;
+// uma linha curta isolada no meio de um treino continua indo para as observações.
+const WORKOUT_NAME_MARK = "\u0001";
+function isNameOnlyLine(l) {
+  const t = String(l || "").replace(EMOJI_RE, "").replace(/^\s*-\s+/, "").trim();
+  if (!t || t.length > 40 || !/^\p{L}/u.test(t)) return false;
+  if (/[\d:.!?;|*•·▪▫◦_=~━─═]/u.test(t) || t.split(/\s+/).length > 5) return false;
+  const k = stripAccents(t).toLowerCase();
+  return !(isDayHeader(t) || /^observa/.test(k) || /^treino\b/.test(k));
+}
+function markNameOnlyLines(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const idx = []; // linhas não vazias candidatas, em sequência; -1 quebra a sequência
+  let notes = false, nonBlank = 0;
+  const seq = [];
+  lines.forEach((raw, i) => {
+    const line = raw.replace(/[\uFE0E\uFE0F\u200D]/g, "").trim();
+    if (!line) return;
+    nonBlank += 1;
+    if (/^[━─═\-_=~*·\s]{3,}$/.test(line) || /^\u{1F3CB}/u.test(line) || isDayHeader(line)) { notes = false; seq.push(-1); return; }
+    if (/^\u{1F4DD}?\s*\*{0,2}\s*observa[cç][õo]es\s*\*{0,2}\s*:?$/iu.test(line)) { notes = true; seq.push(-1); return; }
+    seq.push(!notes && isNameOnlyLine(line) ? i : -1);
+  });
+  let run = [];
+  const flush = () => { if (run.length >= 2 || (run.length === 1 && nonBlank === 1)) idx.push(...run); run = []; };
+  seq.forEach(v => { if (v >= 0) run.push(v); else flush(); });
+  flush();
+  const set = new Set(idx);
+  return lines.map((l, i) => (set.has(i) ? WORKOUT_NAME_MARK + l.trim() : l)).join("\n");
+}
+
 // Devolve { groups: [{ day: 0..6 | null, exercises, notes }] } — `day` null = usar o dia escolhido na janela.
 function parseWorkoutText(raw) {
   const groups = [];
@@ -10031,11 +10063,17 @@ function parseWorkoutText(raw) {
   const group = () => cur || startGroup(null);
   const newEx = (name) => ({ name, sets: null, metric: null, reps: null, reps_max: null, amount: null, rest_seconds: null, rest_max: null, goals: [] });
 
-  joinWorkoutBlocks(raw).split(/\r?\n/).forEach(rawLine => {
+  markNameOnlyLines(joinWorkoutBlocks(raw)).split(/\r?\n/).forEach(rawLine => {
     const line = rawLine.replace(/[\uFE0E\uFE0F\u200D]/g, "").trim();
     if (!line) return;
     let m;
 
+    if (line.startsWith(WORKOUT_NAME_MARK)) {                                                              // só o nome do exercício
+      openEx = null; notesMode = false;
+      const nm = line.slice(1).replace(EMOJI_RE, "").replace(/^\s*-\s+/, "").replace(/\s+/g, " ").trim();
+      group().exercises.push(newEx(nm.charAt(0).toUpperCase() + nm.slice(1)));
+      return;
+    }
     if (/^[━─═\-_=~*·\s]{3,}$/.test(line)) { openEx = null; notesMode = false; return; }               // divisória
     if (/^\u{1F3CB}/u.test(line)) { openEx = null; notesMode = false; startGroup(weekdayIn(line)); return; } // 🏋 título
     if (isDayHeader(line)) { openEx = null; notesMode = false; startGroup(weekdayIn(line)); return; }       // 📅 dia
