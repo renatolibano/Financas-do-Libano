@@ -19,8 +19,29 @@ function timeTxt(min, max) {
   return single(Number(min));
 }
 
+function partEffort(p) {
+  if (p.metric === "tempo") return p.amount != null ? timeTxt(Number(p.amount)) : "";
+  const reps = p.reps != null ? `${rangeTxt(p.reps, p.reps_max)} rep.` : (p.metric === "quantidade" && p.amount != null ? `${fmtNum(p.amount)} rep.` : "");
+  return [reps, p.metric === "carga" && p.amount != null ? `${fmtNum(p.amount)} kg` : ""].filter(Boolean).join(" · ");
+}
+
 function exerciseLines(it, n) {
   const mark = n <= KEYCAPS.length ? KEYCAPS[n - 1] : `${n}.`;
+  if (it.combo?.length) {
+    const out = [`${mark} *${it.name}* (conjugado)`];
+    if (it.metric) {
+      const sets = Math.max(1, Number(it.sets) || 1);
+      out.push(`   💪 ${sets} ${sets === 1 ? "série" : "séries"}`);
+      if (Number(it.rest_seconds) > 0) out.push(`   ⏱️ Descanso: ${timeTxt(Number(it.rest_seconds), it.rest_max)}`);
+    }
+    it.combo.forEach((p) => {
+      const e = partEffort(p);
+      out.push(`   ➕ ${p.name}${e ? `: ${e}` : ""}`);
+      if (p.gif_url) out.push(`      🎬 ${p.gif_url}`);
+    });
+    (it.goals || []).filter(Boolean).forEach((g) => out.push(`   • ${g}`));
+    return out;
+  }
   const out = [`${mark} *${it.name}*`];
 
   if (it.metric) {

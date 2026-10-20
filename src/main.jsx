@@ -9899,10 +9899,24 @@ function workoutValueLabel(it) {
   if (it.metric === "quantidade") return workoutRepsLabel(it);
   return `${fmtNum(it.amount)}kg`;
 }
+// "12x · 55kg" / "12x" / "1'30\"" — resumo de UM exercício de um treino conjugado.
+function workoutPartBrief(p) {
+  if (p.metric === "tempo") return p.amount != null ? fmtWorkoutSeconds(p.amount) : "";
+  const bits = [];
+  if (p.reps != null) bits.push(`${fmtRangeNum(p.reps, p.reps_max)}x`);
+  else if (p.metric === "quantidade" && p.amount != null) bits.push(`${fmtNum(p.amount)}x`);
+  if (p.metric === "carga" && p.amount != null) bits.push(`${fmtNum(p.amount)}kg`);
+  return bits.join(" · ");
+}
 function workoutSummaryText(it) {
   if (!it.metric) return "";
   const n = Math.max(1, Number(it.sets) || 1);
   const parts = [`${n} ${n === 1 ? "série" : "séries"}`];
+  if (it.combo?.length) {
+    parts.push(it.combo.map(p => { const b = workoutPartBrief(p); return b ? `${p.name} (${b})` : p.name; }).join(" + "));
+    if (Number(it.rest_seconds) > 0) parts.push(`intervalo ${workoutRestLabel(it)}`);
+    return parts.join(" · ");
+  }
   if (it.metric === "carga" && it.reps != null) parts.push(workoutRepsLabel(it));
   parts.push(workoutValueLabel(it));
   if (Number(it.rest_seconds) > 0) parts.push(`intervalo ${workoutRestLabel(it)}`);
@@ -10072,7 +10086,14 @@ function parseWorkoutText(raw) {
     if (line.startsWith(WORKOUT_NAME_MARK)) {                                                              // só o nome do exercício
       openEx = null; notesMode = false;
       const nm = line.slice(1).replace(EMOJI_RE, "").replace(/^\s*-\s+/, "").replace(/\s+/g, " ").trim();
-      group().exercises.push(newEx(nm.charAt(0).toUpperCase() + nm.slice(1)));
+      const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+      const partNames = nm.split(/\s*\+\s*/).map(x => x.trim()).filter(Boolean);
+      if (partNames.length >= 2) {                                                                         // "Leg press + afundo" → treino conjugado
+        const combo = partNames.map(n => ({ name: cap(n), metric: null, reps: null, reps_max: null, amount: null, gif_url: null }));
+        group().exercises.push({ ...newEx(combo.map(x => x.name).join(" + ")), combo });
+        return;
+      }
+      group().exercises.push(newEx(cap(nm)));
       return;
     }
     if (/^[━─═\-_=~*·\s]{3,}$/.test(line)) { openEx = null; notesMode = false; return; }               // divisória
@@ -10217,60 +10238,87 @@ function workoutLoadDiff(f, t) {
   if (f[kind] == null) return { up: tv > 0, text: `começou com ${lbl(t)}` };
   return { up: tv > fv, text: `${tv > fv ? "subiu" : "reduziu"} de ${lbl(f)} para ${lbl(t)}` };
 }
+const wlKey = (id, part = 0) => `${id}:${part}`; // chave do histórico: exercício + posição (treino conjugado tem vários)
 function workoutEvolution(items, history, dateStr) {
-  return items.filter(it => it.metric).map(it => {
-    const e = (history[it.id] || []).find(x => x.d === dateStr);
-    const d = e ? workoutLoadDiff(e.f, e) : null;
-    if (!d) return { item: it, status: "same", text: "não progrediu" };
-    return { item: it, status: d.up ? "up" : "down", text: d.text };
+  const rows = [];
+  items.forEach(it => {
+    const parts = it.combo?.length ? it.combo : [it];
+    parts.forEach((p, idx) => {
+      if (!p.metric) return;
+      const e = (history[wlKey(it.id, idx)] || []).find(x => x.d === dateStr);
+      const d = e ? workoutLoadDiff(e.f, e) : null;
+      const item = { id: wlKey(it.id, idx), name: p.name || it.name };
+      rows.push(d ? { item, status: d.up ? "up" : "down", text: d.text } : { item, status: "same", text: "não progrediu" });
+    });
   });
+  return rows;
 }
 
 function WorkoutLoadModal({ item, history, onSave, onClose }) {
-  const m = item.metric;
-  const cur = workoutLoadOf(item);
+  const isCombo = !!item.combo?.length;
+  const parts = isCombo ? item.combo : [item];
   const rangeStr = (a, b) => (a == null ? "" : (b != null && Number(b) !== Number(a) ? `${a}-${b}` : String(a)));
-  const [amount, setAmount] = useState(cur.a != null ? String(cur.a) : "");
-  const [reps, setReps] = useState(rangeStr(cur.r, cur.rm));
+  const [vals, setVals] = useState(() => parts.map(p => {
+    const c = workoutLoadOf(p);
+    return { amount: c.a != null ? String(c.a) : "", reps: rangeStr(c.r, c.rm) };
+  }));
+  const setVal = (i, k, v) => setVals(vs => vs.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
-  const entries = [...(history[item.id] || [])].reverse();
-  const first = (history[item.id] || [])[0];
 
   const submit = () => {
-    const repsR = parseNumRange(reps);
-    let patch;
-    if (m === "carga") patch = { amount: num(String(amount).replace(",", ".")), reps: repsR.min, reps_max: repsR.max };
-    else if (m === "quantidade") patch = { reps: repsR.min, reps_max: repsR.max, amount: null };
-    else patch = { amount: num(String(amount).replace(",", ".")) };
-    onSave(item, patch);
+    const built = parts.map((p, i) => {
+      if (!p.metric) return p;
+      const repsR = parseNumRange(vals[i].reps);
+      const am = num(String(vals[i].amount).replace(",", "."));
+      if (p.metric === "carga") return { ...p, amount: am, reps: repsR.min, reps_max: repsR.max };
+      if (p.metric === "quantidade") return { ...p, reps: repsR.min, reps_max: repsR.max, amount: null };
+      return { ...p, amount: am };
+    });
+    const f = built[0];
+    if (isCombo) onSave(item, { combo: built, amount: f.amount ?? null, reps: f.reps ?? null, reps_max: f.reps_max ?? null });
+    else onSave(item, { amount: f.amount ?? null, reps: f.reps ?? null, reps_max: f.reps_max ?? null });
     onClose();
   };
 
   return (
     <div className="modalBack" onClick={onClose}>
-      <div className="modal" style={{ width: "min(460px,100%)" }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ width: "min(460px,100%)", maxHeight: "90vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>{item.name}</h2><button type="button" onClick={onClose}><X/></button></div>
-        {(m === "carga" || m === "tempo") && (
-          <label>{m === "tempo" ? "Tempo (segundos)" : "Carga (kg)"}
-            <input autoFocus inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder={m === "tempo" ? "Ex.: 60" : "Ex.: 25"}/>
-          </label>
-        )}
-        {(m === "carga" || m === "quantidade") && (
-          <label>Repetições
-            <input autoFocus={m === "quantidade"} inputMode="numeric" value={reps} onChange={e => setReps(e.target.value)} placeholder="Ex.: 12 ou 10-12"/>
-          </label>
-        )}
-        <div>
-          <small className="recipeLabel">CARGAS ANTERIORES</small>
-          {entries.length === 0 ? (
-            <small>Ainda sem histórico. Ao salvar, o valor novo e a data de hoje ficam registrados aqui.</small>
-          ) : (
-            <ul className="workoutLoadHistory">
-              {entries.map(e => <li key={e.d}><b>{workoutLoadLabel(e)}</b><span>{fmtISOBR(e.d)}</span></li>)}
-              {first && <li className="initial"><b>{workoutLoadLabel(first.f)}</b><span>valor inicial</span></li>}
-            </ul>
-          )}
-        </div>
+        {parts.map((p, i) => {
+          const m = p.metric;
+          const list = history[wlKey(item.id, i)] || [];
+          const entries = [...list].reverse();
+          const first = list[0];
+          return (
+            <div key={i} className="comboLoadPart">
+              {isCombo && <b>{p.name}</b>}
+              {!m && <small>Defina séries e carga em Editar.</small>}
+              {(m === "carga" || m === "tempo") && (
+                <label>{m === "tempo" ? "Tempo (segundos)" : "Carga (kg)"}
+                  <input autoFocus={i === 0} inputMode="decimal" value={vals[i].amount} onChange={e => setVal(i, "amount", e.target.value)} placeholder={m === "tempo" ? "Ex.: 60" : "Ex.: 25"}/>
+                </label>
+              )}
+              {(m === "carga" || m === "quantidade") && (
+                <label>Repetições
+                  <input autoFocus={i === 0 && m === "quantidade"} inputMode="numeric" value={vals[i].reps} onChange={e => setVal(i, "reps", e.target.value)} placeholder="Ex.: 12 ou 10-12"/>
+                </label>
+              )}
+              {m && (
+                <div>
+                  <small className="recipeLabel">CARGAS ANTERIORES</small>
+                  {entries.length === 0 ? (
+                    <small>Ainda sem histórico. Ao salvar, o valor novo e a data de hoje ficam registrados aqui.</small>
+                  ) : (
+                    <ul className="workoutLoadHistory">
+                      {entries.map(e => <li key={e.d}><b>{workoutLoadLabel(e)}</b><span>{fmtISOBR(e.d)}</span></li>)}
+                      {first && <li className="initial"><b>{workoutLoadLabel(first.f)}</b><span>valor inicial</span></li>}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
           <button type="button" className="add" onClick={submit}><Check size={16}/> Salvar</button>
@@ -10346,7 +10394,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     const n = (v) => (v == null ? null : Number(v));
     const h = {};
     [...loadRows].sort((x, y) => String(x.date).localeCompare(String(y.date))).forEach(r => {
-      (h[r.item_id] = h[r.item_id] || []).push({
+      (h[wlKey(r.item_id, r.part || 0)] = h[wlKey(r.item_id, r.part || 0)] || []).push({
         id: r.id, d: String(r.date).slice(0, 10), m: r.metric, a: n(r.amount), r: n(r.reps), rm: n(r.reps_max),
         f: { m: r.metric, a: n(r.from_amount), r: n(r.from_reps), rm: n(r.from_reps_max) },
       });
@@ -10354,18 +10402,24 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     return h;
   }, [loadRows]);
   const recordLoad = (oldIt, patch) => {
-    if (!oldIt?.metric) return;
-    const from = workoutLoadOf(oldIt), to = workoutLoadOf({ ...oldIt, ...patch });
-    if (from.m !== to.m || sameWorkoutLoad(from, to)) return;
+    const oldParts = oldIt.combo?.length ? oldIt.combo : [oldIt];
+    const newItem = { ...oldIt, ...patch };
+    const newParts = newItem.combo?.length ? newItem.combo : [newItem];
     const today = todayISO();
-    const cur = (loadHistory[oldIt.id] || []).find(e => e.d === today);
-    const vals = { metric: to.m, amount: to.a, reps: to.r, reps_max: to.rm };
-    if (cur) {
-      if (sameWorkoutLoad(cur.f, to)) removeLoadRow(cur.id); // voltou ao valor de antes do dia: não houve mudança
-      else updateLoadRow(cur.id, vals);
-    } else {
-      addLoadRow({ id: crypto.randomUUID(), item_id: oldIt.id, date: today, ...vals, from_amount: from.a, from_reps: from.r, from_reps_max: from.rm });
-    }
+    oldParts.forEach((op, idx) => {
+      const np = newParts[idx];
+      if (!np || !op.metric) return;
+      const from = workoutLoadOf(op), to = workoutLoadOf(np);
+      if (from.m !== to.m || sameWorkoutLoad(from, to)) return;
+      const cur = (loadHistory[wlKey(oldIt.id, idx)] || []).find(e => e.d === today);
+      const vals = { metric: to.m, amount: to.a, reps: to.r, reps_max: to.rm };
+      if (cur) {
+        if (sameWorkoutLoad(cur.f, to)) removeLoadRow(cur.id); // voltou ao valor de antes do dia: não houve mudança
+        else updateLoadRow(cur.id, vals);
+      } else {
+        addLoadRow({ id: crypto.randomUUID(), item_id: oldIt.id, ...(idx ? { part: idx } : {}), date: today, ...vals, from_amount: from.a, from_reps: from.r, from_reps_max: from.rm });
+      }
+    });
   };
   // Migra o histórico que ficava só neste aparelho (versão anterior) para a tabela, uma única vez.
   const loadMigrated = useRef(false);
@@ -10633,7 +10687,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
             <div className="workoutItemCard" key={it.id}>
               <div className="workoutItemHead">
                 <WorkoutGifThumb item={it} size={44}/>
-                <h4>{it.name}</h4>
+                <h4>{it.name}{it.combo?.length > 1 && <em className="comboBadge">Conjugado</em>}</h4>
                 <div className="exerciseOrderBtns">
                   <button className="ghost" disabled={idx===0} onClick={() => moveItem(it, -1)}><ArrowUp size={13}/></button>
                   <button className="ghost" disabled={idx===selectedItems.length-1} onClick={() => moveItem(it, 1)}><ArrowDown size={13}/></button>
@@ -10975,7 +11029,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
               <div className="workoutItemCard" key={it.id}>
                 <div className="workoutItemHead">
                   <WorkoutGifThumb item={it} size={44}/>
-                  <h4>{it.name}</h4>
+                  <h4>{it.name}{it.combo?.length > 1 && <em className="comboBadge">Conjugado</em>}</h4>
                   <div className="exerciseOrderBtns">
                     <button className="ghost" disabled={idx === 0} onClick={() => moveItem(it, -1)}><ArrowUp size={13}/></button>
                     <button className="ghost" disabled={idx === list.length - 1} onClick={() => moveItem(it, 1)}><ArrowDown size={13}/></button>
@@ -11134,19 +11188,27 @@ function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
     const id = ++runId.current;
     setGroups(r.groups);
     const todo = [];
-    r.groups.forEach((g, gi) => g.exercises.forEach((ex, ei) => { if (!ex.gif_url) todo.push([gi, ei, ex.name]); }));
+    r.groups.forEach((g, gi) => g.exercises.forEach((ex, ei) => {
+      if (ex.combo?.length) ex.combo.forEach((p, pi) => { if (!p.gif_url) todo.push([gi, ei, p.name, pi]); });
+      else if (!ex.gif_url) todo.push([gi, ei, ex.name, null]);
+    }));
     if (!todo.length) { setGifBusy(false); return; }
     setGifBusy(true);
     const cache = new Map();
     let k = 0;
     const worker = async () => {
       while (k < todo.length) {
-        const [gi, ei, nm] = todo[k++];
+        const [gi, ei, nm, pi] = todo[k++];
         const key = nm.toLowerCase();
         if (!cache.has(key)) cache.set(key, findGifDoTreino(nm).catch(() => null));
         const url = await cache.get(key);
         if (url && runId.current === id) {
-          setGroups(gs => gs && gs.map((g, i) => i !== gi ? g : { ...g, exercises: g.exercises.map((ex, j) => (j === ei && ex.name === nm && !ex.gif_url) ? { ...ex, gif_url: url } : ex) }));
+          setGroups(gs => gs && gs.map((g, i) => i !== gi ? g : { ...g, exercises: g.exercises.map((ex, j) => {
+            if (j !== ei) return ex;
+            if (pi == null) return (ex.name === nm && !ex.gif_url) ? { ...ex, gif_url: url } : ex;
+            const combo = ex.combo.map((p, q) => (q === pi && p.name === nm && !p.gif_url) ? { ...p, gif_url: url } : p);
+            return { ...ex, combo, gif_url: ex.gif_url || (pi === 0 ? url : null) };
+          }) }));
         }
       }
     };
@@ -11194,7 +11256,7 @@ function WorkoutImportModal({ defaultDay, targetLabel, onClose, onImport }) {
                 <small className="recipeLabel">{(targetLabel || WEEKDAY_FULL[g.day ?? day]).toUpperCase()} · {g.exercises.length} {g.exercises.length === 1 ? "EXERCÍCIO" : "EXERCÍCIOS"}</small>
                 {g.exercises.length > 0 && (
                   <ul className="recipeIngList">{g.exercises.map((ex, i) => (
-                    <li key={i}><b>{ex.name}</b>{workoutSummaryText(ex) ? ` — ${workoutSummaryText(ex)}` : ""}{ex.goals.length ? ` · ${ex.goals.join(" · ")}` : ""}{ex.gif_url ? " · 🎬 GIF" : ""}</li>
+                    <li key={i}><b>{ex.name}</b>{workoutSummaryText(ex) ? ` — ${workoutSummaryText(ex)}` : ""}{ex.goals.length ? ` · ${ex.goals.join(" · ")}` : ""}{ex.combo?.length ? " · conjugado" : ""}{ex.gif_url || ex.combo?.some(p => p.gif_url) ? " · 🎬 GIF" : ""}</li>
                   ))}</ul>
                 )}
                 <label>Observações
@@ -11275,7 +11337,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
     onFinish();
   };
 
-  const statBoxes = (it) => {
+  const statBoxes = (it, withRest = true) => {
     const boxes = [];
     if (it.metric === "carga") {
       boxes.push([<Repeat size={16}/>, "Repetições", workoutRepsLabel(it)]);
@@ -11285,9 +11347,30 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
     } else if (it.metric === "tempo") {
       boxes.push([<Timer size={16}/>, "Tempo", fmtWorkoutSeconds(it.amount)]);
     }
-    boxes.push([<Clock3 size={16}/>, "Intervalo", workoutRestLabel(it)]);
+    if (withRest) boxes.push([<Clock3 size={16}/>, "Intervalo", workoutRestLabel(it)]);
     return boxes;
   };
+  const renderBoxes = (boxes) => (
+    <div className="workoutStatBoxes">
+      {boxes.map(([icon, label, value], k) => (
+        <div key={k} className="workoutStatBox">{icon}<small>{label}</small><b>{value}</b></div>
+      ))}
+    </div>
+  );
+  // Treino conjugado: um bloco por exercício (GIF + especificações), séries e intervalo valem para o conjunto.
+  const renderParts = (it) => (
+    <div className="comboParts">
+      {it.combo.map((p, i) => (
+        <div key={i} className="comboPart">
+          <div className="comboPartHead">
+            <WorkoutGifThumb item={{ gif_url: p.gif_url }} placeholder size={64} onZoom={() => setZoomItem({ gif_url: p.gif_url, name: p.name })}/>
+            <b>{p.name}</b>
+          </div>
+          {p.metric && renderBoxes(statBoxes(p, false))}
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div className="content workoutPlayer">
@@ -11317,7 +11400,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
             <div key={it.id} className={"workoutPlayerItem" + (st.done ? " done" : "")}>
               <button type="button" className="workoutPlayerItemHead" onClick={() => setOpenId(id => id === it.id ? null : it.id)}>
                 <WorkoutGifThumb item={it} placeholder size={52} onZoom={() => setZoomItem(it)}/>
-                <span className="workoutPlayerItemName">{it.name}</span>
+                <span className="workoutPlayerItemName">{it.name}{it.combo?.length > 1 && <em className="comboBadge">Conjugado</em>}</span>
                 {st.done && <CheckCircle2 size={18} className="workoutPlayerCheck"/>}
                 {open ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}
               </button>
@@ -11339,18 +11422,15 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
                           );
                         })}
                       </div>
-                      <div className="workoutStatBoxes">
-                        {statBoxes(it).map(([icon, label, value], k) => (
-                          <div key={k} className="workoutStatBox">
-                            {icon}
-                            <small>{label}</small>
-                            <b>{value}</b>
-                          </div>
-                        ))}
-                      </div>
+                      {it.combo?.length
+                        ? <>{renderParts(it)}{renderBoxes([[<Clock3 size={16}/>, "Intervalo", workoutRestLabel(it)]])}</>
+                        : renderBoxes(statBoxes(it))}
                     </>
                   ) : (
-                    it.goals?.length > 0 && <ul className="workoutGoalsList">{it.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>
+                    <>
+                      {it.combo?.length > 0 && renderParts(it)}
+                      {it.goals?.length > 0 && <ul className="workoutGoalsList">{it.goals.map((g, i) => <li key={i}>{g}</li>)}</ul>}
+                    </>
                   )}
 
                   {it.video_url && (
@@ -11360,7 +11440,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
                     {st.done ? <><Check size={16}/> Exercício concluído · desfazer</> : "Concluir exercício"}
                   </button>
                   <div className="workoutPlayerActions">
-                    {it.metric && <button type="button" className="ghost" onClick={() => setLoadItemId(it.id)}><Weight size={14}/> Carga</button>}
+                    {(it.metric || it.combo?.some(p => p.metric)) && <button type="button" className="ghost" onClick={() => setLoadItemId(it.id)}><Weight size={14}/> Carga</button>}
                     <button type="button" className="ghost" onClick={() => onEditItem(it)}><Pencil size={14}/> Editar</button>
                   </div>
                 </div>
@@ -11396,6 +11476,28 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
     : "12");
   const [amount, setAmount] = useState(item?.amount != null ? String(Number(item.amount)) : "");
   const [rest, setRest] = useState(item?.rest_seconds != null ? rangeStr(item.rest_seconds, item.rest_max) : "60");
+
+  // Treino conjugado (ex.: Leg press + Afundo): vários exercícios com especificações e GIF próprios; séries e intervalo valem para o conjunto.
+  const blankPart = () => ({ name: "", metric: "carga", reps: "12", amount: "", gif_url: "" });
+  const partToState = (p) => ({
+    name: p.name || "", metric: p.metric || "carga",
+    reps: p.reps == null && p.metric === "quantidade" && p.amount != null ? String(Number(p.amount)) : rangeStr(p.reps, p.reps_max),
+    amount: p.amount != null && p.metric !== "quantidade" ? String(Number(p.amount)) : "",
+    gif_url: p.gif_url || "",
+  });
+  const [isCombo, setIsCombo] = useState(!!item?.combo?.length);
+  const [parts, setParts] = useState(() => (item?.combo?.length ? item.combo.map(partToState) : [blankPart(), blankPart()]));
+  const [partSearch, setPartSearch] = useState({}); // índice -> "loading" | "notfound" | "error"
+  const setPart = (i, patch) => setParts(ps => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const searchPartGif = async (i) => {
+    setPartSearch(st => ({ ...st, [i]: "loading" }));
+    let url = null;
+    try { url = await findGifDoTreino(parts[i].name); } catch { setPartSearch(st => ({ ...st, [i]: "error" })); return; }
+    if (!url) { setPartSearch(st => ({ ...st, [i]: "notfound" })); return; }
+    setPart(i, { gif_url: url });
+    setPartSearch(st => ({ ...st, [i]: null }));
+  };
+  const canSave = isCombo ? parts.filter(p => p.name.trim()).length >= 2 : !!name.trim();
 
   // GIF: arquivo do aparelho (IndexedDB, egress zero) ou link.
   const gifRef = useRef(null);
@@ -11435,8 +11537,34 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
   const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
 
   const handleSubmit = async () => {
-    if (!name.trim() || saving) return;
+    if (!canSave || saving) return;
     setSaving(true);
+    if (isCombo) {
+      const built = parts.filter(p => p.name.trim()).map(p => {
+        const r = parseNumRange(p.reps);
+        const link = normalizeGifLink(p.gif_url);
+        return {
+          name: p.name.trim(), metric: p.metric,
+          reps: p.metric !== "tempo" ? r.min : null, reps_max: p.metric !== "tempo" ? r.max : null,
+          amount: p.metric !== "quantidade" ? num(p.amount) : null,
+          gif_url: /^https?:\/\//i.test(link) ? link : null,
+        };
+      });
+      const f = built[0], restC = parseNumRange(rest, true);
+      onSave({
+        id: item?.id || crypto.randomUUID(),
+        day_of_week: folderId ? null : day,
+        ...(folderId ? { folder_id: folderId, video_url: /^https?:\/\//i.test(video.trim()) ? video.trim() : null } : {}),
+        name: built.map(p => p.name).join(" + "),
+        goals: goals.map(g => g.trim()).filter(Boolean),
+        sets: Math.max(1, Number(sets) || 1),
+        metric: f.metric, reps: f.reps, reps_max: f.reps_max, amount: f.amount,
+        rest_seconds: restC.min, rest_max: restC.max,
+        gif_url: f.gif_url,
+        combo: built,
+      });
+      return;
+    }
     const id = item?.id || crypto.randomUUID();
     const key = `workout_gif:${id}`;
     try {
@@ -11466,6 +11594,7 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
       rest_seconds: useStats ? restR.min : null,
       rest_max: useStats ? restR.max : null,
       gif_url: /^https?:\/\//i.test(link) ? link : null,
+      ...(item?.combo?.length ? { combo: null } : {}),
     });
   };
 
@@ -11482,7 +11611,7 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
         </div>
         <div className="flashHeadActions">
           <button className="ghost" onClick={onCancel}>Cancelar</button>
-          <button className="add" disabled={!name.trim() || saving} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+          <button className="add" disabled={!canSave || saving} onClick={handleSubmit}><Check size={16}/> Salvar</button>
         </div>
       </div>
 
@@ -11497,18 +11626,54 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
           </label>
         )}
 
-        <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Agachamento..."/></label>
+        <div className="workoutStatsToggle" onClick={() => setIsCombo(v => !v)}>
+          <span>Treino conjugado (2 ou mais exercícios juntos)</span>
+          <span className={"switchPill sm" + (isCombo ? " on" : "")}><span className="switchKnob"/></span>
+        </div>
+
+        {!isCombo && <label>Nome<input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Ex.: Corrida, Flexão, Agachamento..."/></label>}
+
+        {isCombo && (
+          <div className="comboEditor">
+            {parts.map((p, i) => (
+              <div className="comboEditPart" key={i}>
+                <div className="comboEditHead">
+                  <b>Exercício {i + 1}</b>
+                  {parts.length > 2 && <button type="button" className="ghost" onClick={() => setParts(ps => ps.filter((_, j) => j !== i))}><X size={13}/></button>}
+                </div>
+                <input value={p.name} onChange={e => setPart(i, { name: e.target.value })} placeholder={i === 0 ? "Ex.: Leg press" : "Ex.: Afundo"}/>
+                <div className="workoutDayPicker">
+                  {WORKOUT_METRICS.map(([k, label]) => (
+                    <button type="button" key={k} className={p.metric === k ? "active" : ""} onClick={() => setPart(i, { metric: k })}>{label}</button>
+                  ))}
+                </div>
+                {p.metric !== "tempo" && <input value={p.reps} onChange={e => setPart(i, { reps: e.target.value })} placeholder={p.metric === "carga" ? "Repetições por série: 12 ou 10-12" : "Quantidade por série: 15 ou 10-12"}/>}
+                {p.metric !== "quantidade" && <input type="number" min="0" step="any" value={p.amount} onChange={e => setPart(i, { amount: e.target.value })} placeholder={p.metric === "carga" ? "Carga (kg)" : "Tempo por série (segundos)"}/>}
+                <div className="comboGifRow">
+                  <WorkoutGifThumb item={{ gif_url: normalizeGifLink(p.gif_url) }} placeholder size={52}/>
+                  <input value={p.gif_url} onChange={e => setPart(i, { gif_url: e.target.value })} placeholder="Link do GIF (https://...)"/>
+                </div>
+                <button type="button" className="ghost" disabled={!p.name.trim() || partSearch[i] === "loading"} onClick={() => searchPartGif(i)}><Search size={13}/> {partSearch[i] === "loading" ? "Buscando..." : "Buscar GIF pelo nome"}</button>
+                {partSearch[i] === "notfound" && <small style={{ color: "#ff9d9d" }}>GIF não encontrado.</small>}
+                {partSearch[i] === "error" && <small style={{ color: "#ff9d9d" }}>Não consegui buscar agora. Tente de novo em instantes.</small>}
+              </div>
+            ))}
+            {parts.length < 4 && <button type="button" className="ghost" onClick={() => setParts(ps => [...ps, blankPart()])}><Plus size={13}/> Adicionar exercício</button>}
+          </div>
+        )}
 
         {folderId && (
           <label>Link do vídeo (YouTube)<input value={video} onChange={e => setVideo(e.target.value)} placeholder="https://www.youtube.com/watch?v=..."/></label>
         )}
 
-        <div className="workoutStatsToggle" onClick={() => setUseStats(v => !v)}>
-          <span>Usar séries, repetições e carga</span>
-          <span className={"switchPill sm" + (useStats ? " on" : "")}><span className="switchKnob"/></span>
-        </div>
+        {!isCombo && (
+          <div className="workoutStatsToggle" onClick={() => setUseStats(v => !v)}>
+            <span>Usar séries, repetições e carga</span>
+            <span className={"switchPill sm" + (useStats ? " on" : "")}><span className="switchKnob"/></span>
+          </div>
+        )}
 
-        {useStats && (
+        {(useStats || isCombo) && (
           <>
             <label>Séries
               <div className="workoutStepper">
@@ -11518,6 +11683,7 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
               </div>
             </label>
 
+            {!isCombo && (<>
             <label>Tipo de esforço
               <div className="workoutDayPicker">
                 {WORKOUT_METRICS.map(([k, label]) => (
@@ -11536,10 +11702,12 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
                 <input type="number" min="0" step="any" value={amount} onChange={e => setAmount(e.target.value)} placeholder={metric === "carga" ? "25" : "30"}/>
               </label>
             )}
+            </>)}
             <label>Intervalo entre séries (segundos)<input value={rest} onChange={e => setRest(e.target.value)} placeholder="60 ou 90-120"/></label>
           </>
         )}
 
+        {!isCombo && (
         <label>GIF do exercício (opcional)
           <div className="exerciseGifPreview shoppingPhotoPreview" onClick={() => gifRef.current?.click()}>
             {gifPreview && !gifBroken ? <img src={gifPreview} alt="Prévia do GIF" referrerPolicy="no-referrer" onError={() => setGifBroken(true)}/> : <Dumbbell size={28}/>}
@@ -11554,6 +11722,7 @@ function WorkoutItemForm({ item, defaultDay, folderId, onCancel, onSave }) {
           {gifBroken && <small style={{ color: "#ff9d9d" }}>Não consegui carregar esse link. Use o endereço direto da imagem (clique com o botão direito no GIF → "Copiar endereço da imagem"), não o link da página.</small>}
           <small>O GIF escolhido do aparelho fica salvo só neste aparelho e não gasta egress do Supabase. O link é carregado direto do site de origem.</small>
         </label>
+        )}
 
         <label>Metas
           <div className="workoutGoalRows">
