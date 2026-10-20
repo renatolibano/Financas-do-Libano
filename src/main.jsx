@@ -690,6 +690,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const workoutHistoryCutoff = isoAddDays(todayISO(), -370);
   const workoutPlanItems = useEntity("workout_plan_items", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   const workoutCompletions = useEntity("workout_completions", [], session, "asc", {enabled: treinoVisitado, gteColumn: "date", gteValue: workoutHistoryCutoff});
+  const workoutLoadHistory = useEntity("workout_load_history", [], session, "asc", {enabled: treinoVisitado, gteColumn: "date", gteValue: workoutHistoryCutoff});
   const workoutDayNotes = useEntity("workout_day_notes", [], session, "asc", {enabled: treinoVisitado});
   const workoutFolders = useEntity("workout_library_folders", [], session, "asc", {orderable:true, enabled: treinoVisitado});
   // Lista de compras: usada na própria aba e também no preview "Quadro
@@ -1281,7 +1282,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
       {page==="Word" && <WordDocs entity={wordDocs} openDocId={wordOpenTrigger} onConsumeOpenDoc={()=>setWordOpenTrigger(null)} onOpenChange={setActiveWordUrlId} closeSignal={wordCloseSignal}/>}
-      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions} notesEntity={workoutDayNotes} foldersEntity={workoutFolders} session={session}/>}
+      {page==="Treino" && <WorkoutShelf itemsEntity={workoutPlanItems} completionsEntity={workoutCompletions} notesEntity={workoutDayNotes} foldersEntity={workoutFolders} loadEntity={workoutLoadHistory} session={session}/>}
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
@@ -10184,7 +10185,144 @@ function WorkoutGifThumb({ item, placeholder = false, size = 56, onZoom }) {
   );
 }
 
-function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEntity, session }) {
+// ---------- Histórico de carga + evolução do dia (só neste aparelho) ----------
+const WORKOUT_LOAD_KEY = "libano-workout-load-history";
+const fmtISOBR = (d) => String(d || "").split("-").reverse().join("/");
+// Valor "treinável" do exercício: carga (kg) e repetições, só repetições, ou tempo (s).
+function workoutLoadOf(it) {
+  const m = it.metric;
+  return {
+    m,
+    a: m === "quantidade" || it.amount == null ? null : Number(it.amount),
+    r: m === "tempo" ? null : (it.reps != null ? Number(it.reps) : (m === "quantidade" && it.amount != null ? Number(it.amount) : null)),
+    rm: m === "tempo" || it.reps_max == null ? null : Number(it.reps_max),
+  };
+}
+const sameWorkoutLoad = (x, y) => x.m === y.m && (x.a ?? null) === (y.a ?? null) && (x.r ?? null) === (y.r ?? null) && (x.rm ?? null) === (y.rm ?? null);
+function workoutLoadLabel(l) {
+  if (l.m === "tempo") return l.a == null ? "—" : fmtWorkoutSeconds(l.a);
+  if (l.m === "quantidade") return l.r == null ? "—" : `${fmtRangeNum(l.r, l.rm)}x`;
+  const parts = [];
+  if (l.a != null) parts.push(`${fmtNum(l.a)}kg`);
+  if (l.r != null) parts.push(`${fmtRangeNum(l.r, l.rm)}x`);
+  return parts.join(" · ") || "—";
+}
+// Compara o valor de antes (f) com o de depois (t) e devolve { up, text } ou null se não mudou.
+function workoutLoadDiff(f, t) {
+  if (f.m !== t.m) return null;
+  const kind = t.m === "tempo" ? "a" : t.m === "quantidade" ? "r" : ((t.a ?? 0) !== (f.a ?? 0) ? "a" : "r");
+  const fv = f[kind] ?? 0, tv = t[kind] ?? 0;
+  if (fv === tv) return null;
+  const lbl = (x) => kind === "a" ? (t.m === "tempo" ? fmtWorkoutSeconds(x.a) : `${fmtNum(x.a)}kg`) : `${fmtRangeNum(x.r, x.rm)} repetições`;
+  if (f[kind] == null) return { up: tv > 0, text: `começou com ${lbl(t)}` };
+  return { up: tv > fv, text: `${tv > fv ? "subiu" : "reduziu"} de ${lbl(f)} para ${lbl(t)}` };
+}
+function workoutEvolution(items, history, dateStr) {
+  return items.filter(it => it.metric).map(it => {
+    const e = (history[it.id] || []).find(x => x.d === dateStr);
+    const d = e ? workoutLoadDiff(e.f, e) : null;
+    if (!d) return { item: it, status: "same", text: "não progrediu" };
+    return { item: it, status: d.up ? "up" : "down", text: d.text };
+  });
+}
+
+function WorkoutLoadModal({ item, history, onSave, onClose }) {
+  const m = item.metric;
+  const cur = workoutLoadOf(item);
+  const rangeStr = (a, b) => (a == null ? "" : (b != null && Number(b) !== Number(a) ? `${a}-${b}` : String(a)));
+  const [amount, setAmount] = useState(cur.a != null ? String(cur.a) : "");
+  const [reps, setReps] = useState(rangeStr(cur.r, cur.rm));
+  const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
+  const entries = [...(history[item.id] || [])].reverse();
+  const first = (history[item.id] || [])[0];
+
+  const submit = () => {
+    const repsR = parseNumRange(reps);
+    let patch;
+    if (m === "carga") patch = { amount: num(String(amount).replace(",", ".")), reps: repsR.min, reps_max: repsR.max };
+    else if (m === "quantidade") patch = { reps: repsR.min, reps_max: repsR.max, amount: null };
+    else patch = { amount: num(String(amount).replace(",", ".")) };
+    onSave(item, patch);
+    onClose();
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <div className="modal" style={{ width: "min(460px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{item.name}</h2><button type="button" onClick={onClose}><X/></button></div>
+        {(m === "carga" || m === "tempo") && (
+          <label>{m === "tempo" ? "Tempo (segundos)" : "Carga (kg)"}
+            <input autoFocus inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder={m === "tempo" ? "Ex.: 60" : "Ex.: 25"}/>
+          </label>
+        )}
+        {(m === "carga" || m === "quantidade") && (
+          <label>Repetições
+            <input autoFocus={m === "quantidade"} inputMode="numeric" value={reps} onChange={e => setReps(e.target.value)} placeholder="Ex.: 12 ou 10-12"/>
+          </label>
+        )}
+        <div>
+          <small className="recipeLabel">CARGAS ANTERIORES</small>
+          {entries.length === 0 ? (
+            <small>Ainda sem histórico. Ao salvar, o valor novo e a data de hoje ficam registrados aqui.</small>
+          ) : (
+            <ul className="workoutLoadHistory">
+              {entries.map(e => <li key={e.d}><b>{workoutLoadLabel(e)}</b><span>{fmtISOBR(e.d)}</span></li>)}
+              {first && <li className="initial"><b>{workoutLoadLabel(first.f)}</b><span>valor inicial</span></li>}
+            </ul>
+          )}
+        </div>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="button" className="add" onClick={submit}><Check size={16}/> Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tela "Treino concluído" / "Evolução do dia": compara a carga/repetições/tempo de hoje com a anterior.
+function WorkoutEvolutionScreen({ items, history, dateStr, title, finished, onClose }) {
+  const rows = workoutEvolution(items, history, dateStr);
+  const ups = rows.filter(r => r.status === "up").length;
+  const total = rows.length;
+  const pct = total ? Math.round((ups / total) * 100) : 0;
+  const wd = WEEKDAY_FULL[new Date(`${dateStr}T12:00:00`).getDay()];
+  const msg = !total ? "Nenhum exercício com carga neste treino."
+    : ups === total ? "Dia perfeito! Você evoluiu em todos os exercícios."
+    : ups === 0 ? "Hoje foi de manutenção. Constância também é evolução."
+    : "Bom trabalho! Cada pequena evolução soma.";
+  return (
+    <div className="content workoutEvo">
+      <div className="workoutPlayerTop">
+        <button className="ghost" onClick={onClose} aria-label="Voltar"><ArrowLeft size={18}/></button>
+        <h2>{finished ? "Treino concluído" : "Evolução do dia"}</h2>
+      </div>
+      <div className="evoHero">
+        <div className="evoRing" style={{ "--p": `${pct}%` }}>
+          <div className="evoRingIn">{finished ? <Trophy size={26}/> : <TrendingUp size={26}/>}</div>
+        </div>
+        <h3>{finished ? "Treino concluído! 💪" : "Sua evolução de hoje"}</h3>
+        <small>{title ? `${title} · ` : ""}{wd}, {fmtISOBR(dateStr)}</small>
+        {total > 0 && <div className="evoScore"><b>{ups}</b><span>/{total}</span></div>}
+        {total > 0 && <p>Você conseguiu progredir <b>{ups}/{total}</b> {total === 1 ? "exercício" : "exercícios"} hoje.</p>}
+        <p className="evoMsg">{msg}</p>
+      </div>
+      <div className="evoList">
+        {rows.map(r => (
+          <div key={r.item.id} className={"evoRow " + r.status}>
+            <span className="evoIcon">{r.status === "up" ? <ArrowUp size={18}/> : r.status === "down" ? <TrendingDown size={18}/> : <Minus size={18}/>}</span>
+            <div><b>{r.item.name}</b><small>{r.text}</small></div>
+          </div>
+        ))}
+      </div>
+      <div className="workoutPlayerFooter">
+        <button type="button" className="add" onClick={onClose}><Check size={16}/> Fechar</button>
+      </div>
+    </div>
+  );
+}
+
+function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEntity, loadEntity, session }) {
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: completions, add: addCompletion, remove: removeCompletion } = completionsEntity;
   const { data: dayNotes, add: addDayNote, update: updateDayNote, remove: removeDayNote } = notesEntity;
@@ -10200,6 +10338,58 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
   const [view, setView] = useState("week"); // "week" | "library"
   const [playerOpenId, setPlayerOpenId] = useState(null);
   const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
+  const [evo, setEvo] = useState(null); // null | { items, title, finished }
+  // Histórico de carga (tabela workout_load_history, sincroniza entre aparelhos): uma linha por exercício por dia,
+  // guardando o valor novo e o valor de antes do dia.
+  const { data: loadRows, add: addLoadRow, update: updateLoadRow, remove: removeLoadRow } = loadEntity;
+  const loadHistory = useMemo(() => {
+    const n = (v) => (v == null ? null : Number(v));
+    const h = {};
+    [...loadRows].sort((x, y) => String(x.date).localeCompare(String(y.date))).forEach(r => {
+      (h[r.item_id] = h[r.item_id] || []).push({
+        id: r.id, d: String(r.date).slice(0, 10), m: r.metric, a: n(r.amount), r: n(r.reps), rm: n(r.reps_max),
+        f: { m: r.metric, a: n(r.from_amount), r: n(r.from_reps), rm: n(r.from_reps_max) },
+      });
+    });
+    return h;
+  }, [loadRows]);
+  const recordLoad = (oldIt, patch) => {
+    if (!oldIt?.metric) return;
+    const from = workoutLoadOf(oldIt), to = workoutLoadOf({ ...oldIt, ...patch });
+    if (from.m !== to.m || sameWorkoutLoad(from, to)) return;
+    const today = todayISO();
+    const cur = (loadHistory[oldIt.id] || []).find(e => e.d === today);
+    const vals = { metric: to.m, amount: to.a, reps: to.r, reps_max: to.rm };
+    if (cur) {
+      if (sameWorkoutLoad(cur.f, to)) removeLoadRow(cur.id); // voltou ao valor de antes do dia: não houve mudança
+      else updateLoadRow(cur.id, vals);
+    } else {
+      addLoadRow({ id: crypto.randomUUID(), item_id: oldIt.id, date: today, ...vals, from_amount: from.a, from_reps: from.r, from_reps_max: from.rm });
+    }
+  };
+  // Migra o histórico que ficava só neste aparelho (versão anterior) para a tabela, uma única vez.
+  const loadMigrated = useRef(false);
+  useEffect(() => {
+    if (loadMigrated.current || itemsEntity.loading || loadEntity.loading) return;
+    loadMigrated.current = true;
+    const old = loadLocal(WORKOUT_LOAD_KEY, null);
+    if (!old || typeof old !== "object") return;
+    (async () => {
+      const ids = new Set(items.map(i => String(i.id)));
+      let ok = true;
+      for (const [itemId, list] of Object.entries(old)) {
+        if (!ids.has(String(itemId))) continue;
+        for (const e of list || []) {
+          if (loadRows.some(r => String(r.item_id) === String(itemId) && String(r.date).slice(0, 10) === e.d)) continue;
+          const res = await addLoadRow({ id: crypto.randomUUID(), item_id: itemId, date: e.d, metric: e.m, amount: e.a ?? null, reps: e.r ?? null, reps_max: e.rm ?? null, from_amount: e.f?.a ?? null, from_reps: e.f?.r ?? null, from_reps_max: e.f?.rm ?? null });
+          if (cloudConfigured && session && !res) { ok = false; break; }
+        }
+        if (!ok) break;
+      }
+      if (ok) removeLocalKey(WORKOUT_LOAD_KEY);
+    })();
+  }, [itemsEntity.loading, loadEntity.loading]);
+  const saveLoad = (it, patch) => { recordLoad(it, patch); updateItem(it.id, patch); };
 
   const todayStr = todayISO();
   const completedDates = useMemo(() => new Set(completions.map(c => c.date)), [completions]);
@@ -10299,7 +10489,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     if (!doneToday) addCompletion({ id: crypto.randomUUID(), date: todayStr });
     setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
     setPlayerOpen(false);
-    toast("Treino concluído! 💪");
+    setEvo({ items: selectedItems, title: WEEKDAY_FULL[selectedDay], finished: true });
   };
 
   const moveItem = (it, dir) => {
@@ -10315,6 +10505,10 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     reorderItems(newFull);
   };
 
+  if (evo) {
+    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} onClose={() => setEvo(null)}/>;
+  }
+
   if (view === "library") {
     return <WorkoutLibrary
       foldersEntity={foldersEntity}
@@ -10325,6 +10519,8 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
       setSessions={setSessions}
       todayStr={todayStr}
       markDoneToday={() => { if (!doneToday) addCompletion({ id: crypto.randomUUID(), date: todayStr }); }}
+      loadHistory={loadHistory}
+      recordLoad={recordLoad}
       onBack={() => setView("week")}
     />;
   }
@@ -10337,7 +10533,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
       onSave={(payload) => {
         const { id: payloadId, ...rest } = payload;
         if (itemModal === "new") addItem({ id: payloadId || crypto.randomUUID(), ...rest });
-        else updateItem(itemModal.id, rest);
+        else { recordLoad(itemModal, rest); updateItem(itemModal.id, rest); }
         setItemModal(null);
       }}
     />;
@@ -10347,6 +10543,9 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     return <WorkoutPlayer
       day={selectedDay}
       items={selectedItems}
+      onSaveLoad={saveLoad}
+      loadHistory={loadHistory || {}}
+      onShowEvolution={() => setEvo({ items: selectedItems, title: WEEKDAY_FULL[selectedDay], finished: false })}
       progress={progress}
       setProgress={setProgress}
       openId={playerOpenId}
@@ -10416,6 +10615,9 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
 
       {selectedItems.length > 0 && (
         <button className="add workoutStartBtn" onClick={startWorkout}><Play size={16}/> Iniciar treino</button>
+      )}
+      {selectedItems.some(i => i.metric) && (
+        <button className="ghost workoutStartBtn" onClick={() => setEvo({ items: selectedItems, title: WEEKDAY_FULL[selectedDay], finished: false })}><TrendingUp size={16}/> Evolução do dia</button>
       )}
 
       {selectedItems.length === 0 ? (
@@ -10520,12 +10722,13 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
   );
 }
 
-function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sessions, setSessions, todayStr, markDoneToday, onBack }) {
+function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sessions, setSessions, todayStr, markDoneToday, onBack, loadHistory, recordLoad }) {
   const { data: folders, add: addFolder, update: updateFolder, remove: removeFolder, reorder: reorderFolders } = foldersEntity;
   const { data: items, add: addItem, remove: removeItem, update: updateItem, reorder: reorderItems } = itemsEntity;
   const { data: notes, add: addNote, update: updateNote, remove: removeNote } = notesEntity;
 
   const [folderModal, setFolderModal] = useState(null); // null | "new" | pasta sendo editada
+  const [evo, setEvo] = useState(null); // null | { items, title, finished }
   // Coluna da direita (só PC): preferência guardada neste aparelho, sem mexer no banco.
   const [sides, setSides] = useState(() => loadLocal("workout_folder_side", {}) || {});
   const [dragFolderId, setDragFolderId] = useState(null);
@@ -10673,8 +10876,9 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     markDoneToday();
     setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
     setPlayerOpen(false);
-    toast("Treino concluído! 💪");
+    setEvo({ items: list, title: folder?.name, finished: true });
   };
+  const saveLoad = (it, patch) => { recordLoad(it, patch); updateItem(it.id, patch); };
 
   const copyFolder = async () => {
     if (!list.length) { toast("Nenhum treino para copiar.", "error"); return; }
@@ -10698,6 +10902,10 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     toast(total ? `${total} ${total === 1 ? "exercício importado" : "exercícios importados"} para ${folder.name}.` : "Observações importadas.");
   };
 
+  if (evo) {
+    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} onClose={() => setEvo(null)}/>;
+  }
+
   if (itemModal !== null && folder) {
     return <WorkoutItemForm
       item={itemModal === "new" ? null : itemModal}
@@ -10706,7 +10914,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
       onSave={(payload) => {
         const { id: payloadId, ...rest } = payload;
         if (itemModal === "new") addItem({ id: payloadId || crypto.randomUUID(), ...rest });
-        else updateItem(itemModal.id, rest);
+        else { recordLoad(itemModal, rest); updateItem(itemModal.id, rest); }
         setItemModal(null);
       }}
     />;
@@ -10716,6 +10924,9 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     return <WorkoutPlayer
       title={folder.name}
       items={list}
+      onSaveLoad={saveLoad}
+      loadHistory={loadHistory || {}}
+      onShowEvolution={() => setEvo({ items: list, title: folder.name, finished: false })}
       progress={progress}
       setProgress={setProgress}
       openId={playerOpenId}
@@ -10749,6 +10960,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
         </div>
 
         {list.length > 0 && <button className="add workoutStartBtn" onClick={startWorkout}><Play size={16}/> Iniciar treino</button>}
+        {list.some(i => i.metric) && <button className="ghost workoutStartBtn" onClick={() => setEvo({ items: list, title: folder.name, finished: false })}><TrendingUp size={16}/> Evolução do dia</button>}
 
         {list.length === 0 ? (
           <div className="flashEmpty">
@@ -11022,8 +11234,10 @@ function WorkoutGifLightbox({ item, onClose }) {
   );
 }
 
-function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish, notes }) {
+function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOpenId, onClose, onEditItem, onFinish, notes, onSaveLoad, loadHistory, onShowEvolution }) {
   const [zoomItem, setZoomItem] = useState(null);
+  const [loadItemId, setLoadItemId] = useState(null);
+  const loadItem = loadItemId ? items.find(x => x.id === loadItemId) : null;
   const stateOf = (it) => progress[it.id] || { sets: 0, done: false };
   const totalOf = (it) => (it.metric ? Math.max(1, Number(it.sets) || 1) : 1);
   const doneCount = items.filter(it => stateOf(it).done).length;
@@ -11080,6 +11294,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
       <div className="workoutPlayerTop">
         <button className="ghost" onClick={onClose} aria-label="Voltar"><ArrowLeft size={18}/></button>
         <h2>Treino</h2>
+        <button className="ghost" style={{ marginLeft: "auto" }} onClick={onShowEvolution}><TrendingUp size={15}/> Evolução</button>
       </div>
       <div className="workoutPlayerBar">
         <span>{title ?? WEEKDAY_LABELS[day]}</span>
@@ -11145,6 +11360,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
                     {st.done ? <><Check size={16}/> Exercício concluído · desfazer</> : "Concluir exercício"}
                   </button>
                   <div className="workoutPlayerActions">
+                    {it.metric && <button type="button" className="ghost" onClick={() => setLoadItemId(it.id)}><Weight size={14}/> Carga</button>}
                     <button type="button" className="ghost" onClick={() => onEditItem(it)}><Pencil size={14}/> Editar</button>
                   </div>
                 </div>
@@ -11159,6 +11375,7 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
       </div>
 
       {zoomItem && <WorkoutGifLightbox item={zoomItem} onClose={() => setZoomItem(null)}/>}
+      {loadItem && <WorkoutLoadModal item={loadItem} history={loadHistory} onSave={onSaveLoad} onClose={() => setLoadItemId(null)}/>}
     </div>
   );
 }

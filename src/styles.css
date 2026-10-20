@@ -2131,3 +2131,30 @@ h1{font-size:23px}
 .libFolderCard{overflow:visible}
 .libFolderCard .libFolderImg,.libFolderCard::after{border-radius:8px}
 .libFolderCard.menuOpen{z-index:20}
+
+.workoutPlayerActions{gap:8px}
+.workoutLoadHistory{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px;max-height:200px;overflow:auto}
+.workoutLoadHistory li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;background:var(--bg-surface-2);border:1px solid var(--border-soft);font-size:13px}
+.workoutLoadHistory li span{color:var(--text-2);font-size:12px}
+.workoutLoadHistory li.initial{opacity:.7}
+.workoutEvo{max-width:620px}
+.evoHero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:26px 18px;margin-bottom:14px;border-radius:20px;border:1px solid var(--border);background:radial-gradient(120% 90% at 50% 0%,rgba(255,92,92,.18),transparent 60%),var(--bg-surface)}
+.evoHero h3{margin:8px 0 0;font-size:22px}
+.evoHero small{color:var(--text-2)}
+.evoHero p{margin:0;font-size:14px}
+.evoHero .evoMsg{color:var(--text-2);font-size:13px}
+.evoRing{width:92px;height:92px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#4ade80 var(--p),var(--border) 0)}
+.evoRingIn{width:76px;height:76px;border-radius:50%;background:var(--bg-surface);display:grid;place-items:center;color:#fbbf24}
+.evoScore{display:flex;align-items:baseline;gap:2px;margin-top:6px}
+.evoScore b{font-size:44px;line-height:1;font-weight:900;color:#4ade80}
+.evoScore span{font-size:20px;color:var(--text-2);font-weight:700}
+.evoList{display:grid;gap:8px;margin-bottom:16px}
+.evoRow{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:var(--bg-surface-2);border:1px solid var(--border-soft)}
+.evoRow div{display:grid;gap:2px;min-width:0}
+.evoRow b{font-size:14px}
+.evoRow small{font-size:12.5px;color:var(--text-2)}
+.evoIcon{flex:none;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--bg-surface-3);color:var(--text-2)}
+.evoRow.up{border-color:rgba(74,222,128,.45);background:linear-gradient(90deg,rgba(74,222,128,.12),transparent 70%),var(--bg-surface-2)}
+.evoRow.up .evoIcon{background:rgba(74,222,128,.18);color:#4ade80}
+.evoRow.up small{color:#86efac}
+.evoRow.down .evoIcon{background:rgba(248,113,113,.16);color:#f87171}
