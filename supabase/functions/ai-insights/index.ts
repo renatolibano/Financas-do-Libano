@@ -88,6 +88,27 @@ async function findPrimary(name: string): Promise<{ url: string; name: string } 
   return { url: new URL(best.path, SITE).href, name: best.name };
 }
 
+// Último recurso no gifdotreino: o site chama o exercício por um nome mais genérico que o digitado
+// (ex.: "Flexão de braço solo" → "Flexão"). Só aceita nomes do site cujas palavras todas estão no que foi digitado.
+async function findPrimaryGeneric(name: string): Promise<{ url: string; name: string } | null> {
+  const words = String(name).trim().split(/\s+/).filter(Boolean);
+  const qTokens = new Set(norm(name).split(" ").filter(Boolean));
+  if (words.length < 2) return null;
+  const folders = await getFolders();
+  for (let k = words.length - 1; k >= 1; k--) {
+    const results = await search(words.slice(0, k).join(" "), folders);
+    const ok = results.filter((g) => {
+      const t = norm(g.name).split(" ").filter(Boolean);
+      return t.length > 0 && t.every((x) => qTokens.has(x));
+    });
+    if (ok.length) {
+      const best = ok.sort((a, b) => norm(b.name).split(" ").length - norm(a.name).split(" ").length)[0];
+      return { url: new URL(best.path, SITE).href, name: best.name };
+    }
+  }
+  return null;
+}
+
 // ---------- 2) fitsmove.com (inglês) ----------
 type FmEx = { name: string; tokens: string[]; gif: string };
 
@@ -213,6 +234,9 @@ Deno.serve(async (req) => {
 
     const secondary = await findFitsmove(name).catch((e) => { console.error("fitsmove:", e); return null; });
     if (secondary) return json({ found: true, ...secondary, source: "fitsmove" });
+
+    const generic = await findPrimaryGeneric(name).catch((e) => { console.error("gifdotreino genérico:", e); return null; });
+    if (generic) return json({ found: true, ...generic, source: "gifdotreino" });
 
     return json({ found: false });
   } catch (e) {
