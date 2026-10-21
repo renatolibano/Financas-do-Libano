@@ -110,8 +110,10 @@ async function getFitsmove(): Promise<FmEx[]> {
   }));
   const byId = new Map<string, FmEx>();
   for (const html of pages) {
+    // o HTML de cada exercício traz a miniatura (.../images/<id>-<hash>.jpg) e o GIF (data-gif=".../videos/<id>-<hash>.gif")
     const hashes = new Map<string, string>();
     for (const m of html.matchAll(/\/images\/(\d{3,5})-([A-Za-z0-9_]+)\.jpg/g)) hashes.set(m[1], m[2]);
+    for (const m of html.matchAll(/\/videos\/(\d{3,5})-([A-Za-z0-9_]+)\.gif/g)) hashes.set(m[1], m[2]);
     for (const m of html.matchAll(/\/en\/e\/(\d{3,5})-([a-z0-9-]+)\.html/g)) {
       const hash = hashes.get(m[1]);
       if (!hash || byId.has(m[1])) continue;
