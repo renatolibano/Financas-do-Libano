@@ -1166,3 +1166,63 @@ do $$ declare t text; begin foreach t in array array['workout_library_folders'] 
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+-- Treino: treinos conjugados + histórico de carga por exercício. Pode rodar mais de uma vez sem problema.
+
+-- 1) Treino conjugado (ex.: Leg press + Afundo): lista de exercícios guardada junto do item.
+alter table workout_plan_items add column if not exists combo jsonb;
+
+-- 2) Histórico de carga/repetições/tempo (uma linha por exercício por dia; "part" = posição dentro do conjugado).
+create table if not exists workout_load_history (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  item_id uuid not null references workout_plan_items(id) on delete cascade,
+  part int not null default 0,
+  date date not null,
+  metric text not null,
+  amount numeric,
+  reps numeric,
+  reps_max numeric,
+  from_amount numeric,
+  from_reps numeric,
+  from_reps_max numeric,
+  created_at timestamptz not null default now()
+);
+alter table workout_load_history add column if not exists part int not null default 0;
+alter table workout_load_history drop constraint if exists workout_load_history_user_id_item_id_date_key;
+create unique index if not exists workout_load_history_uniq on workout_load_history(user_id, item_id, part, date);
+create index if not exists workout_load_history_user_date on workout_load_history(user_id, date);
+alter table workout_load_history enable row level security;
+
+do $$ declare t text; begin foreach t in array array['workout_load_history'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;
+
+-- Cozinha: foto da receita (escolhida do computador/celular ou link de imagem).
+-- Pode rodar mais de uma vez sem problema.
+alter table recipes add column if not exists image text;
+
+insert into storage.buckets (id, name, public)
+values ('recipe_images', 'recipe_images', true)
+on conflict (id) do nothing;
+
+drop policy if exists "select_public_recipe_images" on storage.objects;
+drop policy if exists "insert_own_recipe_images" on storage.objects;
+drop policy if exists "update_own_recipe_images" on storage.objects;
+drop policy if exists "delete_own_recipe_images" on storage.objects;
+
+create policy "select_public_recipe_images" on storage.objects for select
+  using (bucket_id = 'recipe_images');
+create policy "insert_own_recipe_images" on storage.objects for insert
+  with check (bucket_id = 'recipe_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_recipe_images" on storage.objects for update
+  using (bucket_id = 'recipe_images' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_recipe_images" on storage.objects for delete
+  using (bucket_id = 'recipe_images' and (storage.foldername(name))[1] = auth.uid()::text);

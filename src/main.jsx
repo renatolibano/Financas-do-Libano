@@ -84,6 +84,7 @@ import { uploadShoppingImage, deleteShoppingImage } from "./lib/shoppingImages";
 import { uploadMediaItemImage, deleteMediaItemImage, uploadMediaGroupCover, deleteMediaGroupCover } from "./lib/mediaImages";
 import { uploadGameItemImage, deleteGameItemImage, uploadGameGroupCover, deleteGameGroupCover } from "./lib/gameImages";
 import { uploadBookGroupCover, deleteBookGroupCover } from "./lib/bookGroupImages";
+import { uploadRecipeImage, deleteRecipeImage, isStoredRecipeImage } from "./lib/recipeImages";
 import { uploadStudyPdfGroupCover, deleteStudyPdfGroupCover } from "./lib/studyPdfGroupImages";
 
 // ---------------------------------------------------------------------
@@ -9454,12 +9455,14 @@ function youtubeVideoId(url) {
   return m ? m[1] : null;
 }
 
-// Capa da receita = miniatura do vídeo (carregada direto do YouTube, não passa pelo Supabase). Respeita o modo "Economizar dados".
-function RecipeThumb({ link }) {
+// Capa da receita = foto escolhida pela pessoa (arquivo ou link); sem foto, usa a miniatura do vídeo do YouTube
+// (carregada direto do YouTube, não passa pelo Supabase). Respeita o modo "Economizar dados".
+function RecipeThumb({ link, image }) {
   const saver = React.useContext(EgressSaverContext);
   const id = youtubeVideoId(link);
-  if (!id || saver) return null;
-  return <img className="recipeThumb" loading="lazy" alt="" src={`https://img.youtube.com/vi/${id}/hqdefault.jpg`} onError={(e) => { e.currentTarget.style.display = "none"; }}/>;
+  const src = image || (id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null);
+  if (!src || saver) return null;
+  return <img className="recipeThumb" loading="lazy" alt="" referrerPolicy="no-referrer" src={src} onError={(e) => { e.currentTarget.style.display = "none"; }}/>;
 }
 
 const isYoutubeLink = (url) => /(^|\/\/)(www\.|m\.)?(youtube\.com|youtu\.be)\b/i.test(url || "");
@@ -9495,6 +9498,7 @@ function Kitchen({ entity, foldersEntity, shoppingEntity, session }) {
     setOpenMenuId(null);
     if (confirm(`Excluir a receita "${r.title}"?`)) {
       if (viewingId === r.id) setViewingId(null);
+      if (isStoredRecipeImage(r.image) && cloudConfigured && session?.user?.id) deleteRecipeImage(session.user.id, r.id).catch(() => {});
       remove(r.id);
     }
   };
@@ -9589,7 +9593,7 @@ function Kitchen({ entity, foldersEntity, shoppingEntity, session }) {
             <div key={r.id} className="recipeCard" onClick={(e) => { e.stopPropagation(); setViewingId(r.id); }}>
               <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setExportMenuId(null); setOpenMenuId(id => id === r.id ? null : r.id); }}><MoreVertical size={16}/></button>
               <button className={"recipeStar" + (r.favorite ? " on" : "")} title={r.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"} onClick={(e) => { e.stopPropagation(); update(r.id, { favorite: !r.favorite }); }}><Star size={14} fill={r.favorite ? "currentColor" : "none"}/></button>
-              <RecipeThumb link={r.link}/>
+              <RecipeThumb link={r.link} image={r.image}/>
               {openMenuId === r.id && <div className="bookMenu" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); setFormOpen(r); }}><Pencil size={13}/> Editar</button>
                 {(r.ingredients || []).length > 0 && <button onClick={() => sendToShopping(r)}><ShoppingCart size={13}/> Enviar p/ lista de compras</button>}
@@ -9627,7 +9631,7 @@ function Kitchen({ entity, foldersEntity, shoppingEntity, session }) {
         <div className="modalBack" onClick={() => setViewingId(null)}>
           <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
             <div className="modalHead"><h2>{viewing.title}</h2><button type="button" onClick={() => setViewingId(null)}><X/></button></div>
-            <RecipeThumb link={viewing.link}/>
+            <RecipeThumb link={viewing.link} image={viewing.image}/>
             {viewing.link && (
               <a className="ghost shoppingLinkBtn" href={viewing.link} target="_blank" rel="noopener noreferrer">
                 <ExternalLink size={13}/> {isYoutubeLink(viewing.link) ? "Abrir vídeo" : "Abrir link"}
@@ -9670,6 +9674,7 @@ function Kitchen({ entity, foldersEntity, shoppingEntity, session }) {
         <RecipeFormModal
           recipe={formOpen === "new" ? null : formOpen}
           aiAvailable={aiAvailable}
+          session={session}
           onClose={() => setFormOpen(null)}
           onSave={(payload) => {
             if (formOpen === "new") add({ id: crypto.randomUUID(), ...(currentFolder ? { folder_id: currentFolder.id } : {}), ...payload });
@@ -9721,7 +9726,7 @@ function RecipeImportModal({ onClose, onImport }) {
 
 const recipeDraftHasContent = (d) => !!(d && [d.title, d.link, d.ingText, d.steps, d.notes].some(v => String(v || "").trim()));
 
-function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
+function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   // Rascunho: guarda o que está sendo digitado no IndexedDB (mesmo esquema dos flashcards) pra não perder se fechar sem salvar.
   const draftKey = recipe?.id ? `recipe_draft:${recipe.id}` : "recipe_draft:new";
   const [title, setTitle] = useState(recipe?.title || "");
@@ -9729,6 +9734,24 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
   const [ingText, setIngText] = useState((recipe?.ingredients || []).join("\n"));
   const [steps, setSteps] = useState(recipe?.steps || "");
   const [notes, setNotes] = useState(recipe?.notes || "");
+  // Foto da receita: arquivo do aparelho (vai pro Storage) ou link de imagem. Sem foto, a capa é a miniatura do vídeo.
+  const recipeId = useRef(recipe?.id || crypto.randomUUID());
+  const ownImage = !!recipe?.image && (isStoredRecipeImage(recipe.image) || recipe.image.startsWith("data:"));
+  const storedUrl = ownImage ? recipe.image : null;
+  const [imageLink, setImageLink] = useState(recipe?.image && !ownImage ? recipe.image : "");
+  const [imageFile, setImageFile] = useState(null);
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
+  const imageInputRef = useRef(null);
+  const [filePreview, setFilePreview] = useState(null);
+  useEffect(() => {
+    if (!imageFile) { setFilePreview(null); return; }
+    const u = URL.createObjectURL(imageFile);
+    setFilePreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [imageFile]);
+  const linkOk = /^https?:\/\//i.test(imageLink.trim());
+  const imagePreview = filePreview || (linkOk ? imageLink.trim() : (!imageRemoved ? storedUrl : null));
   const [pasted, setPasted] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
@@ -9810,17 +9833,42 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
     setPasted("");
   };
 
-  const handleSubmit = () => {
-    if (!title.trim()) return;
+  const handleSubmit = async () => {
+    if (!title.trim() || imageBusy) return;
     const l = link.trim();
+    const cloud = cloudConfigured && session?.user?.id;
+    // Foto final: arquivo novo > link > (removida → nenhuma) > a que já estava.
+    let image = recipe?.image || null;
+    if (imageFile) {
+      setImageBusy(true);
+      try {
+        if (cloud) {
+          const blob = await resizeImageToBlob(imageFile, 1000, 1000, 0.85);
+          image = await uploadRecipeImage(session.user.id, recipeId.current, blob);
+        } else {
+          image = await resizeImageToDataUrl(imageFile, 1000, 1000, 0.82);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Não foi possível guardar a foto. A receita foi salva sem a foto nova.");
+      }
+      setImageBusy(false);
+    } else if (linkOk) {
+      image = imageLink.trim();
+    } else if (imageRemoved || (!imageLink.trim() && !storedUrl)) {
+      image = null;
+    }
+    if (cloud && isStoredRecipeImage(recipe?.image) && !isStoredRecipeImage(image)) deleteRecipeImage(session.user.id, recipeId.current).catch(() => {});
     clearTimeout(draftSaveTimer.current);
     idbDelete(draftKey);
     onSave({
+      ...(recipe ? {} : { id: recipeId.current }),
       title: title.trim(),
       link: l ? (/^https?:\/\//i.test(l) ? l : "https://" + l) : null,
       ingredients: ingText.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
       steps: steps.trim() || null,
       notes: notes.trim() || null,
+      ...(image !== (recipe?.image || null) ? { image } : {}),
     });
   };
 
@@ -9838,6 +9886,18 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
         <label>Nome da receita<input autoFocus value={title} onChange={touch(setTitle)} placeholder="Ex.: Lasanha de frango"/></label>
         <label>Link (YouTube ou site)<input value={link} onChange={touch(setLink)} placeholder="https://..."/></label>
 
+        <div className="recipeImageField">
+          <small className="recipeLabel">FOTO DA RECEITA (opcional)</small>
+          {imagePreview && <img className="recipeThumb" alt="" referrerPolicy="no-referrer" src={imagePreview} onError={(e) => { e.currentTarget.style.opacity = 0.3; }}/>}
+          <div className="recipeImageActions">
+            <button type="button" className="ghost" onClick={() => imageInputRef.current?.click()}><ImagePlus size={13}/> {imagePreview ? "Trocar foto" : "Escolher foto do aparelho"}</button>
+            {imagePreview && <button type="button" className="ghost" onClick={() => { setImageFile(null); setImageLink(""); setImageRemoved(true); }}><X size={13}/> Remover foto</button>}
+            <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setImageFile(f); setImageLink(""); setImageRemoved(false); } }}/>
+          </div>
+          <input value={imageLink} onChange={e => { setImageLink(e.target.value); setImageFile(null); setImageRemoved(false); }} placeholder="Ou cole o link de uma imagem (https://...)"/>
+          {!imagePreview && youtubeVideoId(link) && <small>Sem foto, a capa será a miniatura do vídeo.</small>}
+        </div>
+
         <label>Colar descrição ou transcrição do vídeo (opcional)
           <textarea rows={4} value={pasted} onChange={e => setPasted(e.target.value)} placeholder="Cole aqui a descrição do vídeo, a transcrição ou o texto da receita para preencher os ingredientes e o preparo."/>
           <button type="button" className="ghost" disabled={!pasted.trim() || extracting} onClick={extract}><Sparkles size={13}/> {extracting ? "Extraindo..." : "Extrair ingredientes"}</button>
@@ -9854,7 +9914,7 @@ function RecipeFormModal({ recipe, aiAvailable, onClose, onSave }) {
 
         <div className="modalActions">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
-          <button type="button" className="add" disabled={!title.trim()} onClick={handleSubmit}><Check size={16}/> Salvar</button>
+          <button type="button" className="add" disabled={!title.trim() || imageBusy} onClick={handleSubmit}><Check size={16}/> {imageBusy ? "Salvando..." : "Salvar"}</button>
         </div>
       </div>
     </div>
