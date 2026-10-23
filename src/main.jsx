@@ -250,7 +250,7 @@ const HOME_PAGE_OPTIONS = [
   { group: "Geral", pages: ["Calendário","Notas","Cozinha","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF","Word"] },
-  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos",{key:"Teste de PC", label:"Meu PC roda?"}] },
+  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos","Baixador",{key:"Teste de PC", label:"Meu PC roda?"}] },
 ];
 
 function Root(){
@@ -1161,6 +1161,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Treino", icon:Dumbbell },
       { key:"Filmes e Séries", icon:Clapperboard },
       { key:"Jogos", icon:Gamepad2 },
+      { key:"Baixador", icon:Download },
       { key:"Teste de PC", label:"Meu PC roda?", icon:Cpu },
     ]},
     { type:"single", key:"Cozinha", icon:ChefHat },
@@ -1287,6 +1288,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Filmes e Séries" && <MediaShelf groupsEntity={mediaGroups} itemsEntity={mediaItems} session={session}/>}
       {page==="Jogos" && <GameShelf groupsEntity={gameGroups} itemsEntity={gameItems} session={session}/>}
       {page==="Teste de PC" && <PcCompatTest/>}
+      {page==="Baixador" && <Downloader/>}
       {page==="Cozinha" && <Kitchen entity={recipes} foldersEntity={recipeFolders} shoppingEntity={shoppingItems} session={session}/>}
       {page==="Gráfico" && <ActivityChartPage itemsEntity={activityItems} logsEntity={activityLogs} todosEntity={activityTodos} session={session}/>}
 
@@ -12749,6 +12751,266 @@ function GameItemForm({ item, session, onCancel, onSave }) {
           </div>
         </label>
       </div>
+    </div>
+  );
+}
+
+// ---------- Baixador (Área de Lazer) ----------
+// Cola o link de um vídeo, mostra as opções (MP4 em várias resoluções / MP3) e baixa pelo servidor do Baixador
+// (pasta downloader-server, com yt-dlp + ffmpeg). O app só mostra a tela e conversa com esse servidor.
+const DL_QUALITY_LABEL = { 4320: "8K", 2160: "4K", 1440: "2K", 1080: "Full HD", 720: "HD", 480: "SD", 360: "Econômico", 240: "Leve", 144: "Mínima" };
+const DL_BITRATES = [
+  { kbps: 320, label: "Máxima", hint: "Melhor qualidade" },
+  { kbps: 192, label: "Alta", hint: "Equilibrada" },
+  { kbps: 128, label: "Padrão", hint: "Arquivo menor" },
+];
+const dlSize = (n) => {
+  if (!n) return "";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1).replace(".", ",")} ${u[i]}`;
+};
+const dlDuration = (s) => {
+  if (!s) return "";
+  s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+};
+const DL_STATUS = { queued: "Na fila…", downloading: "Baixando…", processing: "Juntando áudio e vídeo…", done: "Pronto para salvar!", error: "Não deu certo" };
+
+function Downloader() {
+  const [cfg, setCfg] = usePersistentState("libano-downloader-config", { url: "", key: "" });
+  const [history, setHistory] = usePersistentState("libano-downloader-history", []);
+  const [link, setLink] = useState("");
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [kind, setKind] = useState("mp4");
+  const [height, setHeight] = useState(null);
+  const [bitrate, setBitrate] = useState(192);
+  const [job, setJob] = useState(null);
+  const [showCfg, setShowCfg] = useState(false);
+  const [test, setTest] = useState(null); // null | "loading" | { ok, text }
+  const savedJob = useRef(null);
+
+  const base = String(cfg?.url || "").trim().replace(/\/+$/, "");
+  const configured = !!base;
+  const busy = !!job && !["done", "error"].includes(job.status);
+
+  const api = async (path, opts = {}) => {
+    let res;
+    try {
+      res = await fetch(base + path, { ...opts, headers: { "X-Api-Key": cfg?.key || "", ...(opts.body ? { "Content-Type": "application/json" } : {}) } });
+    } catch {
+      throw new Error("Não consegui falar com o servidor do Baixador. Confira se ele está ligado e o endereço em “Servidor”.");
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.detail || `Erro ${res.status} no servidor.`);
+    return data;
+  };
+
+  const analyze = async (u = link) => {
+    const url = String(u || "").trim();
+    if (!url || loading) return;
+    if (!configured) { setShowCfg(true); setError("Configure o endereço do servidor do Baixador para começar."); return; }
+    setLoading(true); setError(""); setInfo(null); setJob(null);
+    try {
+      const d = await api(`/api/info?url=${encodeURIComponent(url)}`);
+      setInfo(d);
+      setKind(d.hasVideo ? "mp4" : "mp3");
+      setHeight(d.heights?.[0]?.height ?? null);
+      setHistory(h => [{ url, title: d.title, thumb: d.thumbnail, ts: Date.now() }, ...(h || []).filter(x => x.url !== url)].slice(0, 8));
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const paste = async () => {
+    try {
+      const t = (await navigator.clipboard.readText()).trim();
+      if (t) { setLink(t); analyze(t); }
+    } catch { toast("Não consegui ler a área de transferência. Cole com Ctrl+V.", "error"); }
+  };
+
+  const start = async () => {
+    if (!info || busy) return;
+    setError(""); setJob({ status: "queued", progress: 0 });
+    try {
+      const r = await api("/api/jobs", { method: "POST", body: JSON.stringify({ url: info.url || link.trim(), kind, height: kind === "mp4" ? height : null, bitrate }) });
+      setJob({ id: r.id, status: "queued", progress: 0 });
+    } catch (e) { setJob(null); setError(e.message); }
+  };
+
+  // acompanha o andamento
+  useEffect(() => {
+    if (!job?.id || ["done", "error"].includes(job.status)) return;
+    const t = setInterval(async () => {
+      try { setJob(await api(`/api/jobs/${job.id}`)); }
+      catch (e) { setJob(j => (j ? { ...j, status: "error", error: e.message } : j)); }
+    }, 800);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.status]);
+
+  const fileUrl = (id) => `${base}/api/file/${id}`;
+  const saveFile = (id) => { const a = document.createElement("a"); a.href = fileUrl(id); a.download = ""; document.body.appendChild(a); a.click(); a.remove(); };
+  useEffect(() => {
+    if (job?.status === "done" && job.id && savedJob.current !== job.id) { savedJob.current = job.id; saveFile(job.id); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.status, job?.id]);
+
+  const testServer = async () => {
+    setTest("loading");
+    try {
+      const h = await api("/health");
+      setTest({ ok: true, text: `Conectado! yt-dlp ${h.yt_dlp}` });
+    } catch (e) { setTest({ ok: false, text: e.message }); }
+  };
+
+  const heights = info?.heights?.length ? info.heights : [{ height: null, size: null }];
+  const pct = Math.max(0, Math.min(100, Math.round(job?.progress || 0)));
+  const label = kind === "mp4" ? `MP4${height ? ` · ${height}p` : ""}` : `MP3 · ${bitrate} kbps`;
+
+  return (
+    <div className="content dl">
+      <div className="dlHero">
+        <div className="dlHeroIcon"><Download size={28}/></div>
+        <div className="dlHeroText">
+          <span className="dlEyebrow">ÁREA DE LAZER</span>
+          <h2>Baixador</h2>
+          <p>Cole o link de um vídeo e escolha: MP4 em várias resoluções ou só o áudio em MP3.</p>
+        </div>
+        <button type="button" className="ghost dlCfgBtn" onClick={() => setShowCfg(v => !v)}><Settings size={14}/> Servidor</button>
+      </div>
+
+      {(showCfg || !configured) && (
+        <div className="dlCard dlCfg">
+          <div className="dlCardTitle"><HardDrive size={15}/> Servidor do Baixador</div>
+          {!configured && <p className="dlHint">O Baixador precisa de um servidor próprio (pasta <b>downloader-server</b>, com instruções no README). Depois de ligá-lo, coloque o endereço abaixo.</p>}
+          <label>Endereço do servidor
+            <input value={cfg?.url || ""} onChange={e => { setCfg({ ...cfg, url: e.target.value }); setTest(null); }} placeholder="http://localhost:8000"/>
+          </label>
+          <label>Chave (API_KEY) <small>— a mesma definida no servidor; deixe vazio se não usar</small>
+            <input type="password" value={cfg?.key || ""} onChange={e => { setCfg({ ...cfg, key: e.target.value }); setTest(null); }} placeholder="opcional"/>
+          </label>
+          <div className="dlCfgActions">
+            <button type="button" className="ghost" disabled={!configured || test === "loading"} onClick={testServer}>{test === "loading" ? "Testando..." : "Testar conexão"}</button>
+            {test && test !== "loading" && <span className={"dlTest " + (test.ok ? "ok" : "bad")}>{test.ok ? <Check size={14}/> : <AlertTriangle size={14}/>} {test.text}</span>}
+          </div>
+        </div>
+      )}
+
+      <div className="dlCard dlInputCard">
+        <div className="dlInputRow">
+          <Link2 size={18} className="dlInputIcon"/>
+          <input value={link} onChange={e => setLink(e.target.value)} onKeyDown={e => { if (e.key === "Enter") analyze(); }} placeholder="Cole o link do vídeo (YouTube, Vimeo, X, TikTok, link direto…)" inputMode="url"/>
+          <button type="button" className="ghost" onClick={paste}><ClipboardPaste size={14}/> Colar</button>
+          <button type="button" className="add dlGo" disabled={!link.trim() || loading} onClick={() => analyze()}>
+            {loading ? <span className="dlSpin"/> : <Zap size={16}/>} {loading ? "Analisando…" : "Buscar"}
+          </button>
+        </div>
+        {error && <div className="dlError"><AlertTriangle size={15}/> <span>{error}</span></div>}
+        {!info && !loading && (
+          <div className="dlSites">
+            {["YouTube", "Vimeo", "X / Twitter", "TikTok", "Instagram", "Facebook", "Twitch", "Link direto"].map(s => <span key={s}>{s}</span>)}
+          </div>
+        )}
+      </div>
+
+      {loading && <div className="dlCard dlSkeleton"><div className="dlSkThumb"/><div className="dlSkLines"><i/><i/><i/></div></div>}
+
+      {info && (
+        <>
+          <div className="dlCard dlMedia">
+            <div className="dlThumb">
+              {info.thumbnail ? <img src={info.thumbnail} alt="" referrerPolicy="no-referrer"/> : <Film size={34}/>}
+              {info.duration ? <span className="dlDur">{dlDuration(info.duration)}</span> : null}
+            </div>
+            <div className="dlMeta">
+              {info.site && <span className="dlSite"><Globe size={11}/> {info.site}</span>}
+              <h3>{info.title}</h3>
+              {info.uploader && <small>{info.uploader}</small>}
+            </div>
+          </div>
+
+          <div className="dlCard dlOptions">
+            <div className="dlSeg">
+              <button type="button" className={kind === "mp4" ? "active" : ""} disabled={!info.hasVideo} onClick={() => setKind("mp4")}><Film size={17}/> Vídeo <b>MP4</b></button>
+              <button type="button" className={kind === "mp3" ? "active" : ""} onClick={() => setKind("mp3")}><Headphones size={17}/> Áudio <b>MP3</b></button>
+            </div>
+
+            {kind === "mp4" ? (
+              <div className="dlTiles">
+                {heights.map((h, i) => (
+                  <button type="button" key={h.height ?? "best"} className={"dlTile" + (height === h.height ? " active" : "")} onClick={() => setHeight(h.height)}>
+                    <b>{h.height ? `${h.height}p` : "Melhor"}</b>
+                    <span>{h.height ? (DL_QUALITY_LABEL[h.height] || "") : "qualidade disponível"}</span>
+                    {h.size ? <em>~{dlSize(h.size)}</em> : null}
+                    {i === 0 && h.height ? <i className="dlBadge">Melhor</i> : null}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="dlTiles">
+                {DL_BITRATES.map(b => (
+                  <button type="button" key={b.kbps} className={"dlTile" + (bitrate === b.kbps ? " active" : "")} onClick={() => setBitrate(b.kbps)}>
+                    <b>{b.kbps} kbps</b><span>{b.label}</span><em>{b.hint}</em>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {info.tooLong && <div className="dlError"><AlertTriangle size={15}/> <span>Esse vídeo passa do limite de {info.maxMinutes} minutos do servidor.</span></div>}
+            <button type="button" className="add dlDownloadBtn" disabled={busy || info.tooLong} onClick={start}>
+              <Download size={19}/> {busy ? "Baixando…" : `Baixar ${label}`}
+            </button>
+          </div>
+        </>
+      )}
+
+      {job && (
+        <div className={"dlCard dlProgress " + job.status}>
+          <div className="dlProgTop">
+            <b>{DL_STATUS[job.status] || "Preparando…"}</b>
+            <span>{job.status === "done" ? "100%" : job.status === "error" ? "" : `${pct}%`}</span>
+          </div>
+          <div className="dlBar"><i style={{ width: (job.status === "done" ? 100 : pct) + "%" }}/></div>
+          {busy && (
+            <div className="dlProgMeta">
+              {job.speed ? <span><Zap size={12}/> {dlSize(job.speed)}/s</span> : null}
+              {job.eta != null ? <span><Clock3 size={12}/> faltam ~{job.eta}s</span> : null}
+            </div>
+          )}
+          {job.status === "done" && (
+            <div className="dlDone">
+              <div><b>{job.filename}</b><small>{dlSize(job.size)}</small></div>
+              <a className="add dlSave" href={fileUrl(job.id)} download><Download size={16}/> Salvar de novo</a>
+            </div>
+          )}
+          {job.status === "error" && (
+            <div className="dlDone">
+              <div className="dlError"><AlertTriangle size={15}/> <span>{job.error || "Falha no download."}</span></div>
+              <button type="button" className="ghost" onClick={start}>Tentar de novo</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!info && !loading && history?.length > 0 && (
+        <div className="dlHistory">
+          <div className="dlCardTitle"><Clock3 size={14}/> Recentes
+            <button type="button" className="ghost" onClick={() => setHistory([])}><Trash2 size={12}/> Limpar</button>
+          </div>
+          <div className="dlHistList">
+            {history.map(h => (
+              <button type="button" key={h.url} className="dlHistItem" onClick={() => { setLink(h.url); analyze(h.url); }}>
+                {h.thumb ? <img src={h.thumb} alt="" referrerPolicy="no-referrer" loading="lazy"/> : <span className="dlHistNoThumb"><Film size={18}/></span>}
+                <span>{h.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="dlFootnote">Baixe apenas conteúdo que você tem o direito de baixar. Alguns sites proíbem downloads nos termos de uso.</p>
     </div>
   );
 }
