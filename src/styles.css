@@ -2174,3 +2174,10 @@ h1{font-size:23px}
 
 .recipeImageField{display:grid;gap:8px}
 .recipeImageActions{display:flex;flex-wrap:wrap;gap:8px}
+
+.recipeCrop{display:grid;gap:12px}
+.recipeCropFrame{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:#000;touch-action:none;cursor:grab;user-select:none}
+.recipeCropFrame:active{cursor:grabbing}
+.recipeCropFrame img{position:absolute;max-width:none;pointer-events:none}
+.recipeCropZoom{display:flex;align-items:center;gap:10px}
+.recipeCropZoom input{flex:1;min-width:0}

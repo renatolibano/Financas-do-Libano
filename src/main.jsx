@@ -9726,6 +9726,89 @@ function RecipeImportModal({ onClose, onImport }) {
 
 const recipeDraftHasContent = (d) => !!(d && [d.title, d.link, d.ingText, d.steps, d.notes].some(v => String(v || "").trim()));
 
+// Recortar/ajustar a foto da receita no formato da capa (16:9): arraste para escolher a parte que aparece e use o zoom
+// para aproximar ou deixar a foto inteira. A imagem final já é gravada no tamanho certo.
+function RecipeCropDialog({ file, onCancel, onApply }) {
+  const OUT_W = 1000, OUT_H = 563; // 16:9
+  const [src, setSrc] = useState(null);
+  const [nat, setNat] = useState(null);   // { w, h } da foto
+  const [fw, setFw] = useState(0);        // largura da moldura na tela
+  const [zoom, setZoom] = useState(1);    // 1 = preenche a moldura
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const frameRef = useRef(null), imgRef = useRef(null), drag = useRef(null);
+  const fh = (fw * OUT_H) / OUT_W;
+  useEffect(() => { const u = URL.createObjectURL(file); setSrc(u); return () => URL.revokeObjectURL(u); }, [file]);
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const f = () => setFw(el.clientWidth);
+    f();
+    const ro = new ResizeObserver(f);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const baseScale = nat && fw ? Math.max(fw / nat.w, fh / nat.h) : 1;
+  const fitZoom = nat && fw ? Math.min(fw / nat.w, fh / nat.h) / baseScale : 1; // foto inteira dentro da moldura
+  const clampOff = (x, y, z) => {
+    const dw = nat.w * baseScale * z, dh = nat.h * baseScale * z;
+    return { x: Math.min(Math.max(0, fw - dw), Math.max(Math.min(0, fw - dw), x)), y: Math.min(Math.max(0, fh - dh), Math.max(Math.min(0, fh - dh), y)) };
+  };
+  const center = (z) => { const dw = nat.w * baseScale * z, dh = nat.h * baseScale * z; return clampOff((fw - dw) / 2, (fh - dh) / 2, z); };
+  useEffect(() => { if (nat && fw) { setZoom(1); setOff(center(1)); } /* eslint-disable-next-line */ }, [nat, fw > 0]);
+  useEffect(() => { if (nat && fw) setOff(o => clampOff(o.x, o.y, zoom)); /* eslint-disable-next-line */ }, [fw]);
+
+  const changeZoom = (z) => {
+    if (!nat || !fw) return;
+    z = Math.min(4, Math.max(fitZoom, z));
+    const so = baseScale * zoom, sn = baseScale * z;
+    const cx = (fw / 2 - off.x) / so, cy = (fh / 2 - off.y) / so;
+    setZoom(z);
+    setOff(clampOff(fw / 2 - cx * sn, fh / 2 - cy * sn, z));
+  };
+  const onDown = (e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = { px: e.clientX, py: e.clientY, ox: off.x, oy: off.y }; };
+  const onMove = (e) => { const d = drag.current; if (d && nat) setOff(clampOff(d.ox + e.clientX - d.px, d.oy + e.clientY - d.py, zoom)); };
+  const onUp = () => { drag.current = null; };
+
+  const apply = () => {
+    if (!nat || !fw) return;
+    const k = OUT_W / fw, sc = baseScale * zoom;
+    const canvas = document.createElement("canvas");
+    canvas.width = OUT_W; canvas.height = OUT_H;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, OUT_W, OUT_H);
+    ctx.drawImage(imgRef.current, off.x * k, off.y * k, nat.w * sc * k, nat.h * sc * k);
+    canvas.toBlob((b) => { if (b) onApply(new File([b], "recipe-crop.jpg", { type: "image/jpeg" })); }, "image/jpeg", 0.85);
+  };
+
+  const sc = baseScale * zoom;
+  return (
+    <div className="modalBack" onClick={onCancel}>
+      <div className="modal recipeCrop" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Recortar foto</h2><button type="button" onClick={onCancel}><X/></button></div>
+        <div className="recipeCropFrame" ref={frameRef} style={{ height: fh || undefined }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+          {src && <img ref={imgRef} src={src} alt="" draggable={false}
+            onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            style={nat ? { width: nat.w * sc, height: nat.h * sc, left: off.x, top: off.y } : { visibility: "hidden" }}/>}
+        </div>
+        <small>Arraste a foto para escolher a parte que aparece. Use o zoom para aproximar ou afastar.</small>
+        <div className="recipeCropZoom">
+          <button type="button" className="ghost" onClick={() => changeZoom(zoom - 0.2)}><ZoomOut size={14}/></button>
+          <input type="range" min={fitZoom} max="4" step="0.01" value={zoom} onChange={e => changeZoom(Number(e.target.value))}/>
+          <button type="button" className="ghost" onClick={() => changeZoom(zoom + 0.2)}><ZoomIn size={14}/></button>
+        </div>
+        <div className="modalActions" style={{ justifyContent: "flex-start" }}>
+          <button type="button" className="ghost" onClick={() => { setZoom(1); setOff(center(1)); }}><Maximize2 size={13}/> Preencher</button>
+          <button type="button" className="ghost" onClick={() => { setZoom(fitZoom); setOff(center(fitZoom)); }}><Minimize2 size={13}/> Foto inteira</button>
+        </div>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onCancel}>Cancelar</button>
+          <button type="button" className="add" disabled={!nat} onClick={apply}><Check size={16}/> Usar foto</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   // Rascunho: guarda o que está sendo digitado no IndexedDB (mesmo esquema dos flashcards) pra não perder se fechar sem salvar.
   const draftKey = recipe?.id ? `recipe_draft:${recipe.id}` : "recipe_draft:new";
@@ -9742,6 +9825,9 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   const [imageFile, setImageFile] = useState(null);
   const [imageRemoved, setImageRemoved] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
+  const [rawFile, setRawFile] = useState(null);     // foto original escolhida (para recortar de novo)
+  const [cropOpen, setCropOpen] = useState(false);
+  const croppedRef = useRef(false);                 // imageFile já saiu do recorte (tamanho final)
   const imageInputRef = useRef(null);
   const [filePreview, setFilePreview] = useState(null);
   useEffect(() => {
@@ -9843,10 +9929,10 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
       setImageBusy(true);
       try {
         if (cloud) {
-          const blob = await resizeImageToBlob(imageFile, 1000, 1000, 0.85);
+          const blob = croppedRef.current ? imageFile : await resizeImageToBlob(imageFile, 1000, 1000, 0.85);
           image = await uploadRecipeImage(session.user.id, recipeId.current, blob);
         } else {
-          image = await resizeImageToDataUrl(imageFile, 1000, 1000, 0.82);
+          image = croppedRef.current ? await fileToRawDataUrl(imageFile) : await resizeImageToDataUrl(imageFile, 1000, 1000, 0.82);
         }
       } catch (e) {
         console.error(e);
@@ -9873,6 +9959,7 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   };
 
   return (
+    <>
     <div className="modalBack" onClick={onClose}>
       <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>{recipe ? "Editar receita" : "Nova receita"}</h2><button type="button" onClick={onClose}><X/></button></div>
@@ -9891,10 +9978,11 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
           {imagePreview && <img className="recipeThumb" alt="" referrerPolicy="no-referrer" src={imagePreview} onError={(e) => { e.currentTarget.style.opacity = 0.3; }}/>}
           <div className="recipeImageActions">
             <button type="button" className="ghost" onClick={() => imageInputRef.current?.click()}><ImagePlus size={13}/> {imagePreview ? "Trocar foto" : "Escolher foto do aparelho"}</button>
-            {imagePreview && <button type="button" className="ghost" onClick={() => { setImageFile(null); setImageLink(""); setImageRemoved(true); }}><X size={13}/> Remover foto</button>}
-            <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setImageFile(f); setImageLink(""); setImageRemoved(false); } }}/>
+            {rawFile && imageFile && <button type="button" className="ghost" onClick={() => setCropOpen(true)}><Maximize2 size={13}/> Recortar / ajustar</button>}
+            {imagePreview && <button type="button" className="ghost" onClick={() => { setImageFile(null); setRawFile(null); setImageLink(""); setImageRemoved(true); }}><X size={13}/> Remover foto</button>}
+            <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setRawFile(f); setCropOpen(true); } }}/>
           </div>
-          <input value={imageLink} onChange={e => { setImageLink(e.target.value); setImageFile(null); setImageRemoved(false); }} placeholder="Ou cole o link de uma imagem (https://...)"/>
+          <input value={imageLink} onChange={e => { setImageLink(e.target.value); setImageFile(null); setRawFile(null); setImageRemoved(false); }} placeholder="Ou cole o link de uma imagem (https://...)"/>
           {!imagePreview && youtubeVideoId(link) && <small>Sem foto, a capa será a miniatura do vídeo.</small>}
         </div>
 
@@ -9918,6 +10006,14 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
         </div>
       </div>
     </div>
+    {cropOpen && rawFile && (
+      <RecipeCropDialog
+        file={rawFile}
+        onCancel={() => { setCropOpen(false); if (!imageFile) setRawFile(null); }}
+        onApply={(f) => { croppedRef.current = true; setImageFile(f); setImageLink(""); setImageRemoved(false); setCropOpen(false); }}
+      />
+    )}
+    </>
   );
 }
 
