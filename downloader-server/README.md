@@ -48,3 +48,12 @@ Depois coloque o endereço `https://...` e a mesma chave em **Configurar servido
 - Use apenas para conteúdo que você tem o direito de baixar. Baixar vídeos de alguns sites (como o YouTube) vai contra os
   termos de uso deles.
 - Os arquivos prontos são apagados sozinhos após `JOB_TTL_MIN` minutos.
+
+## Problemas na instalação
+
+- **`Microsoft Visual C++ 14.0 or greater is required` / `Failed building wheel for pyyaml`:** o pip tentou compilar um
+  pacote porque seu Python é muito novo e ainda não tem versão pronta dele. Este `requirements.txt` já não usa o pacote
+  que causava isso (`uvicorn[standard]`). Se mesmo assim aparecer erro parecido com outro pacote, instale o
+  **Python 3.12 ou 3.13** (python.org/downloads, marcando "Add python.exe to PATH") e rode a instalação de novo.
+- **`pip` ou `python` não é reconhecido:** reinstale o Python marcando "Add python.exe to PATH", ou use `py` no lugar de `python`.
+- **`ffmpeg` não é reconhecido:** feche e abra o terminal depois de instalar (`winget install ffmpeg`).
