@@ -2307,6 +2307,157 @@ function cropImageToCover(file, tw, th, pos = 50, asBlob = true, quality = 0.85)
 }
 const FOLDER_COVER_W = 1120, FOLDER_COVER_H = 264; // mesma proporção do cartão da pasta (560 x 132)
 
+// ---------- Recorte de imagem (estilo editor de prints do celular) ----------
+// cropImage(file, opts) abre a tela de recorte por cima do app e devolve (Promise) um File JPEG já recortado e
+// redimensionado, ou null se a pessoa cancelar. opts: { aspect (largura/altura inicial; null = livre), aspectLabel,
+// lock (não deixa trocar a proporção), outW/outH (tamanho exato), maxW/maxH (limite do lado maior), quality, title }.
+const CROP_PRESETS = [{ label: "Livre", v: null }, { label: "1:1", v: 1 }, { label: "3:4", v: 3 / 4 }, { label: "4:3", v: 4 / 3 }, { label: "16:9", v: 16 / 9 }];
+const CROP_MIN = 48;
+const CROP_COVER_PORTRAIT = { aspect: 3 / 4, aspectLabel: "Capa", maxW: 360, maxH: 480, quality: 0.92 };
+const CROP_PHOTO = { maxW: 480, maxH: 480, quality: 0.92 };
+
+function applyCropDrag(type, s, dx, dy, vw, vh, a) {
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  if (type === "move") return { ...s, x: clamp(s.x + dx, 0, vw - s.w), y: clamp(s.y + dy, 0, vh - s.h) };
+  let l = s.x, t = s.y, r = s.x + s.w, b = s.y + s.h;
+  const hasW = type.includes("w"), hasE = type.includes("e"), hasN = type.includes("n"), hasS = type.includes("s");
+  if (!a) {
+    if (hasW) l = clamp(l + dx, 0, r - CROP_MIN);
+    if (hasE) r = clamp(r + dx, l + CROP_MIN, vw);
+    if (hasN) t = clamp(t + dy, 0, b - CROP_MIN);
+    if (hasS) b = clamp(b + dy, t + CROP_MIN, vh);
+    return { x: l, y: t, w: r - l, h: b - t };
+  }
+  const cx = s.x + s.w / 2, cy = s.y + s.h / 2;
+  if ((hasW || hasE) && (hasN || hasS)) { // canto: o canto oposto fica parado
+    const ax = hasW ? r : l, ay = hasN ? b : t;
+    const nw = hasW ? ax - (l + dx) : (r + dx) - ax;
+    const nh = hasN ? ay - (t + dy) : (b + dy) - ay;
+    const maxW = Math.min(hasW ? ax : vw - ax, (hasN ? ay : vh - ay) * a);
+    const w = clamp((nw + nh * a) / 2, Math.min(CROP_MIN, maxW), maxW);
+    const h = w / a;
+    return { x: hasW ? ax - w : ax, y: hasN ? ay - h : ay, w, h };
+  }
+  if (hasE || hasW) { // borda lateral: muda a largura e a altura acompanha, centrada
+    const ax = hasW ? r : l;
+    const maxW = Math.min(hasW ? ax : vw - ax, vh * a);
+    const w = clamp(hasW ? ax - (l + dx) : (r + dx) - ax, Math.min(CROP_MIN, maxW), maxW);
+    const h = w / a;
+    return { x: hasW ? ax - w : ax, y: clamp(cy - h / 2, 0, vh - h), w, h };
+  }
+  const ay = hasN ? b : t; // borda de cima/baixo
+  const maxH = Math.min(hasN ? ay : vh - ay, vw / a);
+  const h = clamp(hasN ? ay - (t + dy) : (b + dy) - ay, Math.min(CROP_MIN / a, maxH), maxH);
+  const w = h * a;
+  return { x: clamp(cx - w / 2, 0, vw - w), y: hasN ? ay - h : ay, w, h };
+}
+
+function ImageCropDialog({ file, aspect: aspect0 = null, aspectLabel = "Capa", lock = false, outW, outH, maxW = 1000, maxH = 1000, quality = 0.9, title = "Recortar foto", onDone }) {
+  const [src, setSrc] = useState(null);
+  const [nat, setNat] = useState(null);          // tamanho real da foto
+  const [view, setView] = useState({ w: 0, h: 0 }); // tamanho da foto na tela
+  const [aspect, setAspect] = useState(aspect0);
+  const [rect, setRect] = useState(null);        // área recortada, em pixels da tela
+  const imgRef = useRef(null), drag = useRef(null), prevView = useRef(null);
+  const presets = useMemo(() => (aspect0 && !CROP_PRESETS.some(p => p.v === aspect0) ? [{ label: aspectLabel, v: aspect0 }, ...CROP_PRESETS] : CROP_PRESETS), [aspect0, aspectLabel]);
+
+  useEffect(() => { const u = URL.createObjectURL(file); setSrc(u); return () => URL.revokeObjectURL(u); }, [file]);
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setView({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [src]);
+
+  const fitRect = (a, vw, vh, cx = vw / 2, cy = vh / 2) => {
+    const w = a ? Math.min(vw, vh * a) * 0.9 : vw * 0.9;
+    const h = a ? w / a : vh * 0.9;
+    return { x: Math.min(Math.max(0, cx - w / 2), vw - w), y: Math.min(Math.max(0, cy - h / 2), vh - h), w, h };
+  };
+  useEffect(() => {
+    if (!nat || !view.w || !view.h) return;
+    const pv = prevView.current;
+    prevView.current = view;
+    if (!rect || !pv || !pv.w) setRect(fitRect(aspect, view.w, view.h));
+    else setRect({ x: rect.x * view.w / pv.w, y: rect.y * view.h / pv.h, w: rect.w * view.w / pv.w, h: rect.h * view.h / pv.h });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nat, view.w, view.h]);
+
+  const chooseAspect = (v) => {
+    setAspect(v);
+    if (v && rect && view.w) setRect(fitRect(v, view.w, view.h, rect.x + rect.w / 2, rect.y + rect.h / 2));
+  };
+  const startDrag = (type) => (e) => {
+    if (!rect) return;
+    e.preventDefault(); e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { type, px: e.clientX, py: e.clientY, r: rect };
+  };
+  const onMove = (e) => {
+    const d = drag.current;
+    if (d) setRect(applyCropDrag(d.type, d.r, e.clientX - d.px, e.clientY - d.py, view.w, view.h, aspect));
+  };
+  const endDrag = () => { drag.current = null; };
+  const dragProps = (type) => ({ onPointerDown: startDrag(type), onPointerMove: onMove, onPointerUp: endDrag, onPointerCancel: endDrag });
+
+  const apply = () => {
+    const el = imgRef.current;
+    if (!el || !rect || !nat || !view.w) return;
+    const k = nat.w / view.w;
+    const sx = Math.max(0, rect.x * k), sy = Math.max(0, rect.y * k);
+    const sw = Math.min(nat.w - sx, rect.w * k), sh = Math.min(nat.h - sy, rect.h * k);
+    let ow, oh;
+    if (outW && outH) { ow = outW; oh = outH; }
+    else { const sc = Math.min(1, maxW / sw, maxH / sh); ow = Math.max(1, Math.round(sw * sc)); oh = Math.max(1, Math.round(sh * sc)); }
+    const canvas = document.createElement("canvas");
+    canvas.width = ow; canvas.height = oh;
+    canvas.getContext("2d").drawImage(el, sx, sy, sw, sh, 0, 0, ow, oh);
+    canvas.toBlob((b) => onDone(b ? new File([b], "crop.jpg", { type: "image/jpeg" }) : null), "image/jpeg", quality);
+  };
+
+  return (
+    <div className="modalBack" onClick={() => onDone(null)}>
+      <div className="modal cropDialog" style={{ width: "min(620px,100%)" }} onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>{title}</h2><button type="button" onClick={() => onDone(null)}><X/></button></div>
+        <div className="cropStage">
+          <div className="cropWrap">
+            {src && <img ref={imgRef} src={src} alt="" draggable={false}
+              onLoad={(e) => { const el = e.currentTarget; setNat({ w: el.naturalWidth, h: el.naturalHeight }); setView({ w: el.clientWidth, h: el.clientHeight }); }}/>}
+            {rect && (
+              <div className="cropRect" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} {...dragProps("move")}>
+                {["nw", "ne", "sw", "se", "n", "s", "w", "e"].map(h => <span key={h} className={"cropHandle " + h} {...dragProps(h)}/>)}
+              </div>
+            )}
+          </div>
+        </div>
+        {lock ? (
+          <small>Proporção fixa da capa. Arraste as bordas e os cantos para escolher a área e mova a seleção sobre a foto.</small>
+        ) : (
+          <div className="cropAspects">
+            {presets.map(p => <button key={p.label} type="button" className={"ghost" + (aspect === p.v ? " active" : "")} onClick={() => chooseAspect(p.v)}>{p.label}</button>)}
+          </div>
+        )}
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={() => onDone(null)}>Cancelar</button>
+          <button type="button" className="add" disabled={!rect} onClick={apply}><Check size={16}/> Usar foto</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function cropImage(file, opts = {}) {
+  if (!file) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const done = (result) => { root.unmount(); host.remove(); resolve(result); };
+    root.render(<ImageCropDialog file={file} {...opts} onDone={done}/>);
+  });
+}
+
 // Lê um arquivo (ex.: GIF) como data URL sem reprocessar em canvas — usar canvas
 // "achataria" um GIF animado numa única imagem estática, então aqui é leitura crua.
 function fileToRawDataUrl(file) {
@@ -4438,6 +4589,8 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
   };
 
   const handleSetGroupCover = async (group, file) => {
+    file = await cropImage(file, CROP_COVER_PORTRAIT);
+    if (!file) return;
     setOpenMenuId(null);
     try {
       if (cloudConfigured && session?.user?.id) {
@@ -7450,6 +7603,8 @@ function StudyPdfShelf({ entity, session, flashcards, groupsEntity, studyGoals, 
   };
 
   const handleSetGroupCover = async (group, file) => {
+    file = await cropImage(file, CROP_COVER_PORTRAIT);
+    if (!file) return;
     setOpenMenuId(null);
     try {
       if (cloudConfigured && session?.user?.id) {
@@ -9358,6 +9513,8 @@ function ShoppingItemModal({ item, session, onClose, onSave }) {
   const fileRef = useRef(null);
 
   const handleFile = async (file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     if (!file) return;
     setUploading(true);
     try {
@@ -9726,89 +9883,6 @@ function RecipeImportModal({ onClose, onImport }) {
 
 const recipeDraftHasContent = (d) => !!(d && [d.title, d.link, d.ingText, d.steps, d.notes].some(v => String(v || "").trim()));
 
-// Recortar/ajustar a foto da receita no formato da capa (16:9): arraste para escolher a parte que aparece e use o zoom
-// para aproximar ou deixar a foto inteira. A imagem final já é gravada no tamanho certo.
-function RecipeCropDialog({ file, onCancel, onApply }) {
-  const OUT_W = 1000, OUT_H = 563; // 16:9
-  const [src, setSrc] = useState(null);
-  const [nat, setNat] = useState(null);   // { w, h } da foto
-  const [fw, setFw] = useState(0);        // largura da moldura na tela
-  const [zoom, setZoom] = useState(1);    // 1 = preenche a moldura
-  const [off, setOff] = useState({ x: 0, y: 0 });
-  const frameRef = useRef(null), imgRef = useRef(null), drag = useRef(null);
-  const fh = (fw * OUT_H) / OUT_W;
-  useEffect(() => { const u = URL.createObjectURL(file); setSrc(u); return () => URL.revokeObjectURL(u); }, [file]);
-  useEffect(() => {
-    const el = frameRef.current;
-    if (!el) return;
-    const f = () => setFw(el.clientWidth);
-    f();
-    const ro = new ResizeObserver(f);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const baseScale = nat && fw ? Math.max(fw / nat.w, fh / nat.h) : 1;
-  const fitZoom = nat && fw ? Math.min(fw / nat.w, fh / nat.h) / baseScale : 1; // foto inteira dentro da moldura
-  const clampOff = (x, y, z) => {
-    const dw = nat.w * baseScale * z, dh = nat.h * baseScale * z;
-    return { x: Math.min(Math.max(0, fw - dw), Math.max(Math.min(0, fw - dw), x)), y: Math.min(Math.max(0, fh - dh), Math.max(Math.min(0, fh - dh), y)) };
-  };
-  const center = (z) => { const dw = nat.w * baseScale * z, dh = nat.h * baseScale * z; return clampOff((fw - dw) / 2, (fh - dh) / 2, z); };
-  useEffect(() => { if (nat && fw) { setZoom(1); setOff(center(1)); } /* eslint-disable-next-line */ }, [nat, fw > 0]);
-  useEffect(() => { if (nat && fw) setOff(o => clampOff(o.x, o.y, zoom)); /* eslint-disable-next-line */ }, [fw]);
-
-  const changeZoom = (z) => {
-    if (!nat || !fw) return;
-    z = Math.min(4, Math.max(fitZoom, z));
-    const so = baseScale * zoom, sn = baseScale * z;
-    const cx = (fw / 2 - off.x) / so, cy = (fh / 2 - off.y) / so;
-    setZoom(z);
-    setOff(clampOff(fw / 2 - cx * sn, fh / 2 - cy * sn, z));
-  };
-  const onDown = (e) => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = { px: e.clientX, py: e.clientY, ox: off.x, oy: off.y }; };
-  const onMove = (e) => { const d = drag.current; if (d && nat) setOff(clampOff(d.ox + e.clientX - d.px, d.oy + e.clientY - d.py, zoom)); };
-  const onUp = () => { drag.current = null; };
-
-  const apply = () => {
-    if (!nat || !fw) return;
-    const k = OUT_W / fw, sc = baseScale * zoom;
-    const canvas = document.createElement("canvas");
-    canvas.width = OUT_W; canvas.height = OUT_H;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, OUT_W, OUT_H);
-    ctx.drawImage(imgRef.current, off.x * k, off.y * k, nat.w * sc * k, nat.h * sc * k);
-    canvas.toBlob((b) => { if (b) onApply(new File([b], "recipe-crop.jpg", { type: "image/jpeg" })); }, "image/jpeg", 0.85);
-  };
-
-  const sc = baseScale * zoom;
-  return (
-    <div className="modalBack" onClick={onCancel}>
-      <div className="modal recipeCrop" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
-        <div className="modalHead"><h2>Recortar foto</h2><button type="button" onClick={onCancel}><X/></button></div>
-        <div className="recipeCropFrame" ref={frameRef} style={{ height: fh || undefined }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
-          {src && <img ref={imgRef} src={src} alt="" draggable={false}
-            onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-            style={nat ? { width: nat.w * sc, height: nat.h * sc, left: off.x, top: off.y } : { visibility: "hidden" }}/>}
-        </div>
-        <small>Arraste a foto para escolher a parte que aparece. Use o zoom para aproximar ou afastar.</small>
-        <div className="recipeCropZoom">
-          <button type="button" className="ghost" onClick={() => changeZoom(zoom - 0.2)}><ZoomOut size={14}/></button>
-          <input type="range" min={fitZoom} max="4" step="0.01" value={zoom} onChange={e => changeZoom(Number(e.target.value))}/>
-          <button type="button" className="ghost" onClick={() => changeZoom(zoom + 0.2)}><ZoomIn size={14}/></button>
-        </div>
-        <div className="modalActions" style={{ justifyContent: "flex-start" }}>
-          <button type="button" className="ghost" onClick={() => { setZoom(1); setOff(center(1)); }}><Maximize2 size={13}/> Preencher</button>
-          <button type="button" className="ghost" onClick={() => { setZoom(fitZoom); setOff(center(fitZoom)); }}><Minimize2 size={13}/> Foto inteira</button>
-        </div>
-        <div className="modalActions">
-          <button type="button" className="ghost" onClick={onCancel}>Cancelar</button>
-          <button type="button" className="add" disabled={!nat} onClick={apply}><Check size={16}/> Usar foto</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   // Rascunho: guarda o que está sendo digitado no IndexedDB (mesmo esquema dos flashcards) pra não perder se fechar sem salvar.
   const draftKey = recipe?.id ? `recipe_draft:${recipe.id}` : "recipe_draft:new";
@@ -9826,8 +9900,13 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   const [imageRemoved, setImageRemoved] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [rawFile, setRawFile] = useState(null);     // foto original escolhida (para recortar de novo)
-  const [cropOpen, setCropOpen] = useState(false);
   const croppedRef = useRef(false);                 // imageFile já saiu do recorte (tamanho final)
+  const pickRecipePhoto = async (f) => {
+    const c = await cropImage(f, { aspect: 16 / 9, aspectLabel: "Capa", maxW: 1000, maxH: 1000, quality: 0.9 });
+    if (!c) return;
+    croppedRef.current = true;
+    setRawFile(f); setImageFile(c); setImageLink(""); setImageRemoved(false);
+  };
   const imageInputRef = useRef(null);
   const [filePreview, setFilePreview] = useState(null);
   useEffect(() => {
@@ -9959,7 +10038,6 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
   };
 
   return (
-    <>
     <div className="modalBack" onClick={onClose}>
       <div className="modal" style={{ width: "min(560px,100%)" }} onClick={e => e.stopPropagation()}>
         <div className="modalHead"><h2>{recipe ? "Editar receita" : "Nova receita"}</h2><button type="button" onClick={onClose}><X/></button></div>
@@ -9978,9 +10056,9 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
           {imagePreview && <img className="recipeThumb" alt="" referrerPolicy="no-referrer" src={imagePreview} onError={(e) => { e.currentTarget.style.opacity = 0.3; }}/>}
           <div className="recipeImageActions">
             <button type="button" className="ghost" onClick={() => imageInputRef.current?.click()}><ImagePlus size={13}/> {imagePreview ? "Trocar foto" : "Escolher foto do aparelho"}</button>
-            {rawFile && imageFile && <button type="button" className="ghost" onClick={() => setCropOpen(true)}><Maximize2 size={13}/> Recortar / ajustar</button>}
+            {rawFile && imageFile && <button type="button" className="ghost" onClick={() => pickRecipePhoto(rawFile)}><Maximize2 size={13}/> Recortar / ajustar</button>}
             {imagePreview && <button type="button" className="ghost" onClick={() => { setImageFile(null); setRawFile(null); setImageLink(""); setImageRemoved(true); }}><X size={13}/> Remover foto</button>}
-            <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setRawFile(f); setCropOpen(true); } }}/>
+            <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickRecipePhoto(f); }}/>
           </div>
           <input value={imageLink} onChange={e => { setImageLink(e.target.value); setImageFile(null); setRawFile(null); setImageRemoved(false); }} placeholder="Ou cole o link de uma imagem (https://...)"/>
           {!imagePreview && youtubeVideoId(link) && <small>Sem foto, a capa será a miniatura do vídeo.</small>}
@@ -10006,14 +10084,6 @@ function RecipeFormModal({ recipe, aiAvailable, session, onClose, onSave }) {
         </div>
       </div>
     </div>
-    {cropOpen && rawFile && (
-      <RecipeCropDialog
-        file={rawFile}
-        onCancel={() => { setCropOpen(false); if (!imageFile) setRawFile(null); }}
-        onApply={(f) => { croppedRef.current = true; setImageFile(f); setImageLink(""); setImageRemoved(false); setCropOpen(false); }}
-      />
-    )}
-    </>
   );
 }
 
@@ -10879,6 +10949,7 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
   const [id] = useState(() => folder?.id || crypto.randomUUID());
   const [name, setName] = useState(folder?.name || "");
   const [file, setFile] = useState(null);
+  const [raw, setRaw] = useState(null);   // foto original escolhida (para recortar de novo)
   const [preview, setPreview] = useState(null);
   const [removed, setRemoved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -10888,8 +10959,13 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   const shown = preview || (removed ? null : folder?.cover_image) || null;
-  const pick = (f) => { if (!f) return; setFile(f); setPreview(URL.createObjectURL(f)); setRemoved(false); setPos(50); setRatio(null); };
-  const clear = () => { setFile(null); setPreview(null); setRemoved(true); };
+  const pick = async (f) => {
+    if (!f) return;
+    const c = await cropImage(f, { aspect: FOLDER_COVER_W / FOLDER_COVER_H, aspectLabel: "Capa", lock: true, outW: FOLDER_COVER_W, outH: FOLDER_COVER_H, quality: 0.9, title: "Recortar capa" });
+    if (!c) return;
+    setRaw(f); setFile(c); setPreview(URL.createObjectURL(c)); setRemoved(false); setPos(50); setRatio(null);
+  };
+  const clear = () => { setFile(null); setRaw(null); setPreview(null); setRemoved(true); };
   const wide = ratio != null && ratio > FOLDER_COVER_W / FOLDER_COVER_H; // foto mais larga que a capa: ajusta na horizontal
   const submit = async () => {
     if (!name.trim() || saving) return;
@@ -10913,14 +10989,9 @@ function WorkoutFolderModal({ folder, onClose, onSave }) {
           </div>
         </div>
         <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; pick(f); }}/>
-        {file && (
-          <label>{wide ? "Posição da foto (esquerda ↔ direita)" : "Posição da foto (cima ↕ baixo)"}
-            <input type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}/>
-            <small>A foto é ajustada automaticamente ao tamanho da capa. Mova para escolher qual parte aparece.</small>
-          </label>
-        )}
         <div className="modalActions" style={{ justifyContent: "flex-start" }}>
           <button type="button" className="ghost" onClick={() => inputRef.current?.click()}><ImagePlus size={14}/> {shown ? "Trocar foto da capa" : "Colocar foto na capa"}</button>
+          {raw && file && <button type="button" className="ghost" onClick={() => pick(raw)}><Maximize2 size={13}/> Recortar / ajustar</button>}
           {shown && <button type="button" className="ghost" onClick={clear}><X size={13}/> Remover foto</button>}
         </div>
         <div className="modalActions">
@@ -11953,6 +12024,8 @@ function MediaShelf({ groupsEntity, itemsEntity, session }) {
   };
 
   const handleSetCover = async (group, file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     setOpenMenuId(null);
     try {
       if (cloudConfigured && session?.user?.id) {
@@ -12227,6 +12300,8 @@ function MediaItemForm({ item, kind, session, onCancel, onSave }) {
   const [seasons, setSeasons] = useState(item?.seasons?.length ? item.seasons : [{ season: 1, total_episodes: 0, current_episode: 0 }]);
 
   const handlePhotoFile = async (file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     if (!file) return;
     setUploadingPhoto(true);
     try {
@@ -12381,6 +12456,8 @@ function GameShelf({ groupsEntity, itemsEntity, session }) {
   };
 
   const handleSetCover = async (group, file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     setOpenMenuId(null);
     try {
       if (cloudConfigured && session?.user?.id) {
@@ -12601,6 +12678,8 @@ function GameItemForm({ item, session, onCancel, onSave }) {
   const photoInputRef = useRef(null);
 
   const handlePhotoFile = async (file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     if (!file) return;
     setUploadingPhoto(true);
     try {
@@ -13548,6 +13627,8 @@ function FlashcardListForm({ list, defaultFolderId, session, onCancel, onSave })
   };
 
   const handleRowImage = async (id, file) => {
+    file = await cropImage(file, CROP_PHOTO);
+    if (!file) return;
     if (!file) return;
     setUploadingId(id);
     try {
