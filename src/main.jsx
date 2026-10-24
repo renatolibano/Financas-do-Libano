@@ -26,8 +26,11 @@ import {
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
   Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
-  Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight
+  Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight,
+ Keyboard, ChevronsUpDown, PilcrowLeft, PilcrowRight,
+ Puzzle, PenLine, FileInput, Tag, Scale, MapPin, GitBranch, ShieldCheck, ChevronsLeft, ChevronsRight, BringToFront, SendToBack, Move, Contrast, LayoutTemplate, CircleHelp, TextCursorInput, Languages, ArrowDownRight, BookOpenText, BookType, SlidersHorizontal, Mail, ListChecks, PanelLeft, BookText
 } from "lucide-react";
+import { recognizeHandwriting } from "./lib/handwriting";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
@@ -17119,6 +17122,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const keepFocus = (e) => e.preventDefault();
 
   const exec = (command, value = null) => {
+    if (wordMacroRec) wordMacroRec.push([command, value]);
     bodyRef.current?.focus();
     document.execCommand(command, false, value);
     onChange();
@@ -18259,6 +18263,13 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   };
 
   const handleBodyClick = (e) => {
+    const tofRefresh = e.target.closest?.(".word-tof-refresh");
+    if (tofRefresh && bodyRef.current?.contains(tofRefresh)) {
+      e.preventDefault();
+      insertTableOfFigures(tofRefresh.closest(".word-tof")?.dataset.label || "Figura");
+      return;
+    }
+    if (handleContentControlClick(e) || handleContentControlClick2(e) || handleBlockRefreshClick(e)) return;
     const tocRefresh = e.target.closest?.(".word-toc-refresh");
     if (tocRefresh && bodyRef.current?.contains(tocRefresh)) {
       e.preventDefault();
@@ -18287,6 +18298,535 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     }
   };
 
+  // ---- Referências: legendas e índice de ilustrações / Desenvolvedor:
+  // controles de conteúdo / notas de rodapé (navegação) ----
+  const escHtml = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+
+  const renumberCaptions = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const counts = {};
+    el.querySelectorAll(".word-caption").forEach(c => {
+      const label = c.dataset.label || "Figura";
+      counts[label] = (counts[label] || 0) + 1;
+      const num = c.querySelector(".word-caption-num");
+      if (num) num.textContent = String(counts[label]);
+    });
+  };
+
+  // Figura/Equação entram abaixo do bloco atual (ou da imagem selecionada);
+  // Tabela entra acima, igual ao Word.
+  const insertCaption = (label, imgEl) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    let block = null;
+    if (imgEl && el.contains(imgEl)) block = findTopLevelChild(el, imgEl);
+    if (!block && sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) block = findTopLevelChild(el, sel.getRangeAt(0).endContainer);
+    const p = document.createElement("p");
+    p.className = "word-caption";
+    p.dataset.label = label;
+    p.id = "word-cap-" + Date.now().toString(36);
+    p.innerHTML = `${label} <span class="word-caption-num">1</span>:\u00A0`;
+    if (block && block.parentNode === el) { if (label === "Tabela") block.before(p); else block.after(p); }
+    else el.append(p);
+    renumberCaptions();
+    const r = document.createRange();
+    r.selectNodeContents(p);
+    r.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+    onChange();
+  };
+
+  const insertTableOfFigures = (label = "Figura") => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const caps = Array.from(el.querySelectorAll(`.word-caption[data-label="${label}"]`));
+    const body = caps.length
+      ? caps.map(c => { if (!c.id) c.id = "word-cap-" + Math.random().toString(36).slice(2, 8); return `<a class="word-tof-entry" href="#${c.id}">${escHtml(c.textContent || "")}</a>`; }).join("")
+      : `<p class="word-toc-empty">Nenhuma legenda do tipo "${label}" encontrada. Use Referências &gt; Inserir Legenda.</p>`;
+    let tof = el.querySelector(`:scope > .word-tof[data-label="${label}"]`);
+    if (tof) {
+      const bodyEl = tof.querySelector(".word-tof-body");
+      if (bodyEl) bodyEl.innerHTML = body;
+      onChange();
+      return;
+    }
+    const title = label === "Figura" ? "Índice de Ilustrações" : label === "Tabela" ? "Índice de Tabelas" : "Índice de Equações";
+    tof = document.createElement("div");
+    tof.className = "word-tof";
+    tof.dataset.label = label;
+    tof.setAttribute("contenteditable", "false");
+    tof.innerHTML = `<div class="word-tof-head"><b>${title}</b><button type="button" class="word-tof-refresh">Atualizar índice</button></div><div class="word-tof-body">${body}</div>`;
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(tof); }
+      else el.append(tof, after);
+    } else {
+      el.append(tof, after);
+    }
+    onChange();
+  };
+
+  const refreshAllTablesOfFigures = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.querySelectorAll(":scope > .word-tof").forEach(t => insertTableOfFigures(t.dataset.label || "Figura"));
+  };
+
+  const nextFootnote = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const refs = Array.from(el.querySelectorAll(".word-footnote-ref"));
+    if (!refs.length) return;
+    const sel = window.getSelection();
+    let target = refs[0];
+    if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+      const cur = sel.getRangeAt(0).endContainer;
+      target = refs.find(r => (cur.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING) && !r.contains(cur)) || refs[0];
+    }
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    const r = document.createRange();
+    r.selectNode(target);
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+  };
+
+  const showFootnotes = () => {
+    bodyRef.current?.querySelector(".word-footnotes")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+
+  // Aba Desenvolvedor — controles de conteúdo simples (texto, caixa de
+  // seleção, lista suspensa, data). Ficam como <span class="word-cc">.
+  const insertContentControl = (kind) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    let html = "";
+    if (kind === "rich" || kind === "plain") {
+      html = `<span class="word-cc word-cc-text word-cc-ph" data-cc="${kind}">Clique ou toque aqui para inserir texto.</span>&nbsp;`;
+    } else if (kind === "check") {
+      html = `<span class="word-cc word-cc-check" data-cc="check" data-checked="0" contenteditable="false">\u2610</span>&nbsp;`;
+    } else if (kind === "dropdown") {
+      const raw = window.prompt("Opções da lista suspensa (separadas por vírgula):", "Opção 1, Opção 2, Opção 3");
+      if (raw === null) return;
+      const opts = raw.split(",").map(s => s.trim()).filter(Boolean);
+      if (!opts.length) return;
+      html = `<span class="word-cc word-cc-dropdown" data-cc="dropdown" data-options="${escHtml(opts.join("|"))}" contenteditable="false">Escolha um item</span>&nbsp;`;
+    } else if (kind === "date") {
+      html = `<span class="word-cc word-cc-date" data-cc="date" contenteditable="false">Clique ou toque para inserir uma data.</span>&nbsp;`;
+    }
+    if (html) exec("insertHTML", html);
+  };
+
+  const handleContentControlClick = (e) => {
+    const cc = e.target.closest?.(".word-cc");
+    if (!cc || !bodyRef.current?.contains(cc)) return false;
+    if (cc.classList.contains("word-cc-check")) {
+      e.preventDefault();
+      const on = cc.dataset.checked !== "1";
+      cc.dataset.checked = on ? "1" : "0";
+      cc.textContent = on ? "\u2612" : "\u2610";
+      onChange();
+      return true;
+    }
+    if (cc.classList.contains("word-cc-dropdown")) {
+      e.preventDefault();
+      const opts = (cc.dataset.options || "").split("|").filter(Boolean);
+      if (!opts.length) return true;
+      const cur = opts.indexOf(cc.textContent);
+      cc.textContent = opts[(cur + 1) % opts.length];
+      onChange();
+      return true;
+    }
+    if (cc.classList.contains("word-cc-date")) {
+      e.preventDefault();
+      const inp = document.createElement("input");
+      inp.type = "date";
+      const r = cc.getBoundingClientRect();
+      inp.style.cssText = `position:fixed;left:${r.left}px;top:${r.bottom}px;opacity:0;pointer-events:none`;
+      document.body.appendChild(inp);
+      inp.addEventListener("change", () => {
+        if (inp.value) {
+          const [y, m, d] = inp.value.split("-");
+          cc.textContent = `${d}/${m}/${y}`;
+          onChange();
+        }
+        inp.remove();
+      });
+      inp.addEventListener("blur", () => setTimeout(() => inp.remove(), 200));
+      try { inp.showPicker(); } catch { inp.focus(); inp.click(); }
+      return true;
+    }
+    if (cc.classList.contains("word-cc-ph")) {
+      const range = document.createRange();
+      range.selectNodeContents(cc);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      cc.classList.remove("word-cc-ph");
+      return true;
+    }
+    return false;
+  };
+
+  // ====================================================================
+  // Extras no padrão wordcraft: fonte (guia fonético/bordas), notas de fim,
+  // citações e bibliografia, índice remissivo, tabela de autoridades,
+  // partes rápidas, gráficos, estrutura de tópicos e mais controles.
+  // ====================================================================
+  const wrapSel = (fn, tag = "span") => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+    el.focus();
+    const range = sel.getRangeAt(0);
+    const node = document.createElement(tag);
+    fn(node);
+    try {
+      node.appendChild(range.extractContents());
+      range.insertNode(node);
+      sel.removeAllRanges();
+      const r = document.createRange();
+      r.selectNodeContents(node);
+      sel.addRange(r);
+      onChange();
+      return true;
+    } catch { return false; }
+  };
+  const phoneticGuide = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { alert("Selecione o texto que receberá o guia fonético."); return; }
+    const guide = window.prompt("Texto do guia fonético (aparece acima do texto selecionado):", "");
+    if (!guide) return;
+    exec("insertHTML", `<ruby>${escHtml(sel.toString())}<rt>${escHtml(guide)}</rt></ruby>`);
+  };
+  const charBorder = () => wrapSel(n => { n.style.border = "1px solid currentColor"; n.style.padding = "0 2px"; });
+  const encloseChars = (shape) => wrapSel(n => { n.style.border = "1px solid currentColor"; n.style.padding = "0 4px"; n.style.borderRadius = shape === "circle" ? "50%" : shape === "round" ? "6px" : "0"; });
+  const underlineStyle = (style) => wrapSel(n => { n.style.textDecoration = style === "single" ? "underline" : `underline ${style}`; });
+
+  const toRoman = (num) => {
+    const map = [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]];
+    let n = num, out = "";
+    for (const [v, s] of map) { while (n >= v) { out += s; n -= v; } }
+    return out;
+  };
+  const insertAtCaret = (node) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else el.appendChild(node);
+  };
+  const insertEndnote = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const note = window.prompt("Texto da nota de fim:", "");
+    if (note === null) return;
+    const num = el.querySelectorAll(".word-endnote-ref").length + 1;
+    const ref = document.createElement("sup");
+    ref.className = "word-endnote-ref";
+    ref.dataset.en = String(num);
+    ref.textContent = toRoman(num);
+    ref.setAttribute("contenteditable", "false");
+    insertAtCaret(ref);
+    let box = el.querySelector(":scope > .word-endnotes");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "word-endnotes";
+      box.setAttribute("contenteditable", "false");
+      box.innerHTML = '<hr class="word-footnotes-rule"/><b>Notas de Fim</b><ol class="word-endnotes-list" type="i"></ol>';
+      el.appendChild(box);
+    }
+    const li = document.createElement("li");
+    li.dataset.en = String(num);
+    li.textContent = note;
+    box.querySelector("ol").appendChild(li);
+    onChange();
+  };
+  const showEndnotes = () => { bodyRef.current?.querySelector(".word-endnotes")?.scrollIntoView({ block: "center", behavior: "smooth" }); };
+
+  // ---- fontes, citações e bibliografia (lista mestra, igual ao Word) ----
+  const loadSources = () => { try { return JSON.parse(localStorage.getItem(WORD_SOURCES_KEY) || "[]"); } catch { return []; } };
+  const saveSources = (list) => { try { localStorage.setItem(WORD_SOURCES_KEY, JSON.stringify(list)); } catch {} };
+  const splitAuthor = (a) => {
+    const s = (a || "").trim();
+    if (s.includes(",")) { const [last, ...rest] = s.split(","); return { last: last.trim(), first: rest.join(",").trim() }; }
+    const parts = s.split(/\s+/);
+    return { last: parts.pop() || "", first: parts.join(" ") };
+  };
+  const citeText = (s, style) => { const { last } = splitAuthor(s.author); return style === "apa" ? `(${last}, ${s.year || "s.d."})` : `(${last.toUpperCase()}, ${s.year || "s.d."})`; };
+  const insertCitation = (src, style) => {
+    exec("insertHTML", `<span class="word-citation" data-src="${escHtml(src.id)}" contenteditable="false">${escHtml(citeText(src, style))}</span>&nbsp;`);
+  };
+  const bibEntry = (s, style) => {
+    const { last, first } = splitAuthor(s.author);
+    const init = first.split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase() + ".").join(" ");
+    if (style === "apa") return `${escHtml(last)}${init ? ", " + escHtml(init) : ""} (${escHtml(s.year || "s.d.")}). <i>${escHtml(s.title)}</i>.${s.publisher ? " " + escHtml(s.publisher) + "." : ""}${s.url ? " " + escHtml(s.url) : ""}`;
+    return `${escHtml(last.toUpperCase())}${first ? ", " + escHtml(first) : ""}. <b>${escHtml(s.title)}</b>.${s.publisher ? " " + escHtml(s.publisher) + "," : ""} ${escHtml(s.year || "s.d.")}.${s.url ? " Disponível em: " + escHtml(s.url) + "." : ""}`;
+  };
+  const upsertBlock = (cls, kind, title, bodyHtml, extra = {}) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    let blk = el.querySelector(`:scope > .${cls}`);
+    if (blk) { blk.querySelector(".word-block-body").innerHTML = bodyHtml; Object.entries(extra).forEach(([k, v]) => { blk.dataset[k] = v; }); onChange(); return; }
+    blk = document.createElement("div");
+    blk.className = "word-block " + cls;
+    blk.dataset.kind = kind;
+    Object.entries(extra).forEach(([k, v]) => { blk.dataset[k] = v; });
+    blk.setAttribute("contenteditable", "false");
+    blk.innerHTML = `<div class="word-block-head"><b>${title}</b><button type="button" class="word-block-refresh">Atualizar</button></div><div class="word-block-body">${bodyHtml}</div>`;
+    const after = document.createElement("div");
+    after.innerHTML = "<br>";
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).endContainer)) {
+      const top = findTopLevelChild(el, sel.getRangeAt(0).endContainer) || el.lastChild;
+      if (top && top.parentNode === el) { top.after(after); top.after(blk); } else el.append(blk, after);
+    } else el.append(blk, after);
+    onChange();
+  };
+  const insertBibliography = (style) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const st = style || el.querySelector(":scope > .word-bib")?.dataset.style || "abnt";
+    const all = loadSources();
+    const citedIds = new Set(Array.from(el.querySelectorAll(".word-citation")).map(c => c.dataset.src));
+    let list = all.filter(s => citedIds.has(s.id));
+    if (!list.length) list = all;
+    list = list.slice().sort((a, b) => splitAuthor(a.author).last.localeCompare(splitAuthor(b.author).last));
+    const body = list.length ? list.map(s => `<p class="word-bib-entry">${bibEntry(s, st)}</p>`).join("") : '<p class="word-toc-empty">Nenhuma fonte cadastrada. Use Referências &gt; Gerenciar Fontes.</p>';
+    upsertBlock("word-bib", "bib", st === "apa" ? "Referências" : "Referências Bibliográficas", body, { style: st });
+  };
+
+  // ---- índice remissivo ----
+  const markIndexEntry = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { alert("Selecione o texto que será marcado como entrada do índice."); return; }
+    const text = window.prompt("Entrada do índice:", sel.toString().trim());
+    if (!text) return;
+    wrapSel(n => { n.className = "word-xe"; n.dataset.xe = text; n.id = "word-xe-" + Math.random().toString(36).slice(2, 8); });
+  };
+  const insertIndex = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const entries = Array.from(el.querySelectorAll(".word-xe"));
+    const groups = {};
+    entries.forEach(x => { const t = x.dataset.xe || x.textContent || ""; (groups[t] = groups[t] || []).push(x); });
+    const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    let letter = "", body = "";
+    keys.forEach(k => {
+      const l = (k[0] || "").toUpperCase();
+      if (l !== letter) { letter = l; body += `<div class="word-index-letter">${escHtml(l)}</div>`; }
+      body += `<a class="word-index-entry" href="#${groups[k][0].id}">${escHtml(k)}${groups[k].length > 1 ? ` <small>(${groups[k].length} ocorrências)</small>` : ""}</a>`;
+    });
+    upsertBlock("word-index", "index", "Índice", body || '<p class="word-toc-empty">Nenhuma entrada marcada. Use Referências &gt; Marcar Entrada.</p>');
+  };
+
+  // ---- tabela de autoridades ----
+  const markAuthority = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { alert("Selecione a citação jurídica que será marcada."); return; }
+    const cat = window.prompt("Categoria (Casos, Leis, Tratados, Outras):", "Leis");
+    if (!cat) return;
+    wrapSel(n => { n.className = "word-ta"; n.dataset.cat = cat; n.dataset.ta = sel.toString().trim(); n.id = "word-ta-" + Math.random().toString(36).slice(2, 8); });
+  };
+  const insertAuthorities = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const groups = {};
+    el.querySelectorAll(".word-ta").forEach(x => { const c = x.dataset.cat || "Outras"; (groups[c] = groups[c] || []).push(x); });
+    let body = "";
+    Object.keys(groups).sort().forEach(c => {
+      body += `<div class="word-index-letter">${escHtml(c)}</div>`;
+      groups[c].forEach(x => { body += `<a class="word-index-entry" href="#${x.id}">${escHtml(x.dataset.ta || x.textContent || "")}</a>`; });
+    });
+    upsertBlock("word-auth", "auth", "Tabela de Autoridades", body || '<p class="word-toc-empty">Nenhuma citação marcada. Use Referências &gt; Marcar Citação.</p>');
+  };
+  const handleBlockRefreshClick = (e) => {
+    const btn = e.target.closest?.(".word-block-refresh");
+    if (!btn || !bodyRef.current?.contains(btn)) return false;
+    e.preventDefault();
+    const kind = btn.closest(".word-block")?.dataset.kind;
+    if (kind === "bib") insertBibliography();
+    else if (kind === "index") insertIndex();
+    else if (kind === "auth") insertAuthorities();
+    return true;
+  };
+
+  // ---- partes rápidas, assinatura, objeto, ícones ----
+  const loadQuickParts = () => { try { return JSON.parse(localStorage.getItem(WORD_QUICKPARTS_KEY) || "[]"); } catch { return []; } };
+  const insertQuickPart = (html) => exec("insertHTML", html);
+  const saveQuickPart = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !bodyRef.current?.contains(sel.anchorNode)) { alert("Selecione o conteúdo que será salvo na galeria de Partes Rápidas."); return; }
+    const name = window.prompt("Nome da parte rápida:", sel.toString().trim().slice(0, 30));
+    if (!name) return;
+    const div = document.createElement("div");
+    div.appendChild(sel.getRangeAt(0).cloneContents());
+    const list = loadQuickParts().filter(q => q.name !== name);
+    list.push({ name, html: div.innerHTML });
+    try { localStorage.setItem(WORD_QUICKPARTS_KEY, JSON.stringify(list)); } catch {}
+  };
+  const insertSignatureLine = () => exec("insertHTML", '<div class="word-signature"><span class="word-signature-x">✕</span><div class="word-signature-line"></div><div>Assinatura</div></div><p><br></p>');
+  const insertTextFromFile = () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".txt,.md,.csv,.html";
+    inp.onchange = async () => { const f = inp.files?.[0]; if (f) exec("insertText", await f.text()); };
+    inp.click();
+  };
+  const insertIcon = (glyph) => exec("insertHTML", `<span style="font-size:30px;line-height:1">${glyph}</span>&nbsp;`);
+
+  // ---- gráfico (SVG embutido) ----
+  const buildChartSvg = (type, title, labels, values) => {
+    const W = 460, H = 280;
+    const colors = ["#2f6fed", "#ed7d31", "#a5a5a5", "#ffc000", "#5b9bd5", "#70ad47", "#9e480e", "#636363"];
+    const max = Math.max(...values, 1);
+    let body = "";
+    if (type === "pie") {
+      const total = values.reduce((a, b) => a + b, 0) || 1;
+      const cx = 140, cy = 160, r = 95;
+      let ang = -Math.PI / 2;
+      values.forEach((v, i) => {
+        const a2 = ang + (v / total) * 2 * Math.PI;
+        const x1 = cx + r * Math.cos(ang), y1 = cy + r * Math.sin(ang), x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+        body += `<path d="M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${a2 - ang > Math.PI ? 1 : 0} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${colors[i % colors.length]}"/>`;
+        body += `<rect x="290" y="${60 + i * 20}" width="10" height="10" fill="${colors[i % colors.length]}"/><text x="306" y="${69 + i * 20}" font-size="11" fill="#333">${escHtml(labels[i] || "")} (${v})</text>`;
+        ang = a2;
+      });
+    } else {
+      const x0 = 50, y0 = 235, cw = W - 70, ch = 180, step = cw / Math.max(values.length, 1);
+      body += `<line x1="${x0}" y1="${y0}" x2="${W - 20}" y2="${y0}" stroke="#999"/><line x1="${x0}" y1="${y0 - ch}" x2="${x0}" y2="${y0}" stroke="#999"/>`;
+      for (let g = 0; g <= 4; g++) { const gy = y0 - (ch * g) / 4; body += `<line x1="${x0}" y1="${gy}" x2="${W - 20}" y2="${gy}" stroke="#eee"/><text x="${x0 - 6}" y="${gy + 3}" font-size="9" text-anchor="end" fill="#666">${Math.round((max * g) / 4)}</text>`; }
+      if (type === "line") {
+        const pts = values.map((v, i) => `${(x0 + step * i + step / 2).toFixed(1)},${(y0 - (v / max) * ch).toFixed(1)}`);
+        body += `<polyline points="${pts.join(" ")}" fill="none" stroke="${colors[0]}" stroke-width="2.5"/>` + pts.map(p => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="3.5" fill="${colors[0]}"/>`).join("");
+      } else {
+        values.forEach((v, i) => { const h = (v / max) * ch; body += `<rect x="${(x0 + step * i + step * 0.15).toFixed(1)}" y="${(y0 - h).toFixed(1)}" width="${(step * 0.7).toFixed(1)}" height="${h.toFixed(1)}" fill="${colors[i % colors.length]}"/>`; });
+      }
+      values.forEach((v, i) => { body += `<text x="${(x0 + step * i + step / 2).toFixed(1)}" y="${y0 + 14}" font-size="10" text-anchor="middle" fill="#333">${escHtml(labels[i] || "")}</text>`; });
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="Calibri, Arial, sans-serif"><rect width="${W}" height="${H}" fill="#fff"/><text x="${W / 2}" y="24" font-size="14" font-weight="700" text-anchor="middle" fill="#222">${escHtml(title)}</text>${body}</svg>`;
+  };
+  const insertChart = (type, title, labels, values) => {
+    exec("insertHTML", `<div class="word-chart" contenteditable="false">${buildChartSvg(type, title, labels, values)}</div><p><br></p>`);
+  };
+
+  // ---- mais controles de conteúdo (Desenvolvedor) ----
+  const insertContentControl2 = (kind) => {
+    let html = "";
+    if (kind === "picture") html = '<span class="word-cc word-cc-picture" data-cc="picture" contenteditable="false">🖼 Clique para inserir uma imagem</span>&nbsp;';
+    else if (kind === "gallery") html = '<span class="word-cc word-cc-gallery" data-cc="gallery" contenteditable="false">Escolha um bloco de construção</span>&nbsp;';
+    else if (kind === "combo") {
+      const raw = window.prompt("Opções da caixa de combinação (separadas por vírgula):", "Opção 1, Opção 2");
+      if (raw === null) return;
+      const opts = raw.split(",").map(s => s.trim()).filter(Boolean);
+      if (!opts.length) return;
+      html = `<span class="word-cc word-cc-dropdown" data-cc="combo" data-combo="1" data-options="${escHtml(opts.join("|"))}" contenteditable="false">Escolha um item</span>&nbsp;`;
+    } else if (kind === "repeat") html = '<div class="word-cc word-cc-repeat" data-cc="repeat" contenteditable="false"><div class="word-cc-repeat-item" contenteditable="true">Item da seção repetida</div><button type="button" class="word-cc-repeat-add">+ Adicionar item</button></div><p><br></p>';
+    if (html) exec("insertHTML", html);
+  };
+  const handleContentControlClick2 = (e) => {
+    const add = e.target.closest?.(".word-cc-repeat-add");
+    if (add && bodyRef.current?.contains(add)) {
+      e.preventDefault();
+      const wrap = add.closest(".word-cc-repeat");
+      const items = wrap.querySelectorAll(".word-cc-repeat-item");
+      const clone = items[items.length - 1].cloneNode(true);
+      items[items.length - 1].after(clone);
+      onChange();
+      return true;
+    }
+    const cc = e.target.closest?.(".word-cc");
+    if (!cc || !bodyRef.current?.contains(cc)) return false;
+    if (cc.classList.contains("word-cc-picture")) {
+      e.preventDefault();
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.accept = "image/*";
+      inp.onchange = () => {
+        const f = inp.files?.[0];
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = () => { const img = document.createElement("img"); img.src = rd.result; img.alt = ""; img.style.maxWidth = "100%"; cc.replaceWith(img); onChange(); };
+        rd.readAsDataURL(f);
+      };
+      inp.click();
+      return true;
+    }
+    if (cc.classList.contains("word-cc-gallery")) {
+      e.preventDefault();
+      const parts = [...WORD_QUICKPART_BUILTINS, ...loadQuickParts()];
+      const n = window.prompt("Escolha o bloco:\n" + parts.map((p, i) => `${i + 1}. ${p.name}`).join("\n"), "1");
+      const p = parts[Number(n) - 1];
+      if (p) { const tmp = document.createElement("div"); tmp.innerHTML = p.html; cc.replaceWith(...tmp.childNodes); onChange(); }
+      return true;
+    }
+    if (cc.classList.contains("word-cc-dropdown") && cc.dataset.combo === "1") {
+      const opts = (cc.dataset.options || "").split("|").filter(Boolean);
+      const cur = opts.indexOf(cc.textContent);
+      if (cur === opts.length - 1) { e.preventDefault(); const v = window.prompt("Digite o valor:", ""); if (v) { cc.textContent = v; onChange(); } return true; }
+    }
+    return false;
+  };
+  const controlProperties = () => {
+    const sel = window.getSelection();
+    let n = sel?.anchorNode;
+    if (n && n.nodeType === 3) n = n.parentElement;
+    const cc = n?.closest?.(".word-cc") || bodyRef.current?.querySelector(".word-cc:hover");
+    if (!cc) { alert("Coloque o cursor dentro de um controle de conteúdo."); return; }
+    const title = window.prompt("Título do controle:", cc.getAttribute("title") || "");
+    if (title === null) return;
+    cc.setAttribute("title", title);
+    if (cc.classList.contains("word-cc-ph")) {
+      const ph = window.prompt("Texto de espaço reservado:", cc.textContent);
+      if (ph) cc.textContent = ph;
+    }
+    onChange();
+  };
+
+  // ---- Estrutura de Tópicos ----
+  const headingLevel = (b) => (b && /^H[1-6]$/.test(b.tagName) ? Number(b.tagName[1]) : 0);
+  const topBlock = () => { const b = currentBlock(); const el = bodyRef.current; return b && el ? (b.parentNode === el ? b : findTopLevelChild(el, b)) : null; };
+  const outlineSetLevel = (lvl) => { bodyRef.current?.focus(); document.execCommand("formatBlock", false, lvl ? "H" + lvl : "P"); onChange(); };
+  const outlinePromote = () => { const l = headingLevel(topBlock()); outlineSetLevel(l === 0 ? 3 : Math.max(1, l - 1)); };
+  const outlineDemote = () => { const l = headingLevel(topBlock()); outlineSetLevel(l === 0 || l >= 3 ? 0 : l + 1); };
+  const outlineSection = (b) => {
+    const lvl = headingLevel(b);
+    const nodes = [b];
+    let n = b.nextElementSibling;
+    while (n && (!lvl || headingLevel(n) === 0 || headingLevel(n) > lvl)) { nodes.push(n); n = n.nextElementSibling; }
+    return nodes;
+  };
+  const outlineMove = (dir) => {
+    const b = topBlock();
+    if (!b) return;
+    const nodes = outlineSection(b);
+    if (dir < 0) { const prev = b.previousElementSibling; if (prev) { nodes.forEach(x => prev.before(x)); onChange(); } }
+    else { const last = nodes[nodes.length - 1]; const next = last.nextElementSibling; if (next) { const nextSec = outlineSection(next); const tail = nextSec[nextSec.length - 1]; nodes.slice().reverse().forEach(x => tail.after(x)); onChange(); } }
+  };
+  const outlineToggle = (collapse) => {
+    const b = topBlock();
+    if (!b || !headingLevel(b)) return;
+    outlineSection(b).slice(1).forEach(x => { if (collapse) { x.dataset.olHidden = "1"; x.style.display = "none"; } else if (x.dataset.olHidden) { delete x.dataset.olHidden; x.style.display = ""; } });
+  };
+  const outlineExpandAll = () => {
+    bodyRef.current?.querySelectorAll("[data-ol-hidden]").forEach(x => { delete x.dataset.olHidden; x.style.display = ""; });
+  };
+
   return {
     exec, keepFocus, closeAllPopovers,
     colorOpen, setColorOpen, hiliteOpen, setHiliteOpen, emojiOpen, setEmojiOpen,
@@ -18307,6 +18847,11 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
     tabStops, tabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
     insertTOC, insertFootnote, insertBookmark, listBookmarks, goToBookmark, insertVideoEmbed, insertEquation,
+    insertCaption, insertTableOfFigures, refreshAllTablesOfFigures, nextFootnote, showFootnotes, insertContentControl,
+    phoneticGuide, charBorder, encloseChars, underlineStyle, insertEndnote, showEndnotes,
+    loadSources, saveSources, insertCitation, insertBibliography, citeText, bibEntry, markIndexEntry, insertIndex, markAuthority, insertAuthorities,
+    loadQuickParts, insertQuickPart, saveQuickPart, insertSignatureLine, insertTextFromFile, insertIcon, insertChart,
+    insertContentControl2, controlProperties, outlinePromote, outlineDemote, outlineMove, outlineToggle, outlineExpandAll, outlineSetLevel, wrapSel,
   };
 }
 
@@ -18758,6 +19303,92 @@ function WordRuler({
   );
 }
 
+// ---- extras do Word: gravador de macros, modal genérico e conteúdos prontos ----
+let wordMacroRec = null; // quando não é null, o hook empurra cada comando executado
+const WORD_SOURCES_KEY = "libano.word.sources";
+const WORD_QUICKPARTS_KEY = "libano.word.quickparts";
+const WORD_MACROS_KEY = "libano.word.macros";
+const WORD_ICON_GLYPHS = ["★", "☆", "♥", "♦", "♣", "♠", "✔", "✘", "☎", "✉", "⚑", "⚙", "✈", "☀", "☁", "☂", "☺", "♫", "⌂", "⌛", "✎", "✂", "⚠", "☑", "➜", "❝", "✪", "⚡"];
+const WORD_QUICKPART_BUILTINS = [
+  { name: "Linha de Assunto", html: "<p><b>Assunto:</b> </p>" },
+  { name: "Bloco de Assinatura", html: "<p><br></p><p>Atenciosamente,</p><p><br></p><p>______________________________<br>Nome<br>Cargo</p>" },
+  { name: "Aviso de Confidencialidade", html: "<p style=\"font-size:9pt;color:#666\"><i>Este documento é confidencial e destinado exclusivamente ao seu destinatário.</i></p>" },
+];
+const WORD_TEMPLATES = [
+  { name: "Carta", html: "<p style=\"text-align:right\">[Cidade], [data]</p><p><br></p><p>[Destinatário]<br>[Endereço]</p><p><br></p><p>Prezado(a) [nome],</p><p><br></p><p>[Corpo da carta]</p><p><br></p><p>Atenciosamente,</p><p><br></p><p>[Seu nome]</p>" },
+  { name: "Currículo", html: "<h1>[Seu nome]</h1><p>[Cidade] · [telefone] · [e-mail]</p><h2>Objetivo</h2><p>[Descreva seu objetivo profissional]</p><h2>Experiência</h2><p><b>[Cargo]</b> — [Empresa] ([período])</p><ul><li>[Realização]</li></ul><h2>Formação</h2><p>[Curso] — [Instituição] ([ano])</p><h2>Habilidades</h2><ul><li>[Habilidade]</li></ul>" },
+  { name: "Relatório", html: "<h1>[Título do relatório]</h1><p><i>[Autor] — [data]</i></p><h2>1. Introdução</h2><p>[Texto]</p><h2>2. Desenvolvimento</h2><p>[Texto]</p><h2>3. Conclusão</h2><p>[Texto]</p><h2>Referências</h2><p>[Fontes]</p>" },
+  { name: "Ata de Reunião", html: "<h1>Ata de Reunião</h1><p><b>Data:</b> [data] &nbsp; <b>Local:</b> [local]</p><p><b>Participantes:</b> [nomes]</p><h2>Pauta</h2><ol><li>[Item]</li></ol><h2>Decisões</h2><ul><li>[Decisão]</li></ul><h2>Próximos passos</h2><ul><li>[Responsável] — [prazo]</li></ul>" },
+  { name: "Contrato Simples", html: "<h1 style=\"text-align:center\">CONTRATO DE PRESTAÇÃO DE SERVIÇOS</h1><p><b>CONTRATANTE:</b> [nome, documento, endereço]</p><p><b>CONTRATADO:</b> [nome, documento, endereço]</p><h2>Cláusula 1ª — Do objeto</h2><p>[Descrição]</p><h2>Cláusula 2ª — Do valor</h2><p>[Valor e forma de pagamento]</p><h2>Cláusula 3ª — Do prazo</h2><p>[Prazo]</p><p><br></p><p>[Cidade], [data]</p><p><br></p><p>______________________ &nbsp;&nbsp;&nbsp; ______________________<br>Contratante &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Contratado</p>" },
+];
+
+function WordModal({ title, onClose, children, actions, wide }) {
+  return (
+    <div className="readerBack wordTableDialogBack" onClick={onClose}>
+      <div className="wordTableDialog wordModalBox" style={wide ? { width: 520 } : undefined} onClick={e => e.stopPropagation()}>
+        <h3>{title}</h3>
+        {children}
+        <div className="wordTableDialogActions">{actions}</div>
+      </div>
+    </div>
+  );
+}
+
+// ====================================================================
+// Primitivas do ribbon do Word (mesmo padrão do wordcraft/Word real):
+// grupos com rótulo embaixo, botões grandes (ícone em cima + texto),
+// pilhas de 3 botões pequenos com texto e botões divididos (ação + seta).
+// ====================================================================
+function RbGroup({ label, wide, children, onLauncher, launcherTip }) {
+  return (
+    <>
+      <div className={"wordRibbonGroup rbGroup" + (wide ? " wordRibbonGroupWide" : "")}>
+        <div className="rbBody">{children}</div>
+        <span className="wordRibbonGroupLabel">{label}</span>
+        {onLauncher && <button type="button" className="rbLauncher" data-tip={launcherTip || label} onClick={onLauncher}><ArrowDownRight size={9}/></button>}
+      </div>
+      <span className="wordRibbonDivider"/>
+    </>
+  );
+}
+function RbBig({ icon: Icon, label, tip, desc, onClick, active, chevron, disabled }) {
+  return (
+    <button type="button" className={"rbBig" + (active ? " active" : "")} data-tip={tip || String(label).replace(/\n/g, " ")} data-tipdesc={desc} onClick={onClick} disabled={disabled}>
+      <Icon size={22}/>
+      <span className="rbLabel">{label}{chevron && <ChevronDown size={10}/>}</span>
+    </button>
+  );
+}
+function RbSm({ icon: Icon, label, tip, desc, onClick, active, chevron, disabled }) {
+  return (
+    <button type="button" className={"rbSm" + (active ? " active" : "")} data-tip={tip || label} data-tipdesc={desc} onClick={onClick} disabled={disabled}>
+      <Icon size={14}/>
+      <span className="rbLabel">{label}</span>
+      {chevron && <ChevronDown size={10} className="rbChev"/>}
+    </button>
+  );
+}
+function RbSplit({ icon: Icon, tip, desc, onMain, onArrow, color, active }) {
+  return (
+    <div className="rbSplit">
+      <button type="button" className={"rbSplitMain" + (active ? " active" : "")} data-tip={tip} data-tipdesc={desc} onClick={onMain}>
+        <Icon size={14}/>
+        {color !== undefined && <span className="rbSwatch" style={{ background: color === "transparent" ? "transparent" : color }}/>}
+      </button>
+      <button type="button" className="rbSplitArrow" data-tip={tip} onClick={onArrow}><ChevronDown size={9}/></button>
+    </div>
+  );
+}
+function RbMenu({ id, menu, setMenu, trigger, children, popClass }) {
+  const open = menu === id;
+  return (
+    <div className="wordDropdownWrap">
+      {trigger(() => setMenu(open ? null : id), open)}
+      {open && <div className={popClass || "wordDropdownMenu"} onClick={() => setMenu(null)}>{children}</div>}
+    </div>
+  );
+}
+
 function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDocContent }) {
   const [title, setTitle] = useState(doc.title || "");
   const [pageSize, setPageSize] = useState(doc.page_size || "a4");
@@ -18766,6 +19397,41 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const [marginLeftCm, setMarginLeftCm] = useState(doc.margin_left ?? null);
   const [marginRightCm, setMarginRightCm] = useState(doc.margin_right ?? null);
   const [ribbonTab, setRibbonTab] = useState("home");
+  const [rbMenu, setRbMenu] = useState(null);
+  const [fmtState, setFmtState] = useState({ font: "Calibri", size: 11, bold: false, italic: false, underline: false, strike: false, sub: false, sup: false, align: "left", dir: "ltr" });
+  const [lastFontColor, setLastFontColor] = useState("#ff5c5c");
+  const [lastHilite, setLastHilite] = useState("#ffe066");
+  const [lastShading, setLastShading] = useState("#ffe066");
+  const [designMode, setDesignMode] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [readMode, setReadMode] = useState(false);
+  const [immersive, setImmersive] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [sideToSide, setSideToSide] = useState(false);
+  const [darkPage, setDarkPage] = useState(false);
+  const [splitOn, setSplitOn] = useState(false);
+  const [splitHtml, setSplitHtml] = useState("");
+  const [lineNumbers, setLineNumbers] = useState(false);
+  const [hyphenation, setHyphenation] = useState(false);
+  const [textDir, setTextDir] = useState("horizontal");
+  const [sidePane, setSidePane] = useState(null); // "review" | "clipboard" | "selection" | "styles"
+  const [dlg, setDlg] = useState(null);
+  const [dlgForm, setDlgForm] = useState({});
+  const [clipHistory, setClipHistory] = useState([]);
+  const [pens, setPens] = useState([
+    { id: "pen", name: "Caneta", tool: "pen", color: "#1a1a1a", size: 3 },
+    { id: "pencil", name: "Lápis", tool: "pen", color: "#5b5f66", size: 2 },
+    { id: "hl", name: "Marca-texto", tool: "highlighter", color: "#ffe066", size: 10 },
+  ]);
+  const [activePen, setActivePen] = useState("pen");
+  const [macroRecording, setMacroRecording] = useState(false);
+  const [citeStyle, setCiteStyle] = useState("abnt");
+  const [highlightFields, setHighlightFields] = useState(false);
+  const [cmdQuery, setCmdQuery] = useState("");
+  const [inkMode, setInkMode] = useState(false);
+  const [sourcesList, setSourcesList] = useState([]);
+  const dlgRangeRef = useRef(null);
+  const [hoverGrid, setHoverGrid] = useState(null);
   const [zoom, setZoom] = useState(100);
   const [showRuler, setShowRuler] = useState(true);
   const [wordCount, setWordCount] = useState(() => countWords(doc.content || ""));
@@ -18910,6 +19576,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     setTrackChanges(pageMetaEl?.dataset.trackchanges === "1");
     setShowChangesMarkup(pageMetaEl?.dataset.showchanges !== "0");
     setDocLanguage(pageMetaEl?.dataset.lang || null);
+    setLineNumbers(pageMetaEl?.dataset.linenumbers === "1");
+    setHyphenation(pageMetaEl?.dataset.hyphens === "1");
+    setTextDir(pageMetaEl?.dataset.textdir || "horizontal");
     setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
     try { setRecipients(pageMetaEl?.dataset.recipients ? JSON.parse(pageMetaEl.dataset.recipients) : null); } catch { setRecipients(null); }
@@ -19126,6 +19795,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     if (!el || !recipients) return;
     const row = recipients.rows[index] || [];
     el.querySelectorAll(".word-mergefield").forEach(span => {
+      if (span.dataset.rule) {
+        try { const r = JSON.parse(span.dataset.rule); const c = recipients.headers.indexOf(r.field); const v = c >= 0 ? (row[c] || "") : ""; span.textContent = preview ? (v === r.value ? r.then : r.else) : `«Se ${r.field} = ${r.value}»`; } catch {}
+        return;
+      }
       const field = span.dataset.field;
       const col = recipients.headers.indexOf(field);
       span.textContent = preview ? (col >= 0 ? (row[col] || "") : `«${field}»`) : `«${field}»`;
@@ -19156,6 +19829,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
       const div = document.createElement("div");
       div.innerHTML = bodyRef.current.innerHTML;
       div.querySelectorAll(".word-mergefield").forEach(span => {
+        if (span.dataset.rule) { try { const r = JSON.parse(span.dataset.rule); const c = recipients.headers.indexOf(r.field); const v = c >= 0 ? (row[c] || "") : ""; span.replaceWith(document.createTextNode(v === r.value ? r.then : r.else)); } catch { span.remove(); } return; }
         const col = recipients.headers.indexOf(span.dataset.field);
         span.replaceWith(document.createTextNode(col >= 0 ? (row[col] || "") : ""));
       });
@@ -20200,6 +20874,428 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     return { ...wordCount, charsNoSpace: text.replace(/\s/g, "").length, paragraphs: paragraphs || (text.trim() ? 1 : 0) };
   };
 
+  // ====== Ribbon no padrão wordcraft/Word: estado dos botões, menus e comandos extras ======
+  const rbm = (id, trigger, items, popClass) => (
+    <RbMenu id={id} menu={rbMenu} setMenu={setRbMenu} trigger={trigger} popClass={popClass}>{items}</RbMenu>
+  );
+
+  useEffect(() => { setRbMenu(null); }, [ribbonTab]);
+  useEffect(() => {
+    if (!rbMenu) return undefined;
+    const onDown = (e) => { if (!e.target.closest?.(".wordDropdownWrap")) setRbMenu(null); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [rbMenu]);
+  useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch {} }, []);
+
+  // Realça Negrito/Itálico/etc. e mostra fonte/tamanho do ponto onde está o cursor.
+  useEffect(() => {
+    const onSel = () => {
+      const el = bodyRef.current;
+      const sel = window.getSelection();
+      if (!el || !sel || sel.rangeCount === 0) return;
+      const node = sel.anchorNode;
+      if (!node || !el.contains(node)) return;
+      const elem = node.nodeType === 3 ? node.parentElement : node;
+      if (!elem) return;
+      const cs = window.getComputedStyle(elem);
+      const q = (c) => { try { return document.queryCommandState(c); } catch { return false; } };
+      const blk = elem.closest("p,div,li,h1,h2,h3,h4,blockquote") || elem;
+      const align = window.getComputedStyle(blk).textAlign;
+      const next = {
+        font: (cs.fontFamily.split(",")[0] || "").replace(/["']/g, "").trim() || "Calibri",
+        size: Math.round(parseFloat(cs.fontSize) * 0.75 * 2) / 2 || 11,
+        bold: q("bold"), italic: q("italic"), underline: q("underline"), strike: q("strikeThrough"), sub: q("subscript"), sup: q("superscript"),
+        align: align === "start" ? "left" : align === "end" ? "right" : align,
+        dir: blk.getAttribute?.("dir") === "rtl" ? "rtl" : "ltr",
+      };
+      setFmtState(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, []);
+
+  const pasteTextOnly = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) fmt.exec("insertText", t);
+    } catch { alert("Não foi possível ler a área de transferência. Use Ctrl+Shift+V."); }
+  };
+
+  const wrapSelectionStyle = (apply) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    el.focus();
+    const range = sel.getRangeAt(0);
+    const span = document.createElement("span");
+    apply(span);
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      sel.removeAllRanges();
+      const r = document.createRange();
+      r.selectNodeContents(span);
+      sel.addRange(r);
+      handleBodyInput();
+    } catch {}
+  };
+  const applyTextEffect = (kind) => {
+    if (kind === "shadow") wrapSelectionStyle(s => { s.style.textShadow = "1px 1px 2px rgba(0,0,0,.45)"; });
+    if (kind === "outline") wrapSelectionStyle(s => { s.style.webkitTextStroke = "1px currentColor"; s.style.webkitTextFillColor = "transparent"; });
+    if (kind === "smallcaps") wrapSelectionStyle(s => { s.style.fontVariant = "small-caps"; });
+    if (kind === "allcaps") wrapSelectionStyle(s => { s.style.textTransform = "uppercase"; });
+    if (kind === "dblstrike") wrapSelectionStyle(s => { s.style.textDecoration = "line-through double"; });
+  };
+
+  const applyListStyle = (ordered, type) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    const find = () => {
+      let n = sel?.anchorNode;
+      if (n && n.nodeType === 3) n = n.parentElement;
+      const l = n?.closest?.(ordered ? "ol" : "ul");
+      return l && el.contains(l) ? l : null;
+    };
+    let list = find();
+    if (type === "none") { if (list) document.execCommand(ordered ? "insertOrderedList" : "insertUnorderedList"); handleBodyInput(); return; }
+    if (!list) { document.execCommand(ordered ? "insertOrderedList" : "insertUnorderedList"); list = find(); }
+    if (list && type) list.style.listStyleType = type;
+    handleBodyInput();
+  };
+
+  const setParaDir = (dir) => {
+    bodyRef.current?.focus();
+    const b = fmt.currentBlock();
+    if (!b) return;
+    b.setAttribute("dir", dir);
+    handleBodyInput();
+  };
+
+  const selectUnit = (unit) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel) return;
+    el.focus();
+    if (unit === "paragraph") {
+      const b = fmt.currentBlock();
+      if (b) { const r = document.createRange(); r.selectNodeContents(b); sel.removeAllRanges(); sel.addRange(r); }
+      return;
+    }
+    try { sel.collapseToStart(); sel.modify("move", "backward", "sentence"); sel.modify("extend", "forward", "sentence"); } catch {}
+  };
+
+  const toggleReadAloud = () => {
+    if (!("speechSynthesis" in window)) { alert("A leitura em voz alta não é suportada neste navegador."); return; }
+    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return; }
+    const sel = window.getSelection();
+    const text = (sel && !sel.isCollapsed && bodyRef.current?.contains(sel.anchorNode)) ? sel.toString() : (bodyRef.current?.innerText || "");
+    if (!text.trim()) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = docLanguage || "pt-BR";
+    u.onend = () => setSpeaking(false);
+    u.onerror = () => setSpeaking(false);
+    window.speechSynthesis.speak(u);
+    setSpeaking(true);
+  };
+
+  // ====== Extras no padrão wordcraft: diálogos, modos de exibição, macros, painéis ======
+  const saveRange = () => { const s = window.getSelection(); dlgRangeRef.current = s && s.rangeCount ? s.getRangeAt(0).cloneRange() : null; };
+  const restoreRange = () => {
+    const r = dlgRangeRef.current;
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    if (!r) return;
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  };
+  const openDlg = (name, form = {}) => { saveRange(); setDlgForm(form); setDlg(name); setRbMenu(null); };
+  const closeDlg = () => setDlg(null);
+  const setF = (k, v) => setDlgForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    const onCopy = () => {
+      const s = window.getSelection();
+      const t = s?.toString();
+      if (!t || !bodyRef.current?.contains(s.anchorNode)) return;
+      setClipHistory(h => [t, ...h.filter(x => x !== t)].slice(0, 12));
+    };
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("cut", onCopy);
+    return () => { document.removeEventListener("copy", onCopy); document.removeEventListener("cut", onCopy); };
+  }, []);
+  useEffect(() => {
+    if (!splitOn) return undefined;
+    const t = setInterval(() => { const h = bodyRef.current?.innerHTML || ""; setSplitHtml(p => (p === h ? p : h)); }, 700);
+    return () => clearInterval(t);
+  }, [splitOn]);
+  useEffect(() => {
+    if (viewMode === "outline") setRibbonTab("outlining");
+    else { fmt.outlineExpandAll(); setRibbonTab(t => (t === "outlining" ? "view" : t)); }
+  }, [viewMode]);
+
+  // ---- macros (gravador de comandos de formatação) ----
+  const loadMacros = () => { try { return JSON.parse(localStorage.getItem(WORD_MACROS_KEY) || "{}"); } catch { return {}; } };
+  const startMacro = () => { wordMacroRec = []; setMacroRecording(true); };
+  const stopMacro = () => {
+    const rec = wordMacroRec || [];
+    wordMacroRec = null;
+    setMacroRecording(false);
+    if (!rec.length) { alert("Nenhum comando foi gravado."); return; }
+    const name = window.prompt("Nome da macro:", "Macro" + (Object.keys(loadMacros()).length + 1));
+    if (!name) return;
+    const all = loadMacros();
+    all[name] = rec;
+    try { localStorage.setItem(WORD_MACROS_KEY, JSON.stringify(all)); } catch {}
+  };
+  const runMacro = (name) => {
+    const rec = loadMacros()[name];
+    if (!rec) return;
+    bodyRef.current?.focus();
+    rec.forEach(([c, v]) => fmt.exec(c, v));
+  };
+  const deleteMacro = (name) => {
+    const all = loadMacros();
+    delete all[name];
+    try { localStorage.setItem(WORD_MACROS_KEY, JSON.stringify(all)); } catch {}
+    setDlgForm(f => ({ ...f, tick: (f.tick || 0) + 1 }));
+  };
+
+  // ---- navegação em alterações, pesquisa, sinônimos, Ir Para ----
+  const navigateChange = (dir) => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const list = Array.from(el.querySelectorAll(".word-ins, .word-del"));
+    if (!list.length) { alert("Não há alterações marcadas no documento."); return; }
+    const s = window.getSelection();
+    let idx = -1;
+    if (s && s.rangeCount && el.contains(s.anchorNode)) {
+      const cur = s.anchorNode;
+      if (dir > 0) idx = list.findIndex(x => (cur.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING) && !x.contains(cur));
+      else list.forEach((x, i) => { if ((cur.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_PRECEDING) && !x.contains(cur)) idx = i; });
+    }
+    if (idx < 0) idx = dir > 0 ? 0 : list.length - 1;
+    const t = list[idx];
+    t.scrollIntoView({ block: "center", behavior: "smooth" });
+    const r = document.createRange();
+    r.selectNodeContents(t);
+    s.removeAllRanges();
+    s.addRange(r);
+  };
+  const selectedOrPrompt = (msg) => {
+    const s = window.getSelection();
+    const t = (s && !s.isCollapsed && bodyRef.current?.contains(s.anchorNode)) ? s.toString().trim() : "";
+    return t || (window.prompt(msg, "") || "").trim();
+  };
+  const openResearch = () => { const q = selectedOrPrompt("O que você quer pesquisar?"); if (q) window.open("https://www.google.com/search?q=" + encodeURIComponent(q), "_blank", "noopener"); };
+  const openThesaurus = () => { const q = selectedOrPrompt("Palavra para buscar sinônimos:"); if (q) window.open("https://www.sinonimos.com.br/" + encodeURIComponent(q.split(/\s+/)[0].toLowerCase()) + "/", "_blank", "noopener"); };
+  const goToEl = (n) => {
+    n.scrollIntoView({ block: "center", behavior: "smooth" });
+    const r = document.createRange();
+    r.selectNodeContents(n);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  };
+  const listGoToTargets = () => {
+    const el = bodyRef.current;
+    if (!el) return [];
+    const out = [];
+    el.querySelectorAll("h1,h2,h3").forEach(h => out.push({ kind: "Título", label: (h.textContent || "").trim() || "(sem texto)", el: h }));
+    el.querySelectorAll(".word-bookmark").forEach(b => out.push({ kind: "Indicador", label: b.dataset.bookmarkName || "Indicador", el: b }));
+    el.querySelectorAll("table").forEach((t, i) => out.push({ kind: "Tabela", label: "Tabela " + (i + 1), el: t }));
+    el.querySelectorAll("img").forEach((t, i) => out.push({ kind: "Imagem", label: "Imagem " + (i + 1), el: t }));
+    return out;
+  };
+
+  // ---- Organizar (Layout): age sobre a imagem ou forma selecionada ----
+  const arrangeTarget = () => selectedImg || selectedShape || null;
+  const needObject = () => alert("Selecione uma imagem ou forma primeiro.");
+  const arrWrap = (mode) => { if (selectedImg) imgSetWrap(mode); else if (selectedShape) shapeSetWrap(mode); else needObject(); };
+  const arrAlign = (a) => {
+    if (selectedImg) { imgSetAlign(a); return; }
+    if (!selectedShape) { needObject(); return; }
+    selectedShape.style.float = "";
+    selectedShape.style.display = "block";
+    selectedShape.style.margin = a === "center" ? "0 auto" : a === "right" ? "0 0 0 auto" : "0 auto 0 0";
+    handleBodyInput();
+  };
+  const arrZ = (d) => {
+    const t = arrangeTarget();
+    if (!t) { needObject(); return; }
+    if (!t.style.position) t.style.position = "relative";
+    t.style.zIndex = String(Math.max(0, (parseInt(t.style.zIndex || "0", 10) || 0) + d));
+    handleBodyInput();
+  };
+  const arrRotate = (deg) => {
+    const t = arrangeTarget();
+    if (!t) { needObject(); return; }
+    const cur = Number(t.dataset.rot || 0);
+    const next = deg === 0 ? 0 : (((cur + deg) % 360) + 360) % 360;
+    t.dataset.rot = String(next);
+    t.style.transform = next ? `rotate(${next}deg)` : "";
+    handleBodyInput();
+  };
+  const arrFlip = (axis) => {
+    const t = arrangeTarget();
+    if (!t) { needObject(); return; }
+    const key = axis === "h" ? "flipH" : "flipV";
+    t.dataset[key] = t.dataset[key] === "1" ? "" : "1";
+    const rot = Number(t.dataset.rot || 0);
+    t.style.transform = `rotate(${rot}deg)${t.dataset.flipH ? " scaleX(-1)" : ""}${t.dataset.flipV ? " scaleY(-1)" : ""}`;
+    handleBodyInput();
+  };
+  const listObjects = () => Array.from(bodyRef.current?.querySelectorAll("img, .word-textbox, .word-chart, .word-shape, .word-smartart") || []);
+
+  // ---- Design: formatação do documento ----
+  const WORD_THEME_FONTS = [["Office (Calibri)", "Calibri"], ["Clássica (Times New Roman)", "Times New Roman"], ["Moderna (Arial)", "Arial"], ["Elegante (Georgia)", "Georgia"], ["Técnica (Courier New)", "Courier New"], ["Humanista (Verdana)", "Verdana"]];
+  const WORD_PARA_SPACINGS = [["Padrão", 0, 8], ["Compacto", 0, 0], ["Aberto", 4, 10], ["Relaxado", 6, 14]];
+  const eachBlock = (fn) => { Array.from(bodyRef.current?.children || []).forEach(b => { if (!b.classList.contains("word-page-meta")) fn(b); }); };
+  const applyThemeFont = (font) => { eachBlock(b => { b.style.fontFamily = font; }); try { localStorage.setItem("libano.word.defaultFont", font); } catch {} handleBodyInput(); };
+  const applyParaSpacing = (before, after) => { eachBlock(b => { if (/^(P|DIV|UL|OL|H[1-6]|BLOCKQUOTE)$/.test(b.tagName)) { b.style.marginTop = before + "pt"; b.style.marginBottom = after + "pt"; } }); handleBodyInput(); };
+  const applyImageEffect = (kind) => {
+    const shadow = kind === "subtle" ? "0 1px 4px rgba(0,0,0,.25)" : kind === "strong" ? "0 4px 14px rgba(0,0,0,.45)" : "";
+    bodyRef.current?.querySelectorAll("img").forEach(i => { i.style.boxShadow = shadow; });
+    handleBodyInput();
+  };
+
+  // ---- Layout: numeração de linhas, hifenização, direção do texto ----
+  const applyLineNumbers = (on) => { setLineNumbers(on); persistPageMeta({ linenumbers: on ? "1" : "" }); };
+  const applyHyphenation = (on) => { setHyphenation(on); persistPageMeta({ hyphens: on ? "1" : "" }); };
+  const applyTextDir = (d) => { setTextDir(d); persistPageMeta({ textdir: d === "horizontal" ? "" : d }); };
+
+  // ---- Correspondências extras ----
+  const insertAddressBlock = () => {
+    const f = [guessField(/nome|name/i), guessField(/endere|address|rua/i), guessField(/cidade|city/i)];
+    insertAtCursor("<p>" + [mergeFieldSpanHtml(f[0], "[Nome]"), mergeFieldSpanHtml(f[1], "[Endereço]"), mergeFieldSpanHtml(f[2], "[Cidade]")].join("<br>") + "</p>");
+  };
+  const insertGreetingLine = () => insertAtCursor("<p>Prezado(a) " + mergeFieldSpanHtml(guessField(/nome|name/i), "[Nome]") + ",</p>");
+  const insertMergeRule = () => {
+    if (!recipients?.headers?.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
+    const field = window.prompt("Campo a comparar (" + recipients.headers.join(", ") + "):", recipients.headers[0]);
+    if (!field || !recipients.headers.includes(field)) return;
+    const value = window.prompt("Se o campo for igual a:", "");
+    if (value === null) return;
+    const thenT = window.prompt("Então inserir o texto:", "");
+    if (thenT === null) return;
+    const elseT = window.prompt("Senão inserir o texto:", "");
+    if (elseT === null) return;
+    const rule = JSON.stringify({ field, value, then: thenT, else: elseT });
+    insertAtCursor(`<span class="word-mergefield word-mergerule" contenteditable="false" data-field="__rule" data-rule="${rule.replace(/"/g, "&quot;")}">«Se ${field} = ${value}»</span>`);
+  };
+  const mergeGoTo = (idx) => {
+    if (!recipients?.rows?.length) return;
+    const next = Math.max(0, Math.min(recipients.rows.length - 1, idx));
+    setMergeIndex(next);
+    if (mergePreview) { refreshMergeFieldsDisplay(true, next); handleBodyInput(); }
+  };
+  const findRecipient = () => {
+    if (!recipients?.rows?.length) { alert("Selecione destinatários primeiro."); return; }
+    const q = (window.prompt("Localizar destinatário:", "") || "").trim().toLowerCase();
+    if (!q) return;
+    const i = recipients.rows.findIndex(r => r.some(c => (c || "").toLowerCase().includes(q)));
+    if (i < 0) { alert("Nenhum destinatário encontrado."); return; }
+    mergeGoTo(i);
+  };
+  const checkMergeErrors = () => {
+    if (!recipients?.rows?.length) { alert("Selecione destinatários primeiro."); return; }
+    const fields = Array.from(bodyRef.current?.querySelectorAll(".word-mergefield") || []).map(s => s.dataset.field).filter(f => f && f !== "__rule");
+    const missing = [...new Set(fields.filter(f => !recipients.headers.includes(f)))];
+    const empty = [];
+    recipients.rows.forEach((r, i) => recipients.headers.forEach((h, c) => { if (fields.includes(h) && !(r[c] || "").trim()) empty.push(`registro ${i + 1}: ${h}`); }));
+    if (!missing.length && !empty.length) { alert("Nenhum erro encontrado."); return; }
+    alert([missing.length ? "Campos sem coluna correspondente: " + missing.join(", ") : "", empty.length ? "Valores vazios: " + empty.slice(0, 12).join("; ") + (empty.length > 12 ? "…" : "") : ""].filter(Boolean).join("\n"));
+  };
+  const startMailMerge = (kind) => {
+    if (kind === "letter") insertLetterTemplate();
+    else if (kind === "envelope") insertEnvelopeTemplate();
+    else if (kind === "label") insertLabelSheet();
+    else { setMergePreview(false); alert("Documento normal. Selecione destinatários e insira campos de mesclagem."); }
+  };
+  const importRecipientsFile = () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".csv,.tsv,.txt";
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      const parsed = parseRecipientsCsv(await f.text());
+      if (!parsed) { alert("Arquivo vazio ou em formato inválido."); return; }
+      setRecipients(parsed);
+      persistPageMeta({ recipients: JSON.stringify(parsed) });
+      setMergePreview(false);
+      setMergeIndex(0);
+    };
+    inp.click();
+  };
+
+  // ---- modos de leitura, foco e Leitor Imersivo ----
+  const enterReadMode = (imm) => { setReadMode(true); setImmersive(!!imm); setFocusMode(false); setRbMenu(null); if (imm) setZoom(z => Math.max(z, 130)); };
+  const exitReadMode = () => { setReadMode(false); setImmersive(false); try { window.speechSynthesis?.cancel(); } catch {} setSpeaking(false); };
+  const applyTemplate = (t) => { bodyRef.current?.focus(); restoreRange(); fmt.exec("insertHTML", t.html); closeDlg(); };
+
+  useEffect(() => {
+    if (!focusMode && !readMode) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") { setFocusMode(false); exitReadMode(); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [focusMode, readMode]);
+
+  // ---- paleta de comandos (Ajuda > Comandos) ----
+  const commandList = [
+    ["Negrito", () => fmt.exec("bold")], ["Itálico", () => fmt.exec("italic")], ["Sublinhado", () => fmt.exec("underline")], ["Tachado", () => fmt.exec("strikeThrough")],
+    ["Alinhar à Esquerda", () => fmt.exec("justifyLeft")], ["Centralizar", () => fmt.exec("justifyCenter")], ["Alinhar à Direita", () => fmt.exec("justifyRight")], ["Justificar", () => fmt.exec("justifyFull")],
+    ["Marcadores", () => fmt.exec("insertUnorderedList")], ["Numeração", () => fmt.exec("insertOrderedList")], ["Aumentar Recuo", () => fmt.exec("indent")], ["Diminuir Recuo", () => fmt.exec("outdent")],
+    ["Título 1", () => fmt.applyHeading("H1")], ["Título 2", () => fmt.applyHeading("H2")], ["Título 3", () => fmt.applyHeading("H3")], ["Parágrafo Normal", () => fmt.applyHeading("P")],
+    ["Localizar", () => fmt.setFindOpen(true)], ["Substituir", () => fmt.setFindOpen(true)], ["Selecionar Tudo", () => fmt.selectAll()],
+    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Quebra de Página", () => fmt.insertPageBreak()], ["Inserir Sumário", () => fmt.insertTOC()],
+    ["Inserir Nota de Rodapé", () => fmt.insertFootnote()], ["Inserir Nota de Fim", () => fmt.insertEndnote()], ["Inserir Gráfico…", () => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })],
+    ["Inserir Assinatura", () => fmt.insertSignatureLine()], ["Data e Hora", () => fmt.insertDateTime()], ["Caixa de Texto", () => fmt.insertTextBox()],
+    ["Controlar Alterações", () => toggleTrackChanges()], ["Contagem de Palavras", () => setWordCountDialogOpen(true)], ["Ler em Voz Alta", () => toggleReadAloud()],
+    ["Modo de Leitura", () => enterReadMode(false)], ["Layout de Impressão", () => setViewMode("print")], ["Layout da Web", () => setViewMode("web")], ["Estrutura de Tópicos", () => setViewMode("outline")], ["Rascunho", () => setViewMode("draft")],
+    ["Modo Foco", () => setFocusMode(true)], ["Zoom 100%", () => setZoom(100)], ["Modelos…", () => openDlg("templates")], ["Macros…", () => openDlg("macros")],
+    ["Configurar Página…", () => openDlg("pagesetup", { left: effMarginLeft, right: effMarginRight })], ["Fonte…", () => openDlg("font", { ...fmtState, color: "#1a1a1a" })],
+    ["Parágrafo…", () => openDlg("para", { align: fmtState.align, left: fmt.paraIndent.left, right: fmt.paraIndent.right, first: fmt.paraIndent.firstLine, before: 0, after: 0, line: "1.15" })],
+  ];
+
+  const removeCoverPage = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const kids = Array.from(el.children).filter(c => !c.classList.contains("word-page-meta"));
+    const brk = kids.findIndex(c => c.classList.contains("word-page-break"));
+    if (brk < 0 || !kids.slice(0, brk).some(c => c.classList.contains("word-title"))) { alert("Nenhuma folha de rosto encontrada no início do documento."); return; }
+    kids.slice(0, brk + 1).forEach(c => c.remove());
+    handleBodyInput();
+  };
+  const outlineShowLevel = (n) => {
+    fmt.outlineExpandAll();
+    if (!n) return;
+    Array.from(bodyRef.current?.children || []).forEach(b => {
+      if (b.classList.contains("word-page-meta")) return;
+      const l = /^H[1-6]$/.test(b.tagName) ? Number(b.tagName[1]) : 0;
+      if (!l || l > n) { b.dataset.olHidden = "1"; b.style.display = "none"; }
+    });
+  };
+
+  const getA11yIssues = () => {
+    const el = bodyRef.current;
+    if (!el) return [];
+    const out = [];
+    const noAlt = Array.from(el.querySelectorAll("img")).filter(i => !(i.getAttribute("alt") || "").trim()).length;
+    if (noAlt) out.push(`${noAlt} imagem(ns) sem texto alternativo`);
+    const noHead = Array.from(el.querySelectorAll("table")).filter(t => !t.querySelector("th") && !t.querySelector("thead")).length;
+    if (noHead) out.push(`${noHead} tabela(s) sem linha de cabeçalho`);
+    const emptyH = Array.from(el.querySelectorAll("h1,h2,h3")).filter(h => !(h.textContent || "").trim()).length;
+    if (emptyH) out.push(`${emptyH} título(s) vazio(s)`);
+    const vague = Array.from(el.querySelectorAll("a[href]")).filter(a => /^(clique aqui|aqui|link)$/i.test((a.textContent || "").trim())).length;
+    if (vague) out.push(`${vague} link(s) com texto pouco descritivo`);
+    return out;
+  };
+
   return (
     <div className="readerBack">
       <div
@@ -20231,8 +21327,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </div>
         </div>
 
-        <div className="wordRibbonTabs">
+        <div className={"wordRibbonTabs" + ((readMode || focusMode) ? " rbHidden" : "")}>
           <button className={"wordFileTab" + (fileMenuOpen ? " active" : "")} onClick={() => openFileMenu("info")}>Arquivo</button>
+          {viewMode === "outline" && <button className={ribbonTab === "outlining" ? "active" : ""} onClick={() => setRibbonTab("outlining")}>Estrutura de Tópicos</button>}
           <button className={ribbonTab === "home" ? "active" : ""} onClick={() => setRibbonTab("home")}>Página Inicial</button>
           <button className={ribbonTab === "insert" ? "active" : ""} onClick={() => setRibbonTab("insert")}>Inserir</button>
           <button className={ribbonTab === "draw" ? "active" : ""} onClick={() => setRibbonTab("draw")}>Desenhar</button>
@@ -20242,6 +21339,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           <button className={ribbonTab === "mailings" ? "active" : ""} onClick={() => setRibbonTab("mailings")}>Correspondências</button>
           <button className={ribbonTab === "review" ? "active" : ""} onClick={() => setRibbonTab("review")}>Revisão</button>
           <button className={ribbonTab === "view" ? "active" : ""} onClick={() => setRibbonTab("view")}>Exibir</button>
+          <button className={ribbonTab === "developer" ? "active" : ""} onClick={() => setRibbonTab("developer")}>Desenvolvedor</button>
+          <button className={ribbonTab === "help" ? "active" : ""} onClick={() => setRibbonTab("help")}>Ajuda</button>
           {selectedImg && (
             <button className={"wordContextTab" + (ribbonTab === "pictureformat" ? " active" : "")} onClick={() => setRibbonTab("pictureformat")}>Formato da Imagem</button>
           )}
@@ -20291,352 +21390,357 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </div>
         )}
 
-        <div className="wordRibbon" onMouseDown={fmt.keepFocus}>
+        <div className={"wordRibbon" + ((readMode || focusMode) ? " rbHidden" : "")} onMouseDown={fmt.keepFocus}>
           {ribbonTab === "home" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordClipboardRow">
-                <button className="wordPasteBtn" data-tip="Colar (Ctrl+V)" data-tipdesc="Insere o conteúdo da área de transferência no ponto onde está o cursor." onClick={() => fmt.exec("paste")}>
-                  <ClipboardPaste size={19}/>
-                  <span className="wordPasteBtnLabel">Colar<ChevronDown size={10}/></span>
-                </button>
-                <div className="wordRibbonCol">
-                  <button data-tip="Recortar (Ctrl+X)" data-tipdesc="Remove a seleção e a guarda na área de transferência, para colar em outro lugar." onClick={() => fmt.exec("cut")}><Scissors size={13}/></button>
-                  <button data-tip="Copiar (Ctrl+C)" data-tipdesc="Copia a seleção para a área de transferência, mantendo o original no lugar." onClick={() => fmt.exec("copy")}><Copy size={13}/></button>
-                  <button data-tip="Pincel de Formatação" data-tipdesc="Copia a formatação de um trecho de texto e aplica em outro. Clique em um texto formatado, depois selecione o texto que vai receber a mesma formatação." className={fmt.painting ? "active" : ""} onClick={fmt.pickPaintFormat}><Paintbrush size={13}/></button>
-                </div>
+            <RbGroup label="Área de Transferência" onLauncher={() => setSidePane("clipboard")} launcherTip="Área de Transferência">
+              <div className="rbPasteWrap">
+                <button type="button" className="rbPasteTop" data-tip="Colar (Ctrl+V)" data-tipdesc="Insere o conteúdo da área de transferência no ponto onde está o cursor." onClick={() => fmt.exec("paste")}><ClipboardPaste size={24}/></button>
+                {rbm("paste", (t) => <button type="button" className="rbPasteLabel" data-tip="Opções de Colagem" data-tipdesc="Escolha como colar: com a formatação original ou somente o texto." onClick={t}>Colar <ChevronDown size={10}/></button>, <>
+                  <button onClick={() => fmt.exec("paste")}>Colar</button>
+                  <button onClick={pasteTextOnly}>Manter Somente Texto</button>
+                  <button onClick={pasteTextOnly}>Mesclar Formatação</button>
+                  <button onClick={() => openDlg("pastespecial")}>Colar Especial…</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Área de Transferência</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Fonte" data-tipdesc="Escolha a família tipográfica aplicada ao texto selecionado." onClick={() => { fmt.setFontOpen(o => !o); fmt.setSizeOpen(false); }}><Type size={13}/> Fonte <ChevronDown size={12}/></button>
-                  {fmt.fontOpen && <div className="wordDropdownMenu">{WORD_FONTS.map(f => <button key={f} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}</div>}
-                </div>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Tamanho da Fonte" data-tipdesc="Define o tamanho do texto selecionado, em pontos." onClick={() => { fmt.setSizeOpen(o => !o); fmt.setFontOpen(false); }}>Tamanho <ChevronDown size={12}/></button>
-                  {fmt.sizeOpen && <div className="wordDropdownMenu wordSizeMenu">{WORD_SIZES.map(s => <button key={s} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}</div>}
-                </div>
-                <button data-tip="Aumentar Fonte (Ctrl+Shift+>)" data-tipdesc="Aumenta o tamanho do texto selecionado em um passo." className="wordTextBtn" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
-                <button data-tip="Diminuir Fonte (Ctrl+Shift+<)" data-tipdesc="Diminui o tamanho do texto selecionado em um passo." className="wordTextBtn" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
+              <div className="rbStack">
+                <RbSm icon={Scissors} label="Recortar" tip="Recortar (Ctrl+X)" desc="Remove a seleção e a guarda na área de transferência, para colar em outro lugar." onClick={() => fmt.exec("cut")}/>
+                <RbSm icon={Copy} label="Copiar" tip="Copiar (Ctrl+C)" desc="Copia a seleção para a área de transferência, mantendo o original no lugar." onClick={() => fmt.exec("copy")}/>
+                <RbSm icon={Paintbrush} label="Pincel" tip="Pincel de Formatação" desc="Copia a formatação de um trecho de texto e aplica em outro. Clique em um texto formatado, depois selecione o texto que vai receber a mesma formatação." active={fmt.painting} onClick={fmt.pickPaintFormat}/>
               </div>
-              <div className="wordRibbonRow">
-                <button data-tip="Negrito (Ctrl+B)" data-tipdesc="Deixa o texto selecionado em negrito." onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
-                <button data-tip="Itálico (Ctrl+I)" data-tipdesc="Deixa o texto selecionado em itálico." onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
-                <button data-tip="Sublinhado (Ctrl+U)" data-tipdesc="Sublinha o texto selecionado." onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
-                <button data-tip="Tachado" data-tipdesc="Desenha uma linha sobre o texto selecionado, indicando exclusão." onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
-                <button data-tip="Subscrito (Ctrl+=)" data-tipdesc="Escreve o texto selecionado abaixo da linha de base, em tamanho menor." onClick={() => fmt.exec("subscript")}><Subscript size={15}/></button>
-                <button data-tip="Sobrescrito (Ctrl+Shift+=)" data-tipdesc="Escreve o texto selecionado acima da linha de base, em tamanho menor." onClick={() => fmt.exec("superscript")}><Superscript size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Maiúsculas e Minúsculas" data-tipdesc="Altera a capitalização do texto selecionado: frase, minúsculas, MAIÚSCULAS, Cada Palavra ou iNVERTER." onClick={() => fmt.setCaseOpen(o => !o)}><CaseSensitive size={15}/> <ChevronDown size={12}/></button>
-                  {fmt.caseOpen && <div className="wordDropdownMenu">
+            </RbGroup>
+            <RbGroup label="Fonte" wide onLauncher={() => openDlg("font", { ...fmtState, color: "#1a1a1a" })} launcherTip="Fonte">
+              <div className="rbCol">
+                <div className="rbRow">
+                  {rbm("font", (t) => <button type="button" className="rbCombo rbComboFont" data-tip="Fonte" data-tipdesc="Escolha a família tipográfica aplicada ao texto selecionado." onClick={t}><span style={{ fontFamily: fmtState.font }}>{fmtState.font}</span><ChevronDown size={11}/></button>, <>
+                    {WORD_FONTS.map(f => <button key={f} className={fmtState.font === f ? "active" : ""} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}
+                  </>)}
+                  {rbm("size", (t) => <button type="button" className="rbCombo rbComboSize" data-tip="Tamanho da Fonte" data-tipdesc="Define o tamanho do texto selecionado, em pontos." onClick={t}><span>{fmtState.size}</span><ChevronDown size={11}/></button>, <>
+                    {WORD_SIZES.map(s => <button key={s} className={fmtState.size === s ? "active" : ""} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}
+                  </>)}
+                  <button type="button" className="rbIco" data-tip="Aumentar Fonte (Ctrl+Shift+>)" data-tipdesc="Aumenta o tamanho do texto selecionado em um passo." onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
+                  <button type="button" className="rbIco" data-tip="Diminuir Fonte (Ctrl+Shift+<)" data-tipdesc="Diminui o tamanho do texto selecionado em um passo." onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
+                  {rbm("case", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Maiúsculas e Minúsculas" data-tipdesc="Altera a capitalização do texto selecionado: frase, minúsculas, MAIÚSCULAS, Cada Palavra ou iNVERTER." onClick={t}><CaseSensitive size={15}/><ChevronDown size={9}/></button>, <>
                     <button onClick={() => fmt.applyChangeCase("sentence")}>Primeira letra da frase em maiúscula</button>
                     <button onClick={() => fmt.applyChangeCase("lower")}>minúsculas</button>
                     <button onClick={() => fmt.applyChangeCase("upper")}>MAIÚSCULAS</button>
                     <button onClick={() => fmt.applyChangeCase("title")}>Cada Palavra Em Maiúscula</button>
                     <button onClick={() => fmt.applyChangeCase("toggle")}>iNVERTER mAIÚSC/mINÚSC</button>
-                  </div>}
+                  </>)}
+                  <button type="button" className="rbIco" data-tip="Limpar Toda a Formatação" data-tipdesc="Remove todas as formatações do texto selecionado, deixando apenas texto simples." onClick={fmt.clearFormatting}><Eraser size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Guia Fonético" data-tipdesc="Adiciona um texto de pronúncia pequeno acima do texto selecionado (ruby)." onClick={fmt.phoneticGuide}><Languages size={15}/></button>
                 </div>
-                <div className="emojiWrap">
-                  <button data-tip="Cor de Realce do Texto" data-tipdesc="Pinta o fundo do texto selecionado com uma cor, como um marca-texto." onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={15}/></button>
-                  {fmt.hiliteOpen && <div className="colorPopover">{NOTE_HILITE_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyHilite(c)}/>)}</div>}
+                <div className="rbRow">
+                  <button type="button" className={"rbIco" + (fmtState.bold ? " active" : "")} data-tip="Negrito (Ctrl+B)" data-tipdesc="Deixa o texto selecionado em negrito." onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.italic ? " active" : "")} data-tip="Itálico (Ctrl+I)" data-tipdesc="Deixa o texto selecionado em itálico." onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={Underline} tip="Sublinhado (Ctrl+U)" desc="Sublinha o texto selecionado. Clique na seta para escolher o estilo do sublinhado." active={fmtState.underline} onMain={() => fmt.exec("underline")} onArrow={() => setRbMenu(m => (m === "ulstyle" ? null : "ulstyle"))}/>
+                    {rbMenu === "ulstyle" && <div className="wordDropdownMenu" onClick={() => setRbMenu(null)}>
+                      <button onClick={() => fmt.underlineStyle("single")}>Simples</button>
+                      <button onClick={() => fmt.underlineStyle("double")}>Duplo</button>
+                      <button onClick={() => fmt.underlineStyle("dotted")}>Pontilhado</button>
+                      <button onClick={() => fmt.underlineStyle("dashed")}>Tracejado</button>
+                      <button onClick={() => fmt.underlineStyle("wavy")}>Ondulado</button>
+                    </div>}
+                  </div>
+                  <button type="button" className={"rbIco" + (fmtState.strike ? " active" : "")} data-tip="Tachado" data-tipdesc="Desenha uma linha sobre o texto selecionado, indicando exclusão." onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.sub ? " active" : "")} data-tip="Subscrito (Ctrl+=)" data-tipdesc="Escreve o texto selecionado abaixo da linha de base, em tamanho menor." onClick={() => fmt.exec("subscript")}><Subscript size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.sup ? " active" : "")} data-tip="Sobrescrito (Ctrl+Shift+=)" data-tipdesc="Escreve o texto selecionado acima da linha de base, em tamanho menor." onClick={() => fmt.exec("superscript")}><Superscript size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Borda de Caractere" data-tipdesc="Desenha uma borda ao redor do texto selecionado." onClick={fmt.charBorder}><Square size={14}/></button>
+                  {rbm("enclose", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Colocar Caracteres Entre Círculos" data-tipdesc="Coloca o texto selecionado dentro de um círculo, quadrado ou retângulo arredondado." onClick={t}><Circle size={14}/><ChevronDown size={9}/></button>, <>
+                    <button onClick={() => fmt.encloseChars("circle")}>Círculo</button>
+                    <button onClick={() => fmt.encloseChars("square")}>Quadrado</button>
+                    <button onClick={() => fmt.encloseChars("round")}>Retângulo Arredondado</button>
+                  </>)}
+                  {rbm("effects", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Efeitos de Texto e Tipografia" data-tipdesc="Aplica sombra, contorno, versalete, caixa alta ou tachado duplo ao texto selecionado." onClick={t}><Sparkle size={15}/><ChevronDown size={9}/></button>, <>
+                    <button onClick={() => applyTextEffect("shadow")}>Sombra</button>
+                    <button onClick={() => applyTextEffect("outline")}>Contorno</button>
+                    <button onClick={() => applyTextEffect("smallcaps")}>Versalete</button>
+                    <button onClick={() => applyTextEffect("allcaps")}>Todas em Maiúsculas</button>
+                    <button onClick={() => applyTextEffect("dblstrike")}>Tachado Duplo</button>
+                  </>)}
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={PaintBucket} tip="Cor de Realce do Texto" desc="Pinta o fundo do texto selecionado com uma cor, como um marca-texto. Clique na seta para escolher outra cor." color={lastHilite} onMain={() => fmt.applyHilite(lastHilite)} onArrow={() => setRbMenu(m => (m === "hilite" ? null : "hilite"))}/>
+                    {rbMenu === "hilite" && <div className="colorPopover rbPop">{NOTE_HILITE_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => { setLastHilite(c); fmt.applyHilite(c); setRbMenu(null); }}/>)}</div>}
+                  </div>
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={Palette} tip="Cor da Fonte" desc="Altera a cor do texto selecionado. Clique na seta para escolher outra cor." color={lastFontColor} onMain={() => fmt.applyTextColor(lastFontColor)} onArrow={() => setRbMenu(m => (m === "fcolor" ? null : "fcolor"))}/>
+                    {rbMenu === "fcolor" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>)}</div>}
+                  </div>
                 </div>
-                <div className="emojiWrap">
-                  <button data-tip="Cor da Fonte" data-tipdesc="Altera a cor do texto selecionado." onClick={() => { fmt.setColorOpen(o => !o); fmt.setHiliteOpen(false); }}><Palette size={15}/></button>
-                  {fmt.colorOpen && <div className="colorPopover">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => fmt.applyTextColor(c)}/>)}</div>}
-                </div>
-                <button data-tip="Limpar Toda a Formatação" data-tipdesc="Remove todas as formatações do texto selecionado, deixando apenas texto simples." onClick={fmt.clearFormatting}><Eraser size={15}/></button>
               </div>
-              <span className="wordRibbonGroupLabel">Fonte</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                <button data-tip="Marcadores" data-tipdesc="Cria uma lista com marcadores (pontos) para o parágrafo atual." onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
-                <button data-tip="Numeração" data-tipdesc="Cria uma lista numerada para o parágrafo atual." onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
-                <button data-tip="Lista de Vários Níveis" data-tipdesc="Cria uma lista com níveis de hierarquia, como um sumário ou tópicos aninhados." onClick={fmt.applyMultilevelList}><ListTree size={15}/></button>
-                <button data-tip="Diminuir Recuo" data-tipdesc="Move o parágrafo para mais perto da margem." onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
-                <button data-tip="Aumentar Recuo" data-tipdesc="Move o parágrafo para mais longe da margem." onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Classificar" data-tipdesc="Organiza os parágrafos selecionados em ordem alfabética, crescente ou decrescente." onClick={() => fmt.setSortOpen(o => !o)}><ArrowDown size={13}/> <ChevronDown size={12}/></button>
-                  {fmt.sortOpen && <div className="wordDropdownMenu">
+            </RbGroup>
+            <RbGroup label="Parágrafo" wide onLauncher={() => openDlg("para", { align: fmtState.align, left: fmt.paraIndent.left, right: fmt.paraIndent.right, first: fmt.paraIndent.firstLine, before: 0, after: 0, line: "1.15" })} launcherTip="Parágrafo">
+              <div className="rbCol">
+                <div className="rbRow">
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={List} tip="Marcadores" desc="Cria uma lista com marcadores (pontos) para o parágrafo atual. Clique na seta para escolher o estilo do marcador." onMain={() => fmt.exec("insertUnorderedList")} onArrow={() => setRbMenu(m => (m === "bullets" ? null : "bullets"))}/>
+                    {rbMenu === "bullets" && <div className="wordDropdownMenu" onClick={() => setRbMenu(null)}>
+                      <div className="wordDropdownEmpty">Biblioteca de Marcadores</div>
+                      <button onClick={() => applyListStyle(false, "disc")}>• Círculo cheio</button>
+                      <button onClick={() => applyListStyle(false, "circle")}>○ Círculo vazio</button>
+                      <button onClick={() => applyListStyle(false, "square")}>▪ Quadrado</button>
+                      <button onClick={() => applyListStyle(false, "none")}>Nenhum</button>
+                    </div>}
+                  </div>
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={ListOrdered} tip="Numeração" desc="Cria uma lista numerada para o parágrafo atual. Clique na seta para escolher o tipo de numeração." onMain={() => fmt.exec("insertOrderedList")} onArrow={() => setRbMenu(m => (m === "numbering" ? null : "numbering"))}/>
+                    {rbMenu === "numbering" && <div className="wordDropdownMenu" onClick={() => setRbMenu(null)}>
+                      <button onClick={() => applyListStyle(true, "decimal")}>1. 2. 3.</button>
+                      <button onClick={() => applyListStyle(true, "upper-roman")}>I. II. III.</button>
+                      <button onClick={() => applyListStyle(true, "upper-alpha")}>A. B. C.</button>
+                      <button onClick={() => applyListStyle(true, "lower-alpha")}>a. b. c.</button>
+                      <button onClick={() => applyListStyle(true, "lower-roman")}>i. ii. iii.</button>
+                      <button onClick={() => applyListStyle(true, "none")}>Nenhum</button>
+                    </div>}
+                  </div>
+                  {rbm("multilevel", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Lista de Vários Níveis" data-tipdesc="Cria uma lista com níveis de hierarquia, como um sumário ou tópicos aninhados." onClick={t}><ListTree size={15}/><ChevronDown size={9}/></button>, <>
+                    <button onClick={fmt.applyMultilevelList}>1. 1.1. 1.1.1.</button>
+                    <button onClick={() => { fmt.applyMultilevelList(); setTimeout(() => { const a = window.getSelection()?.anchorNode; const ol = (a && a.nodeType === 3 ? a.parentElement : a)?.closest?.("ol"); if (ol) { ol.dataset.ml = "outline"; handleBodyInput(); } }, 0); }}>I. A. 1. a.</button>
+                    <button onClick={() => fmt.exec("indent")}>Aumentar Nível da Lista</button>
+                    <button onClick={() => fmt.exec("outdent")}>Diminuir Nível da Lista</button>
+                  </>)}
+                  <button type="button" className="rbIco" data-tip="Diminuir Recuo" data-tipdesc="Move o parágrafo para mais perto da margem." onClick={() => fmt.exec("outdent")}><IndentDecrease size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Aumentar Recuo" data-tipdesc="Move o parágrafo para mais longe da margem." onClick={() => fmt.exec("indent")}><IndentIncrease size={15}/></button>
+                  {rbm("sort", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Classificar" data-tipdesc="Organiza os parágrafos selecionados em ordem alfabética, crescente ou decrescente." onClick={t}><ArrowDown size={14}/><ChevronDown size={9}/></button>, <>
                     <button onClick={() => fmt.sortBlocks("asc")}>Classificar A → Z</button>
                     <button onClick={() => fmt.sortBlocks("desc")}>Classificar Z → A</button>
-                  </div>}
+                  </>)}
+                  <button type="button" className={"rbIco" + (showMarks ? " active" : "")} data-tip="Mostrar Tudo (Ctrl+*)" data-tipdesc="Exibe marcas de formatação ocultas, como parágrafos e espaços." onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
                 </div>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Espaçamento entre Linhas e Parágrafos" data-tipdesc="Controla a distância vertical entre as linhas de texto." onClick={() => fmt.setLineOpen(o => !o)}><WrapText size={14}/> <ChevronDown size={12}/></button>
-                  {fmt.lineOpen && <div className="wordDropdownMenu">{WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}</div>}
+                <div className="rbRow">
+                  <button type="button" className={"rbIco" + (fmtState.align === "left" ? " active" : "")} data-tip="Alinhar Texto à Esquerda (Ctrl+Q)" data-tipdesc="Alinha o texto pela margem esquerda." onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.align === "center" ? " active" : "")} data-tip="Centralizar (Ctrl+E)" data-tipdesc="Centraliza o texto entre as margens." onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.align === "right" ? " active" : "")} data-tip="Alinhar Texto à Direita (Ctrl+G)" data-tipdesc="Alinha o texto pela margem direita." onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.align === "justify" ? " active" : "")} data-tip="Justificar (Ctrl+J)" data-tipdesc="Distribui o texto uniformemente entre as margens. O texto justificado proporciona bordas limpas e nítidas ao documento, criando uma aparência mais elegante." onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.dir === "ltr" ? " active" : "")} data-tip="Direção do Texto: Esquerda para a Direita" data-tipdesc="Define a direção do parágrafo atual como esquerda para a direita." onClick={() => setParaDir("ltr")}><PilcrowRight size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.dir === "rtl" ? " active" : "")} data-tip="Direção do Texto: Direita para a Esquerda" data-tipdesc="Define a direção do parágrafo atual como direita para a esquerda." onClick={() => setParaDir("rtl")}><PilcrowLeft size={15}/></button>
+                  {rbm("linespacing", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Espaçamento entre Linhas e Parágrafos" data-tipdesc="Controla a distância vertical entre as linhas de texto." onClick={t}><WrapText size={14}/><ChevronDown size={9}/></button>, <>
+                    {WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}
+                    <button onClick={() => fmt.setParagraphSpacingBefore(12)}>Adicionar Espaço Antes do Parágrafo</button>
+                    <button onClick={() => fmt.setParagraphSpacing(0)}>Remover Espaço Após o Parágrafo</button>
+                  </>)}
+                  <div className="wordDropdownWrap">
+                    <RbSplit icon={PaintRoller} tip="Sombreamento" desc="Pinta o fundo do parágrafo ou da célula selecionada com uma cor." color={lastShading} onMain={() => fmt.applyShading(lastShading)} onArrow={() => setRbMenu(m => (m === "shading" ? null : "shading"))}/>
+                    {rbMenu === "shading" && <div className="colorPopover rbPop">{WORD_SHADING_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => { setLastShading(c); fmt.applyShading(c); setRbMenu(null); }}/>)}</div>}
+                  </div>
+                  {rbm("borders", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Bordas" data-tipdesc="Adiciona ou remove bordas ao redor do texto ou parágrafo selecionado." onClick={t}><Frame size={14}/><ChevronDown size={9}/></button>, <>
+                    {WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}
+                  </>)}
                 </div>
-                <button data-tip="Mostrar Tudo (Ctrl+*)" data-tipdesc="Exibe marcas de formatação ocultas, como parágrafos e espaços." className={showMarks ? "active" : ""} onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
               </div>
-              <div className="wordRibbonRow">
-                <button data-tip="Alinhar Texto à Esquerda (Ctrl+Q)" data-tipdesc="Alinha o texto pela margem esquerda." onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
-                <button data-tip="Centralizar (Ctrl+E)" data-tipdesc="Centraliza o texto entre as margens." onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
-                <button data-tip="Alinhar Texto à Direita (Ctrl+G)" data-tipdesc="Alinha o texto pela margem direita." onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
-                <button data-tip="Justificar (Ctrl+J)" data-tipdesc="Distribui o texto uniformemente entre as margens. O texto justificado proporciona bordas limpas e nítidas ao documento, criando uma aparência mais elegante." onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
-                <div className="emojiWrap">
-                  <button data-tip="Sombreamento" data-tipdesc="Pinta o fundo do parágrafo ou da célula selecionada com uma cor." onClick={() => { fmt.setShadingOpen(o => !o); fmt.setBorderOpen(false); }}><PaintRoller size={15}/></button>
-                  {fmt.shadingOpen && <div className="colorPopover">{WORD_SHADING_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => fmt.applyShading(c)}/>)}</div>}
-                </div>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Bordas" data-tipdesc="Adiciona ou remove bordas ao redor do texto ou parágrafo selecionado." onClick={() => { fmt.setBorderOpen(o => !o); fmt.setShadingOpen(false); }}><Frame size={14}/> <ChevronDown size={12}/></button>
-                  {fmt.borderOpen && <div className="wordDropdownMenu">{WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}</div>}
-                </div>
+            </RbGroup>
+            <RbGroup label="Estilos" onLauncher={() => setSidePane("styles")} launcherTip="Estilos">
+              <div className="rbStyleGallery">
+                {[
+                  ["Normal", "normal", () => fmt.applyHeading("P"), "Aplica o estilo de parágrafo padrão, sem títulos nem espaçamentos especiais."],
+                  ["Sem Espaçamento", "nospacing", fmt.applyNoSpacing, "Aplica um estilo de parágrafo sem espaço extra antes ou depois das linhas."],
+                  ["Título 1", "h1", () => fmt.applyHeading("H1"), "Aplica o estilo de título de nível 1, usado para as seções principais do documento."],
+                  ["Título 2", "h2", () => fmt.applyHeading("H2"), "Aplica o estilo de título de nível 2, usado para subseções."],
+                  ["Título 3", "h3", () => fmt.applyHeading("H3"), "Aplica o estilo de título de nível 3, usado para subdivisões menores."],
+                  ["Título", "title", () => fmt.applyParagraphStyle("title"), "Aplica o estilo de título principal do documento, com destaque visual maior."],
+                  ["Subtítulo", "subtitle", () => fmt.applyParagraphStyle("subtitle"), "Aplica o estilo de subtítulo, usado logo abaixo do título principal."],
+                  ["Citação", "quote", () => fmt.applyHeading("BLOCKQUOTE"), "Aplica o estilo de citação em bloco, destacando o trecho selecionado do restante do texto."],
+                ].map(([label, cls, fn, desc]) => (
+                  <button key={label} type="button" className={"rbStyleTile rbStyle-" + cls} data-tip={label} data-tipdesc={desc} onClick={fn}>
+                    <span className="rbStylePrev">AaBbCc</span>
+                    <span className="rbStyleName">{label}</span>
+                  </button>
+                ))}
               </div>
-              <span className="wordRibbonGroupLabel">Parágrafo</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow wordStylesGallery">
-                <button data-tip="Normal" data-tipdesc="Aplica o estilo de parágrafo padrão, sem títulos nem espaçamentos especiais." onClick={() => fmt.applyHeading("P")}><Pilcrow size={15}/></button>
-                <button data-tip="Sem Espaçamento" data-tipdesc="Aplica um estilo de parágrafo sem espaço extra antes ou depois das linhas." className="wordStyleTextBtn" onClick={fmt.applyNoSpacing}>Sem Espaçamento</button>
-                <button data-tip="Título" data-tipdesc="Aplica o estilo de título principal do documento, com destaque visual maior." className="wordStyleTextBtn wordStyleTitleBtn" onClick={() => fmt.applyParagraphStyle("title")}>Título</button>
-                <button data-tip="Subtítulo" data-tipdesc="Aplica o estilo de subtítulo, usado logo abaixo do título principal." className="wordStyleTextBtn wordStyleSubtitleBtn" onClick={() => fmt.applyParagraphStyle("subtitle")}>Subtítulo</button>
-                <button data-tip="Título 1" data-tipdesc="Aplica o estilo de título de nível 1, usado para as seções principais do documento." onClick={() => fmt.applyHeading("H1")}><Heading1 size={15}/></button>
-                <button data-tip="Título 2" data-tipdesc="Aplica o estilo de título de nível 2, usado para subseções." onClick={() => fmt.applyHeading("H2")}><Heading2 size={15}/></button>
-                <button data-tip="Título 3" data-tipdesc="Aplica o estilo de título de nível 3, usado para subdivisões menores." onClick={() => fmt.applyHeading("H3")}><Heading3 size={15}/></button>
-                <button data-tip="Citação" data-tipdesc="Aplica o estilo de citação em bloco, destacando o trecho selecionado do restante do texto." onClick={() => fmt.applyHeading("BLOCKQUOTE")}><Quote size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Edição">
+              <div className="rbStack">
+                {rbm("find", (t) => <RbSm icon={Search} label="Localizar" chevron tip="Localizar (Ctrl+F)" desc="Procura uma palavra ou trecho de texto no documento." onClick={t}/>, <>
+                  <button onClick={() => fmt.setFindOpen(true)}>Localizar</button>
+                  <button onClick={() => fmt.setFindOpen(true)}>Localização Avançada…</button>
+                  <button onClick={() => openDlg("goto")}>Ir Para…</button>
+                </>)}
+                <RbSm icon={Replace} label="Substituir" tip="Substituir (Ctrl+H)" desc="Procura um texto no documento e o substitui por outro." onClick={() => fmt.setFindOpen(true)}/>
+                {rbm("select", (t) => <RbSm icon={MousePointer2} label="Selecionar" chevron tip="Selecionar" desc="Seleciona todo o documento, o parágrafo ou a frase onde está o cursor." onClick={t}/>, <>
+                  <button onClick={fmt.selectAll}>Selecionar Tudo</button>
+                  <button onClick={() => selectUnit("paragraph")}>Selecionar Parágrafo</button>
+                  <button onClick={() => selectUnit("sentence")}>Selecionar Frase</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Estilos</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Localizar (Ctrl+F)" data-tipdesc="Procura uma palavra ou trecho de texto no documento." onClick={() => fmt.setFindOpen(o => !o)}><Search size={15}/></button>
-                <button data-tip="Substituir (Ctrl+H)" data-tipdesc="Procura um texto no documento e o substitui por outro." onClick={() => fmt.setFindOpen(true)}><Replace size={15}/></button>
-                <button data-tip="Selecionar Tudo (Ctrl+A)" data-tipdesc="Seleciona todo o conteúdo do documento." onClick={fmt.selectAll}><LayoutGrid size={15}/></button>
-              </div>
-              <span className="wordRibbonGroupLabel">Editando</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip={fmt.dictationSupported ? "Ditar" : "Ditado não suportado neste navegador"} data-tipdesc={fmt.dictationSupported ? "Converte sua fala em texto no ponto onde está o cursor, usando o microfone." : "Este navegador não oferece suporte a reconhecimento de voz."} className={fmt.dictating ? "active" : ""} onClick={fmt.toggleDictation}><Mic size={15}/></button>
-              </div>
-              <span className="wordRibbonGroupLabel">Voz</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Confidencialidade" data-tipdesc="Classifica o documento quanto ao nível de sensibilidade da informação que ele contém." onClick={() => { setSensitivityOpen(o => !o); setEditorOpen(false); setAddinsOpen(false); }}><Lock size={13}/> <ChevronDown size={12}/></button>
-                {sensitivityOpen && <div className="wordDropdownMenu">
-                  {SENSITIVITY_LABELS.map(l => <button key={l} className={sensitivityLabel === l ? "active" : ""} onClick={() => { setSensitivityLabel(l); setSensitivityOpen(false); }}>{l}</button>)}
-                </div>}
-              </div>
-              <span className="wordRibbonGroupLabel">Confidencialidade{sensitivityLabel !== "Nenhum" ? ": " + sensitivityLabel : ""}</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Editor" data-tipdesc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={() => { setEditorOpen(o => !o); setSensitivityOpen(false); setAddinsOpen(false); }}><SpellCheck size={15}/> <ChevronDown size={12}/></button>
-                {editorOpen && (() => {
-                  const text = bodyRef.current?.innerText || "";
-                  const doubleSpaces = (text.match(/ {2,}/g) || []).length;
-                  const repeated = (text.match(/\b(\p{L}+)\s+\1\b/giu) || []).length;
-                  const issues = doubleSpaces + repeated;
-                  return (
-                    <div className="wordDropdownMenu wordEditorPanel">
-                      <div className="wordEditorScore">{issues === 0 ? "Nenhum problema encontrado" : `${issues} possível(is) problema(s)`}</div>
-                      <div className="wordEditorRow">Espaços duplos <b>{doubleSpaces}</b></div>
-                      <div className="wordEditorRow">Palavras repetidas <b>{repeated}</b></div>
-                      <div className="wordEditorRow">Tempo de leitura estimado <b>{Math.max(1, Math.round(wordCount.words / 200))} min</b></div>
-                    </div>
-                  );
-                })()}
-              </div>
-              <span className="wordRibbonGroupLabel">Revisão de Texto</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Suplementos" data-tipdesc="Adiciona ou gerencia extensões que ampliam os recursos do documento." onClick={() => { setAddinsOpen(o => !o); setSensitivityOpen(false); setEditorOpen(false); }}><Grid3x3 size={15}/> Suplementos</button>
-                {addinsOpen && <div className="wordDropdownMenu"><div className="wordEditorRow">Nenhum suplemento instalado</div></div>}
-              </div>
-              <span className="wordRibbonGroupLabel">Suplementos</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Voz">
+              <RbBig icon={Mic} label="Ditar" tip={fmt.dictationSupported ? "Ditar" : "Ditado não suportado neste navegador"} desc={fmt.dictationSupported ? "Converte sua fala em texto no ponto onde está o cursor, usando o microfone." : "Este navegador não oferece suporte a reconhecimento de voz."} active={fmt.dictating} onClick={fmt.toggleDictation}/>
+            </RbGroup>
+            <RbGroup label="Confidencialidade">
+              {rbm("sens", (t) => <RbBig icon={Lock} label={sensitivityLabel !== "Nenhum" ? sensitivityLabel : "Confidencialidade"} chevron tip="Confidencialidade" desc="Classifica o documento quanto ao nível de sensibilidade da informação que ele contém." onClick={t}/>, <>
+                {SENSITIVITY_LABELS.map(l => <button key={l} className={sensitivityLabel === l ? "active" : ""} onClick={() => setSensitivityLabel(l)}>{l}</button>)}
+              </>)}
+            </RbGroup>
+            <RbGroup label="Editor">
+              {rbm("editor", (t) => <RbBig icon={SpellCheck} label="Editor" chevron tip="Editor" desc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={t}/>, (() => {
+                const text = bodyRef.current?.innerText || "";
+                const doubleSpaces = (text.match(/ {2,}/g) || []).length;
+                const repeated = (text.match(/\b(\p{L}+)\s+\1\b/giu) || []).length;
+                const issues = doubleSpaces + repeated;
+                return (
+                  <>
+                    <div className="wordEditorScore">{issues === 0 ? "Nenhum problema encontrado" : `${issues} possível(is) problema(s)`}</div>
+                    <div className="wordEditorRow">Espaços duplos <b>{doubleSpaces}</b></div>
+                    <div className="wordEditorRow">Palavras repetidas <b>{repeated}</b></div>
+                    <div className="wordEditorRow">Tempo de leitura estimado <b>{Math.max(1, Math.round(wordCount.words / 200))} min</b></div>
+                  </>
+                );
+              })(), "wordDropdownMenu wordEditorPanel")}
+            </RbGroup>
+            <RbGroup label="Suplementos">
+              {rbm("addins", (t) => <RbBig icon={Grid3x3} label="Suplementos" chevron tip="Suplementos" desc="Adiciona ou gerencia extensões que ampliam os recursos do documento." onClick={t}/>, <div className="wordEditorRow">Nenhum suplemento instalado</div>)}
+            </RbGroup>
           </>)}
 
           {ribbonTab === "insert" && (<>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                <button className="wordTextBtn" data-tip="Capa" data-tipdesc="Insere uma página de rosto no início do documento, com título, subtítulo e data." onClick={insertCoverPage}><BookOpen size={14}/> Capa</button>
-                <button className="wordTextBtn" data-tip="Página em Branco" data-tipdesc="Insere uma página vazia no ponto onde está o cursor." onClick={insertBlankPage}><FileText size={14}/> Em Branco</button>
-                <button data-tip="Quebra de Página (Ctrl+Enter)" data-tipdesc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}><FileType size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Quebra de Seção" data-tipdesc="Marca uma divisão de seção no documento (próxima página, contínua, página par ou ímpar)." onClick={() => fmt.setSectionBreakOpen(o => !o)}><Columns2 size={14}/> <ChevronDown size={12}/></button>
-                  {fmt.sectionBreakOpen && <div className="wordDropdownMenu">
-                    <button onClick={() => fmt.insertSectionBreak("nextpage")}>Próxima Página</button>
-                    <button onClick={() => fmt.insertSectionBreak("continuous")}>Contínua</button>
-                    <button onClick={() => fmt.insertSectionBreak("evenpage")}>Página Par</button>
-                    <button onClick={() => fmt.insertSectionBreak("oddpage")}>Página Ímpar</button>
-                  </div>}
+            <RbGroup label="Páginas">
+              <div className="rbStack">
+                {rbm("cover", (t) => <RbSm icon={BookOpen} label="Folha de Rosto" chevron tip="Folha de Rosto" desc="Insere uma página de rosto no início do documento, com título, subtítulo e data." onClick={t}/>, <>
+                  <button onClick={insertCoverPage}>Inserir Folha de Rosto</button>
+                  <button onClick={removeCoverPage}>Remover Folha de Rosto Atual</button>
+                </>)}
+                <RbSm icon={FileText} label="Página em Branco" tip="Página em Branco" desc="Insere uma página vazia no ponto onde está o cursor." onClick={insertBlankPage}/>
+                <RbSm icon={FileType} label="Quebra de Página" tip="Quebra de Página (Ctrl+Enter)" desc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}/>
+              </div>
+            </RbGroup>
+            <RbGroup label="Tabelas">
+              {rbm("table", (t) => <RbBig icon={Table2} label="Tabela" chevron tip="Tabela" desc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={t}/>, <>
+                <div className="rbTableGrid" onMouseLeave={() => setHoverGrid(null)}>
+                  {Array.from({ length: 80 }).map((_, i) => {
+                    const r = Math.floor(i / 10) + 1, c = (i % 10) + 1;
+                    return <span key={i} className={"rbGridCell" + (hoverGrid && r <= hoverGrid[0] && c <= hoverGrid[1] ? " on" : "")} onMouseEnter={() => setHoverGrid([r, c])} onClick={() => fmt.insertTable(r, c)}/>;
+                  })}
                 </div>
+                <div className="wordDropdownEmpty">{hoverGrid ? `${hoverGrid[1]} × ${hoverGrid[0]}` : "Passe o mouse para escolher"}</div>
+                <button onClick={() => setTableDialogOpen(true)}>Inserir Tabela…</button>
+                <button onClick={convertTextToTable}>Converter Texto em Tabela</button>
+              </>)}
+            </RbGroup>
+            <RbGroup label="Ilustrações" wide>
+              <RbBig icon={ImageIcon} label="Imagens" tip="Imagem" desc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}/>
+              <div className="rbStack">
+                {rbm("shapes", (t) => <RbSm icon={Square} label="Formas" chevron tip="Formas" desc="Insere uma forma (retângulo, elipse, seta...) que pode ser redimensionada e recolorida." onClick={t}/>, <>
+                  {SHAPE_PRESETS.map(p => <button key={p.id} onClick={() => insertShape(p.id)}>{p.label}</button>)}
+                </>)}
+                {rbm("icons", (t) => <RbSm icon={Star} label="Ícones" chevron tip="Ícones" desc="Insere um ícone ou pictograma, que pode ser aumentado como qualquer texto." onClick={t}/>, <>
+                  {WORD_ICON_GLYPHS.map(g => <button key={g} className="emojiBtn" onClick={() => fmt.insertIcon(g)}>{g}</button>)}
+                </>, "emojiPopover rbPop")}
+                <RbSm icon={PenTool} label="Desenho" tip="Desenho" desc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => { setInkMode(false); setDrawOpen(true); }}/>
               </div>
-              <span className="wordRibbonGroupLabel">Páginas</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Tabela" data-tipdesc="Insere uma tabela no documento, escolhendo o número de linhas e colunas." onClick={() => setTableDialogOpen(true)}><Table2 size={15}/></button>
-                <button data-tip="Converter Texto em Tabela" data-tipdesc="Transforma o texto selecionado numa tabela (uma linha por linha, células separadas por vírgula ou tab)." onClick={convertTextToTable}><Replace size={15}/></button>
+              <div className="rbStack">
+                {rbm("smartart", (t) => <RbSm icon={ListTree} label="SmartArt" chevron tip="SmartArt" desc="Insere um diagrama pronto (lista, processo ou hierarquia) com texto editável em cada caixa." onClick={t}/>, <>
+                  <button onClick={() => insertSmartArt("lista")}>Lista</button>
+                  <button onClick={() => insertSmartArt("processo")}>Processo</button>
+                  <button onClick={() => insertSmartArt("hierarquia")}>Hierarquia</button>
+                </>)}
+                <RbSm icon={BarChart3} label="Gráfico" tip="Gráfico" desc="Insere um gráfico de colunas, linhas ou pizza a partir de valores digitados." onClick={() => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })}/>
               </div>
-              <span className="wordRibbonGroupLabel">Tabelas</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Imagem" data-tipdesc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}><ImageIcon size={15}/></button>
-                <button data-tip="Desenho" data-tipdesc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => setDrawOpen(true)}><PenTool size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Formas" data-tipdesc="Insere uma forma (retângulo, elipse, seta...) que pode ser redimensionada e recolorida." onClick={() => setShapesOpen(o => !o)}><Square size={14}/> <ChevronDown size={12}/></button>
-                  {shapesOpen && <div className="wordDropdownMenu">{SHAPE_PRESETS.map(p => <button key={p.id} onClick={() => insertShape(p.id)}>{p.label}</button>)}</div>}
-                </div>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="SmartArt" data-tipdesc="Insere um diagrama pronto (lista, processo ou hierarquia) com texto editável em cada caixa." onClick={() => setSmartArtOpen(o => !o)}><ListTree size={14}/> <ChevronDown size={12}/></button>
-                  {smartArtOpen && <div className="wordDropdownMenu">
-                    <button onClick={() => insertSmartArt("lista")}>Lista</button>
-                    <button onClick={() => insertSmartArt("processo")}>Processo</button>
-                    <button onClick={() => insertSmartArt("hierarquia")}>Hierarquia</button>
-                  </div>}
-                </div>
-                <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
+              <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
+            </RbGroup>
+            <RbGroup label="Mídia">
+              <RbBig icon={Film} label={"Vídeo\nOnline"} tip="Vídeo Online" desc="Insere um vídeo do YouTube ou Vimeo a partir de um link." onClick={fmt.insertVideoEmbed}/>
+            </RbGroup>
+            <RbGroup label="Links">
+              <div className="rbStack">
+                <RbSm icon={Link2} label="Link" tip="Link (Ctrl+K)" desc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}/>
+                {rbm("bookmark", (t) => <RbSm icon={Bookmark} label="Indicador" chevron tip="Indicadores" desc="Marca um ponto do documento com um nome, para localizá-lo rapidamente depois." onClick={t}/>, <>
+                  <button onClick={fmt.insertBookmark}>+ Adicionar indicador aqui</button>
+                  {fmt.listBookmarks().map(b => <button key={b.id} onClick={() => fmt.goToBookmark(b.id)}>{b.name}</button>)}
+                </>)}
+                {rbm("crossref", (t) => <RbSm icon={Crosshair} label="Referência Cruzada" chevron tip="Referência Cruzada" desc="Insere um link para um título ou indicador já existente no documento, usando o próprio texto dele como rótulo." onClick={t}/>, <>
+                  {fmt.listCrossRefTargets().length ? fmt.listCrossRefTargets().map(t => <button key={t.id} onClick={() => fmt.insertCrossReference(t.id, t.label)}>{t.label}</button>) : <span className="wordDropdownEmpty">Nenhum título ou indicador ainda</span>}
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Ilustrações</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Link (Ctrl+K)" data-tipdesc="Cria um hyperlink a partir do texto selecionado, levando a um endereço da web." onClick={() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); }}><Link2 size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Referência Cruzada" data-tipdesc="Insere um link para um título ou indicador já existente no documento, usando o próprio texto dele como rótulo." onClick={() => fmt.setCrossRefOpen(o => !o)}><Crosshair size={14}/> <ChevronDown size={12}/></button>
-                  {fmt.crossRefOpen && <div className="wordDropdownMenu">
-                    {fmt.listCrossRefTargets().length ? fmt.listCrossRefTargets().map(t => <button key={t.id} onClick={() => fmt.insertCrossReference(t.id, t.label)}>{t.label}</button>) : <span className="wordDropdownEmpty">Nenhum título ou indicador ainda</span>}
-                  </div>}
-                </div>
+            </RbGroup>
+            <RbGroup label="Comentários">
+              <RbBig icon={MessageSquarePlus} label="Comentário" tip="Novo Comentário" desc="Adiciona um comentário ao trecho de texto selecionado." onClick={addComment}/>
+            </RbGroup>
+            <RbGroup label="Cabeçalho e Rodapé">
+              <div className="rbStack">
+                {rbm("header", (t) => <RbSm icon={PanelTop} label="Cabeçalho" chevron tip="Cabeçalho" desc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={t}/>, <>
+                  <button onClick={() => fmt.insertHeaderFooterBand("header")}>Inserir Cabeçalho</button>
+                  <button className={bodyRef.current?.querySelector(".word-header-band-first, .word-footer-band-first") ? "active" : ""} onClick={fmt.togglePrimeiraPaginaDiferente}>Primeira Página Diferente</button>
+                </>)}
+                {rbm("footer", (t) => <RbSm icon={PanelBottom} label="Rodapé" chevron tip="Rodapé" desc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={t}/>, <>
+                  <button onClick={() => fmt.insertHeaderFooterBand("footer")}>Inserir Rodapé</button>
+                </>)}
+                {rbm("pagenum", (t) => <RbSm icon={FileDigit} label="Número de Página" chevron tip="Número de Página" desc="Insere a numeração automática das páginas no cabeçalho ou no rodapé." onClick={t}/>, <>
+                  <div className="wordDropdownEmpty">No cabeçalho</div>
+                  <button onClick={() => fmt.insertPageNumber("header", "simple")}>Só o número (1)</button>
+                  <button onClick={() => fmt.insertPageNumber("header", "label")}>"Página 1"</button>
+                  <button onClick={() => fmt.insertPageNumber("header", "labelof")}>"Página 1 de N"</button>
+                  <div className="wordDropdownEmpty">No rodapé</div>
+                  <button onClick={() => fmt.insertPageNumber("footer", "simple")}>Só o número (1)</button>
+                  <button onClick={() => fmt.insertPageNumber("footer", "label")}>"Página 1"</button>
+                  <button onClick={() => fmt.insertPageNumber("footer", "labelof")}>"Página 1 de N"</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Links</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Indicadores" data-tipdesc="Marca um ponto do documento com um nome, para localizá-lo rapidamente depois." onClick={() => setBookmarksOpen(o => !o)}><Bookmark size={15}/> <ChevronDown size={12}/></button>
-                {bookmarksOpen && <div className="wordDropdownMenu">
-                  <button onClick={() => { setBookmarksOpen(false); fmt.insertBookmark(); }}>+ Adicionar indicador aqui</button>
-                  {fmt.listBookmarks().map(b => <button key={b.id} onClick={() => { fmt.goToBookmark(b.id); setBookmarksOpen(false); }}>{b.name}</button>)}
-                </div>}
+            </RbGroup>
+            <RbGroup label="Texto" wide>
+              <RbBig icon={SquareDashed} label={"Caixa de\nTexto"} tip="Caixa de Texto" desc="Insere uma caixa de texto que pode ser posicionada livremente na página." onClick={fmt.insertTextBox}/>
+              <div className="rbStack">
+                {rbm("quickparts", (t) => <RbSm icon={Puzzle} label="Partes Rápidas" chevron tip="Partes Rápidas" desc="Insere blocos de texto reutilizáveis. Você pode salvar a seleção atual na galeria." onClick={t}/>, <>
+                  {[...WORD_QUICKPART_BUILTINS, ...fmt.loadQuickParts()].map(q => <button key={q.name} onClick={() => fmt.insertQuickPart(q.html)}>{q.name}</button>)}
+                  <button onClick={fmt.saveQuickPart}>+ Salvar Seleção na Galeria</button>
+                </>)}
+                {rbm("wordart", (t) => <RbSm icon={Sparkle} label="WordArt" chevron tip="WordArt" desc="Insere um texto com estilo visual pronto (contorno, sombra, cor). Continua editável como qualquer texto." onClick={t}/>, <>
+                  {WORDART_STYLES.map(s => <button key={s.id} onClick={() => insertWordArt(s.id)}>{s.label}</button>)}
+                </>)}
+                <RbSm icon={CaseUpper} label="Letra Capitular" tip="Letra Capitular" desc="Aumenta e destaca a primeira letra do parágrafo, como no início de um capítulo." onClick={fmt.toggleDropCap}/>
               </div>
-              <span className="wordRibbonGroupLabel">Indicadores</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Vídeo Online" data-tipdesc="Insere um vídeo do YouTube ou Vimeo a partir de um link." onClick={fmt.insertVideoEmbed}><Film size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Mídia</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Novo Comentário" data-tipdesc="Adiciona um comentário ao trecho de texto selecionado." onClick={fmt.addComment}><MessageSquarePlus size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Comentários</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Cabeçalho" data-tipdesc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("header")}><PanelTop size={15}/></button>
-                <button data-tip="Rodapé" data-tipdesc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={() => fmt.insertHeaderFooterBand("footer")}><PanelBottom size={15}/></button>
-                <button data-tip="Primeira Página Diferente" data-tipdesc="A primeira página passa a ter seu próprio cabeçalho e rodapé, separados do resto do documento." className={bodyRef.current?.querySelector(".word-header-band-first, .word-footer-band-first") ? "active" : ""} onClick={fmt.togglePrimeiraPaginaDiferente}><SquareDashed size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Número de Página" data-tipdesc="Insere a numeração automática das páginas no cabeçalho ou no rodapé." onClick={() => fmt.setPageNumOpen(o => !o)}><FileDigit size={14}/> <ChevronDown size={12}/></button>
-                  {fmt.pageNumOpen && <div className="wordDropdownMenu">
-                    <div className="wordDropdownEmpty">No cabeçalho</div>
-                    <button onClick={() => fmt.insertPageNumber("header", "simple")}>Só o número (1)</button>
-                    <button onClick={() => fmt.insertPageNumber("header", "label")}>"Página 1"</button>
-                    <button onClick={() => fmt.insertPageNumber("header", "labelof")}>"Página 1 de N"</button>
-                    <div className="wordDropdownEmpty">No rodapé</div>
-                    <button onClick={() => fmt.insertPageNumber("footer", "simple")}>Só o número (1)</button>
-                    <button onClick={() => fmt.insertPageNumber("footer", "label")}>"Página 1"</button>
-                    <button onClick={() => fmt.insertPageNumber("footer", "labelof")}>"Página 1 de N"</button>
-                  </div>}
-                </div>
+              <div className="rbStack">
+                <RbSm icon={PenLine} label="Linha de Assinatura" tip="Linha de Assinatura" desc="Insere uma linha para assinatura, com um X ao lado." onClick={fmt.insertSignatureLine}/>
+                <RbSm icon={CalendarDays} label="Data e Hora" tip="Data e Hora" desc="Insere a data e a hora atuais no ponto onde está o cursor." onClick={fmt.insertDateTime}/>
+                <RbSm icon={FileInput} label="Objeto" tip="Texto de Arquivo" desc="Insere no documento o texto de um arquivo (.txt, .md, .csv, .html)." onClick={fmt.insertTextFromFile}/>
               </div>
-              <span className="wordRibbonGroupLabel">Cabeçalho e Rodapé</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                <button data-tip="Caixa de Texto" data-tipdesc="Insere uma caixa de texto que pode ser posicionada livremente na página." onClick={fmt.insertTextBox}><SquareDashed size={15}/></button>
-                <button data-tip="Letra Capitular" data-tipdesc="Aumenta e destaca a primeira letra do parágrafo, como no início de um capítulo." onClick={fmt.toggleDropCap}><CaseUpper size={15}/></button>
-                <button data-tip="Data e Hora" data-tipdesc="Insere a data e a hora atuais no ponto onde está o cursor." onClick={fmt.insertDateTime}><CalendarDays size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="WordArt" data-tipdesc="Insere um texto com estilo visual pronto (contorno, sombra, cor). Continua editável como qualquer texto." onClick={() => setWordArtOpen(o => !o)}><Sparkle size={14}/> <ChevronDown size={12}/></button>
-                  {wordArtOpen && <div className="wordDropdownMenu">{WORDART_STYLES.map(s => <button key={s.id} onClick={() => insertWordArt(s.id)}>{s.label}</button>)}</div>}
-                </div>
-              </div>
-              <span className="wordRibbonGroupLabel">Texto</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Equação" data-tipdesc="Insere um bloco de equação, editável como texto em itálico." onClick={fmt.insertEquation}><Omega size={15}/></button>
-                <div className="emojiWrap">
-                  <button data-tip="Símbolo" data-tipdesc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={() => fmt.setSymbolOpen(o => !o)}><Sigma size={15}/></button>
-                  {fmt.symbolOpen && <div className="emojiPopover">{WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}</div>}
-                </div>
-              </div>
-              <span className="wordRibbonGroupLabel">Símbolos</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="emojiWrap">
-                <button data-tip="Emoji" data-tipdesc="Insere um emoji no ponto onde está o cursor." onClick={() => fmt.setEmojiOpen(o => !o)}><Smile size={15}/></button>
-                {fmt.emojiOpen && <div className="emojiPopover">{EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}</div>}
-              </div>
-              <span className="wordRibbonGroupLabel">Emojis</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Símbolos">
+              <RbBig icon={Omega} label="Equação" tip="Equação" desc="Insere um bloco de equação, editável como texto em itálico." onClick={fmt.insertEquation}/>
+              {rbm("symbol", (t) => <RbBig icon={Sigma} label="Símbolo" chevron tip="Símbolo" desc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={t}/>, <>
+                {WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}
+              </>, "emojiPopover rbPop")}
+            </RbGroup>
+            <RbGroup label="Emojis">
+              {rbm("emoji", (t) => <RbBig icon={Smile} label="Emoji" chevron tip="Emoji" desc="Insere um emoji no ponto onde está o cursor." onClick={t}/>, <>
+                {EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}
+              </>, "emojiPopover rbPop")}
+            </RbGroup>
           </>)}
 
           {ribbonTab === "draw" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Caneta" className={drawTool === "pen" ? "active" : ""} onClick={() => setDrawTool("pen")}><PenTool size={15}/></button>
-                <button data-tip="Marca-texto" className={drawTool === "highlighter" ? "active" : ""} onClick={() => setDrawTool("highlighter")}><Highlighter size={15}/></button>
-                <button data-tip="Borracha" className={drawTool === "eraser" ? "active" : ""} onClick={() => setDrawTool("eraser")}><Eraser size={15}/></button>
-                <button data-tip="Selecionar" className={drawTool === "select" ? "active" : ""} onClick={() => setDrawTool("select")}><MousePointer2 size={15}/></button>
+            <RbGroup label="Ferramentas de Desenho" wide>
+              <RbBig icon={MousePointer2} label="Selecionar" tip="Selecionar" desc="Seleciona traços já desenhados na tela de desenho." active={drawTool === "select"} onClick={() => { setDrawTool("select"); setActivePen(null); }}/>
+              <RbBig icon={Eraser} label="Borracha" tip="Borracha" desc="Apaga partes do desenho." active={drawTool === "eraser"} onClick={() => { setDrawTool("eraser"); setActivePen(null); }}/>
+              {pens.map(p => (
+                <RbBig key={p.id} icon={p.tool === "highlighter" ? Highlighter : PenTool} label={p.name} tip={p.name} desc="Seleciona esta caneta, com a cor e a espessura salvas nela." active={activePen === p.id} onClick={() => { setActivePen(p.id); setDrawTool(p.tool); setDrawColor(p.color); setDrawSize(p.size); }}/>
+              ))}
+              {rbm("addpen", (t) => <RbBig icon={Plus} label={"Adicionar\nCaneta"} chevron tip="Adicionar Caneta" desc="Cria uma nova caneta com a cor e a espessura atuais." onClick={t}/>, <>
+                {[["Caneta", "pen"], ["Lápis", "pen"], ["Marca-texto", "highlighter"]].map(([n, tool]) => <button key={n} onClick={() => { const id = "p" + Date.now(); setPens(l => [...l, { id, name: n, tool, color: drawColor, size: drawSize }]); setActivePen(id); setDrawTool(tool); }}>{n}</button>)}
+              </>)}
+              <div className="rbCol">
+                <div className="wordDropdownWrap">
+                  <RbSplit icon={Palette} tip="Cor da Caneta" desc="Escolhe a cor usada pela caneta atual." color={drawColor} onMain={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))} onArrow={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))}/>
+                  {rbMenu === "pencolor" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setDrawColor(c); setRbMenu(null); }}/>)}</div>}
+                </div>
+                {rbm("pensize", (t) => <RbSm icon={SlidersHorizontal} label={`${drawSize} pt`} chevron tip="Espessura" desc="Define a espessura do traço." onClick={t}/>, <>
+                  {[1, 2, 3, 5, 8, 12].map(n => <button key={n} className={drawSize === n ? "active" : ""} onClick={() => setDrawSize(n)}>{n} pt</button>)}
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Ferramentas</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                {WORD_TEXT_COLORS.map(c => (
-                  <button key={c} className={"colorSwatch" + (drawColor === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => setDrawColor(c)}/>
-                ))}
-              </div>
-              <span className="wordRibbonGroupLabel">Cor</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><input type="range" min="1" max="12" value={drawSize} onChange={e => setDrawSize(Number(e.target.value))} data-tip="Espessura"/></div>
-              <span className="wordRibbonGroupLabel">Espessura</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Régua" data-tipdesc="Mostra uma grade de apoio na tela de desenho." className={drawRuler ? "active" : ""} onClick={() => setDrawRuler(r => !r)}><Ruler size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Régua</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button className="wordTextBtn" onClick={() => setDrawOpen(true)}><PenTool size={14}/> Abrir Tela de Desenho</button></div>
-              <span className="wordRibbonGroupLabel">Desenhar</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Converter">
+              <RbBig icon={Type} label={"Tinta para\nTexto"} tip="Tinta para Texto" desc="Escreva à mão na tela de desenho; o texto reconhecido é inserido no documento (requer conta/sincronização)." onClick={() => { setInkMode("text"); setDrawOpen(true); }}/>
+              <RbBig icon={Sigma} label={"Tinta para\nEquação"} tip="Tinta para Equação" desc="Escreva uma fórmula à mão; ela é reconhecida e inserida como bloco de equação (requer conta/sincronização)." onClick={() => { setInkMode("math"); setDrawOpen(true); }}/>
+            </RbGroup>
+            <RbGroup label="Inserir">
+              <RbBig icon={PenTool} label={"Tela de\nDesenho"} tip="Abrir Tela de Desenho" desc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => { setInkMode(false); setDrawOpen(true); }}/>
+              <RbBig icon={Ruler} label="Régua" tip="Régua" desc="Mostra uma grade de apoio na tela de desenho." active={drawRuler} onClick={() => setDrawRuler(r => !r)}/>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "design" && (<>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
+            <RbGroup label="Temas" wide>
               <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Temas" data-tipdesc="Aplica um conjunto de cores ao documento, usado nos títulos e destaques." onClick={() => { setThemeOpen(o => !o); setWatermarkOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}>
-                  <SwatchBook size={14}/> {currentTheme.label} <ChevronDown size={12}/>
-                </button>
+                <RbBig icon={SwatchBook} label={currentTheme.label} chevron tip="Temas" desc="Aplica um conjunto de cores ao documento, usado nos títulos e destaques." onClick={() => { setThemeOpen(o => !o); setWatermarkOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}/>
                 {themeOpen && <div className="wordDropdownMenu wordThemeMenu">
                   {WORD_THEMES.map(t => (
                     <button key={t.key} className={themeKey === t.key ? "active" : ""} onClick={() => applyTheme(t.key)}>
@@ -20645,278 +21749,483 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                   ))}
                 </div>}
               </div>
-              <span className="wordRibbonGroupLabel">Temas</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Marca d'Água" data-tipdesc="Insere um texto sobreposto e transparente atrás do conteúdo da página, como 'CONFIDENCIAL' ou 'RASCUNHO'." onClick={() => { setWatermarkOpen(o => !o); setThemeOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}>
-                  <Droplets size={14}/> <ChevronDown size={12}/>
-                </button>
-                {watermarkOpen && <div className="wordDropdownMenu">
-                  <button className={!watermarkText ? "active" : ""} onClick={() => applyWatermark("")}>Sem marca d'água</button>
-                  {WORD_WATERMARK_PRESETS.map(w => <button key={w} className={watermarkText === w ? "active" : ""} onClick={() => applyWatermark(w)}>{w}</button>)}
-                  <button onClick={applyCustomWatermark}>Personalizada...</button>
-                </div>}
+            </RbGroup>
+            <RbGroup label="Formatação do Documento" wide>
+              <div className="rbStack">
+                {rbm("themecolors", (t) => <RbSm icon={Palette} label="Cores" chevron tip="Cores do Tema" desc="Troca o conjunto de cores usado nos títulos e destaques do documento." onClick={t}/>, <>
+                  {WORD_THEMES.map(th => <button key={th.key} className={themeKey === th.key ? "active" : ""} onClick={() => applyTheme(th.key)}><span className="wordThemeSwatch" style={{ background: th.accent }}/> {th.label}</button>)}
+                </>)}
+                {rbm("themefonts", (t) => <RbSm icon={CaseSensitive} label="Fontes" chevron tip="Fontes do Tema" desc="Aplica uma mesma fonte a todos os blocos do documento." onClick={t}/>, <>
+                  {WORD_THEME_FONTS.map(([n, f]) => <button key={f} style={{ fontFamily: f }} onClick={() => applyThemeFont(f)}>{n}</button>)}
+                </>)}
+                {rbm("parasp", (t) => <RbSm icon={WrapText} label="Espaçamento" chevron tip="Espaçamento entre Parágrafos" desc="Define o espaço antes e depois dos parágrafos em todo o documento." onClick={t}/>, <>
+                  {WORD_PARA_SPACINGS.map(([n, b, a]) => <button key={n} onClick={() => applyParaSpacing(b, a)}>{n}</button>)}
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Marca d'Água</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="emojiWrap">
-                <button data-tip="Cor da Página" data-tipdesc="Preenche o fundo da página com uma cor." onClick={() => { setPageColorOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageBorderOpen(false); }}><PaintBucket size={15}/></button>
-                {pageColorOpen && <div className="colorPopover">{WORD_PAGE_COLORS.map(c => <button key={c || "none"} className={"colorSwatch" + (!c ? " colorSwatchNone" : "")} style={{ background: c || undefined }} onClick={() => applyPageColor(c)}/>)}</div>}
+              <div className="rbStack">
+                {rbm("effects2", (t) => <RbSm icon={Sparkle} label="Efeitos" chevron tip="Efeitos do Tema" desc="Aplica sombra às imagens do documento." onClick={t}/>, <>
+                  <button onClick={() => applyImageEffect("none")}>Nenhum</button>
+                  <button onClick={() => applyImageEffect("subtle")}>Sutil</button>
+                  <button onClick={() => applyImageEffect("strong")}>Forte</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Cor da Página</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordDropdownWrap">
-                <button className="wordDropdownBtn" data-tip="Bordas de Página" data-tipdesc="Adiciona uma borda decorativa ao redor de toda a página." onClick={() => { setPageBorderOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageColorOpen(false); }}><Frame size={13}/> <ChevronDown size={12}/></button>
-                {pageBorderOpen && <div className="wordDropdownMenu">
-                  {WORD_PAGE_BORDERS.map(b => <button key={b.key} className={pageBorder === b.key ? "active" : ""} onClick={() => applyPageBorder(b.key)}>{b.label}</button>)}
-                </div>}
+            </RbGroup>
+            <RbGroup label="Plano de Fundo da Página">
+              <div className="rbStack">
+                <div className="wordDropdownWrap">
+                  <RbSm icon={Droplets} label="Marca d'Água" chevron tip="Marca d'Água" desc="Insere um texto sobreposto e transparente atrás do conteúdo da página, como 'CONFIDENCIAL' ou 'RASCUNHO'." onClick={() => { setWatermarkOpen(o => !o); setThemeOpen(false); setPageColorOpen(false); setPageBorderOpen(false); }}/>
+                  {watermarkOpen && <div className="wordDropdownMenu">
+                    <button className={!watermarkText ? "active" : ""} onClick={() => applyWatermark("")}>Sem marca d'água</button>
+                    {WORD_WATERMARK_PRESETS.map(w => <button key={w} className={watermarkText === w ? "active" : ""} onClick={() => applyWatermark(w)}>{w}</button>)}
+                    <button onClick={applyCustomWatermark}>Personalizada...</button>
+                  </div>}
+                </div>
+                <div className="wordDropdownWrap">
+                  <RbSm icon={PaintBucket} label="Cor da Página" chevron tip="Cor da Página" desc="Preenche o fundo da página com uma cor." onClick={() => { setPageColorOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageBorderOpen(false); }}/>
+                  {pageColorOpen && <div className="colorPopover rbPop">{WORD_PAGE_COLORS.map(c => <button key={c || "none"} className={"colorSwatch" + (!c ? " colorSwatchNone" : "")} style={{ background: c || undefined }} onClick={() => applyPageColor(c)}/>)}</div>}
+                </div>
+                <div className="wordDropdownWrap">
+                  <RbSm icon={Frame} label="Bordas de Página" chevron tip="Bordas de Página" desc="Adiciona uma borda decorativa ao redor de toda a página." onClick={() => { setPageBorderOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageColorOpen(false); }}/>
+                  {pageBorderOpen && <div className="wordDropdownMenu">
+                    {WORD_PAGE_BORDERS.map(b => <button key={b.key} className={pageBorder === b.key ? "active" : ""} onClick={() => applyPageBorder(b.key)}>{b.label}</button>)}
+                  </div>}
+                </div>
               </div>
-              <span className="wordRibbonGroupLabel">Bordas de Página</span>
-            </div>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "layout" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Margens" data-tipdesc="Define o espaço em branco entre o texto e a borda da página." onClick={() => fmt.setMarginsOpen(o => !o)}>Margens <ChevronDown size={12}/></button>
-                  {fmt.marginsOpen && <div className="wordDropdownMenu">
-                    {["estreita", "normal", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => { changePageSetting("margins", m); fmt.setMarginsOpen(false); }}>{m[0].toUpperCase() + m.slice(1)}</button>)}
-                  </div>}
-                </div>
+            <RbGroup label="Configurar Página" wide onLauncher={() => openDlg("pagesetup", { left: effMarginLeft, right: effMarginRight })} launcherTip="Configurar Página">
+              {rbm("textdir", (t) => <RbBig icon={Type} label={"Direção do\nTexto"} chevron tip="Direção do Texto" desc="Define se o texto corre na horizontal ou na vertical na página." onClick={t}/>, <>
+                <button className={textDir === "horizontal" ? "active" : ""} onClick={() => applyTextDir("horizontal")}>Horizontal</button>
+                <button className={textDir === "vertical" ? "active" : ""} onClick={() => applyTextDir("vertical")}>Vertical</button>
+              </>)}
+              {rbm("margins", (t) => <RbBig icon={Frame} label="Margens" chevron tip="Margens" desc="Define o espaço em branco entre o texto e a borda da página." onClick={t}/>, <>
+                {["estreita", "normal", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => changePageSetting("margins", m)}>{m[0].toUpperCase() + m.slice(1)}</button>)}
+                <button onClick={() => openDlg("pagesetup", { left: effMarginLeft, right: effMarginRight })}>Margens Personalizadas…</button>
+              </>)}
+              {rbm("orientation", (t) => <RbBig icon={orientation === "paisagem" ? RectangleHorizontal : RectangleVertical} label="Orientação" chevron tip="Orientação" desc="Orienta a página na vertical (retrato) ou na horizontal (paisagem)." onClick={t}/>, <>
+                <button className={orientation === "retrato" ? "active" : ""} onClick={() => changePageSetting("orientation", "retrato")}>Retrato</button>
+                <button className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}>Paisagem</button>
+              </>)}
+              {rbm("pagesize", (t) => <RbBig icon={FileText} label="Tamanho" chevron tip="Tamanho" desc="Define o tamanho do papel da página." onClick={t}/>, <>
+                <button className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4 (21 x 29,7 cm)</button>
+                <button className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta (21,6 x 27,9 cm)</button>
+              </>)}
+              {rbm("columns", (t) => <RbBig icon={Columns2} label="Colunas" chevron tip="Colunas" desc="Divide o texto do documento em duas ou mais colunas, como em um jornal." onClick={t}/>, <>
+                <button onClick={() => fmt.applyColumns(1)}>Uma</button>
+                <button onClick={() => fmt.applyColumns(2)}>Duas</button>
+                <button onClick={() => fmt.applyColumns(3)}>Três</button>
+              </>)}
+              {rbm("breaks", (t) => <RbBig icon={Layers} label="Quebras" chevron tip="Quebras" desc="Insere uma quebra de página ou de seção (próxima página, contínua, página par ou ímpar)." onClick={t}/>, <>
+                <div className="wordDropdownEmpty">Quebras de Página</div>
+                <button onClick={fmt.insertPageBreak}>Página</button>
+                <div className="wordDropdownEmpty">Quebras de Seção</div>
+                <button onClick={() => fmt.insertSectionBreak("nextpage")}>Próxima Página</button>
+                <button onClick={() => fmt.insertSectionBreak("continuous")}>Contínua</button>
+                <button onClick={() => fmt.insertSectionBreak("evenpage")}>Página Par</button>
+                <button onClick={() => fmt.insertSectionBreak("oddpage")}>Página Ímpar</button>
+              </>)}
+              <div className="rbStack">
+                {rbm("linenum", (t) => <RbSm icon={ListOrdered} label="Números de Linha" chevron tip="Números de Linha" desc="Numera os blocos de texto na margem esquerda (um número por parágrafo)." onClick={t}/>, <>
+                  <button className={!lineNumbers ? "active" : ""} onClick={() => applyLineNumbers(false)}>Nenhum</button>
+                  <button className={lineNumbers ? "active" : ""} onClick={() => applyLineNumbers(true)}>Contínuo</button>
+                </>)}
+                {rbm("hyphen", (t) => <RbSm icon={Hash} label="Hifenização" chevron tip="Hifenização" desc="Quebra palavras longas no fim da linha com hífen, para deixar o texto mais uniforme." onClick={t}/>, <>
+                  <button className={!hyphenation ? "active" : ""} onClick={() => applyHyphenation(false)}>Nenhuma</button>
+                  <button className={hyphenation ? "active" : ""} onClick={() => applyHyphenation(true)}>Automática</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Margens</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Retrato" data-tipdesc="Orienta a página na vertical, mais alta do que larga." className={orientation === "retrato" ? "active" : ""} onClick={() => changePageSetting("orientation", "retrato")}><RectangleVertical size={15}/></button>
-                <button data-tip="Paisagem" data-tipdesc="Orienta a página na horizontal, mais larga do que alta." className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}><RectangleHorizontal size={15}/></button>
-              </div>
-              <span className="wordRibbonGroupLabel">Orientação</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="A4" data-tipdesc="Define o tamanho da página como A4 (21 x 29,7 cm), o padrão mais usado no Brasil." className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4</button>
-                <button data-tip="Carta" data-tipdesc="Define o tamanho da página como Carta (21,6 x 27,9 cm), padrão comum nos Estados Unidos." className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta</button>
-              </div>
-              <span className="wordRibbonGroupLabel">Tamanho</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Colunas" data-tipdesc="Divide o texto do documento em duas ou mais colunas, como em um jornal." onClick={() => fmt.setColumnsOpen(o => !o)}><Columns2 size={13}/> Colunas <ChevronDown size={12}/></button>
-                  {fmt.columnsOpen && <div className="wordDropdownMenu">
-                    <button onClick={() => fmt.applyColumns(1)}>Uma</button>
-                    <button onClick={() => fmt.applyColumns(2)}>Duas</button>
-                    <button onClick={() => fmt.applyColumns(3)}>Três</button>
-                  </div>}
-                </div>
-              </div>
-              <span className="wordRibbonGroupLabel">Colunas</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
+            </RbGroup>
+            <RbGroup label="Parágrafo" wide>
+              <div className="rbCol">
+                <div className="rbSmallLabel">Recuo</div>
                 <label className="wordNumberField" data-tip="Recuar à Esquerda" data-tipdesc="Distância entre o parágrafo e a margem esquerda da página, em centímetros.">Recuar esquerda <input type="number" step="0.5" min="0" max="10" value={fmt.paraIndent.left} onChange={e => fmt.setParagraphIndent(Number(e.target.value) || 0)}/> cm</label>
-              </div>
-              <div className="wordRibbonRow">
                 <label className="wordNumberField" data-tip="Recuar à Direita" data-tipdesc="Distância entre o parágrafo e a margem direita da página, em centímetros.">Recuar direita <input type="number" step="0.5" min="0" max="10" value={fmt.paraIndent.right} onChange={e => fmt.setParagraphIndentRight(Number(e.target.value) || 0)}/> cm</label>
-              </div>
-              <div className="wordRibbonRow">
                 <label className="wordNumberField" data-tip="Recuo Especial" data-tipdesc="Positivo adianta a primeira linha; negativo cria um recuo deslocado (linhas seguintes mais recuadas que a primeira).">Recuo especial <input type="number" step="0.5" min="-5" max="10" value={fmt.paraIndent.firstLine} onChange={e => fmt.setFirstLineIndent(Number(e.target.value) || 0)}/> cm</label>
               </div>
-              <span className="wordRibbonGroupLabel">Recuo</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
+              <div className="rbCol">
+                <div className="rbSmallLabel">Espaçamento</div>
                 <label className="wordNumberField" data-tip="Espaçamento Antes" data-tipdesc="Espaço em branco adicionado acima do parágrafo, em pontos." >Antes <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacingBefore(Number(e.target.value) || 0)}/> pt</label>
-              </div>
-              <div className="wordRibbonRow">
                 <label className="wordNumberField" data-tip="Espaçamento Depois" data-tipdesc="Espaço em branco adicionado abaixo do parágrafo, em pontos.">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
               </div>
-              <span className="wordRibbonGroupLabel">Espaçamento</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Organizar" wide>
+              {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página: em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
+                <button onClick={() => arrWrap("inline")}>Em Linha com o Texto</button>
+                <button onClick={() => arrAlign("left")}>Alinhado à Esquerda</button>
+                <button onClick={() => arrAlign("center")}>Centralizado</button>
+                <button onClick={() => arrAlign("right")}>Alinhado à Direita</button>
+              </>)}
+              {rbm("wrap", (t) => <RbBig icon={WrapText} label={"Quebra de\nTexto"} chevron tip="Quebra Automática de Texto" desc="Define como o texto contorna a imagem ou forma selecionada." onClick={t}/>, <>
+                <button onClick={() => arrWrap("inline")}>Em Linha com o Texto</button>
+                <button onClick={() => arrWrap("left")}>Quadrado — à Esquerda</button>
+                <button onClick={() => arrWrap("right")}>Quadrado — à Direita</button>
+              </>)}
+              <div className="rbStack">
+                <RbSm icon={BringToFront} label="Avançar" tip="Avançar" desc="Move o objeto selecionado para a frente dos outros." onClick={() => arrZ(1)}/>
+                <RbSm icon={SendToBack} label="Recuar" tip="Recuar" desc="Move o objeto selecionado para trás dos outros." onClick={() => arrZ(-1)}/>
+                <RbSm icon={ListChecks} label="Painel de Seleção" tip="Painel de Seleção" desc="Mostra a lista de objetos do documento (imagens, formas, caixas de texto, gráficos)." active={sidePane === "selection"} onClick={() => setSidePane(p => (p === "selection" ? null : "selection"))}/>
+              </div>
+              <div className="rbStack">
+                {rbm("alignobj", (t) => <RbSm icon={AlignCenter} label="Alinhar" chevron tip="Alinhar" desc="Alinha o objeto selecionado à esquerda, ao centro ou à direita." onClick={t}/>, <>
+                  <button onClick={() => arrAlign("left")}>Alinhar à Esquerda</button>
+                  <button onClick={() => arrAlign("center")}>Centralizar</button>
+                  <button onClick={() => arrAlign("right")}>Alinhar à Direita</button>
+                </>)}
+                {rbm("rotate", (t) => <RbSm icon={RotateCw} label="Girar" chevron tip="Girar" desc="Gira ou inverte o objeto selecionado." onClick={t}/>, <>
+                  <button onClick={() => arrRotate(90)}>Girar 90° à Direita</button>
+                  <button onClick={() => arrRotate(-90)}>Girar 90° à Esquerda</button>
+                  <button onClick={() => arrFlip("h")}>Inverter na Horizontal</button>
+                  <button onClick={() => arrFlip("v")}>Inverter na Vertical</button>
+                  <button onClick={() => arrRotate(0)}>Redefinir Rotação</button>
+                </>)}
+              </div>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "references" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Sumário" data-tipdesc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento. Clique de novo para atualizar depois de mudar os títulos." onClick={fmt.insertTOC}><BookMarked size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Sumário</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Inserir Nota de Rodapé" data-tipdesc="Insere uma referência numerada no texto e um espaço para a nota correspondente no fim do documento." onClick={fmt.insertFootnote}><Superscript size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Notas de Rodapé</span>
-            </div>
+            <RbGroup label="Sumário">
+              <RbBig icon={BookMarked} label="Sumário" tip="Sumário" desc="Gera um sumário a partir dos títulos (Título 1/2/3) do documento." onClick={fmt.insertTOC}/>
+              <div className="rbStack">
+                {rbm("toctext", (t) => <RbSm icon={Plus} label="Adicionar Texto" chevron tip="Adicionar Texto" desc="Define o nível do parágrafo atual no sumário, ou o remove dele." onClick={t}/>, <>
+                  <button onClick={() => fmt.applyHeading("H1")}>Nível 1</button>
+                  <button onClick={() => fmt.applyHeading("H2")}>Nível 2</button>
+                  <button onClick={() => fmt.applyHeading("H3")}>Nível 3</button>
+                  <button onClick={() => fmt.applyHeading("P")}>Não Mostrar no Sumário</button>
+                </>)}
+                <RbSm icon={RotateCw} label="Atualizar Tabela" tip="Atualizar Tabela" desc="Atualiza o sumário depois de mudar os títulos do documento." onClick={fmt.insertTOC}/>
+              </div>
+            </RbGroup>
+            <RbGroup label="Notas de Rodapé">
+              <RbBig icon={Superscript} label={"Inserir Nota\nde Rodapé"} tip="Inserir Nota de Rodapé" desc="Insere uma referência numerada no texto e um espaço para a nota correspondente no fim do documento." onClick={fmt.insertFootnote}/>
+              <div className="rbStack">
+                <RbSm icon={FileInput} label="Inserir Nota de Fim" tip="Inserir Nota de Fim" desc="Insere uma nota de fim, numerada com algarismos romanos, listada no final do documento." onClick={fmt.insertEndnote}/>
+                <RbSm icon={ArrowDown} label="Próxima Nota" tip="Próxima Nota de Rodapé" desc="Vai para a próxima referência de nota de rodapé no texto." onClick={fmt.nextFootnote}/>
+                {rbm("shownotes", (t) => <RbSm icon={ScrollText} label="Mostrar Notas" chevron tip="Mostrar Notas" desc="Rola até a lista de notas de rodapé ou de fim." onClick={t}/>, <>
+                  <button onClick={fmt.showFootnotes}>Notas de Rodapé</button>
+                  <button onClick={fmt.showEndnotes}>Notas de Fim</button>
+                </>)}
+              </div>
+            </RbGroup>
+            <RbGroup label="Pesquisa">
+              <RbBig icon={Search} label="Pesquisador" tip="Pesquisador" desc="Pesquisa o texto selecionado (ou o que você digitar) na web, em uma nova aba." onClick={openResearch}/>
+            </RbGroup>
+            <RbGroup label="Citações e Bibliografia" wide>
+              <div className="rbStack">
+                {rbm("cite", (t) => <RbSm icon={Quote} label="Inserir Citação" chevron tip="Inserir Citação" desc="Insere uma citação (autor, ano) de uma das fontes cadastradas, no estilo escolhido." onClick={t}/>, <>
+                  {fmt.loadSources().map(s => <button key={s.id} onClick={() => fmt.insertCitation(s, citeStyle)}>{s.author} — {s.title}</button>)}
+                  <button onClick={() => { setSourcesList(fmt.loadSources()); openDlg("sources"); }}>+ Adicionar Nova Fonte…</button>
+                </>)}
+                <RbSm icon={Library} label="Gerenciar Fontes" tip="Gerenciar Fontes" desc="Abre a lista mestra de fontes bibliográficas, onde você adiciona ou remove autores e obras." onClick={() => { setSourcesList(fmt.loadSources()); openDlg("sources"); }}/>
+                {rbm("citestyle", (t) => <RbSm icon={BookType} label={`Estilo: ${citeStyle.toUpperCase()}`} chevron tip="Estilo" desc="Escolhe o estilo das citações e da bibliografia: ABNT ou APA." onClick={t}/>, <>
+                  <button className={citeStyle === "abnt" ? "active" : ""} onClick={() => setCiteStyle("abnt")}>ABNT</button>
+                  <button className={citeStyle === "apa" ? "active" : ""} onClick={() => setCiteStyle("apa")}>APA</button>
+                </>)}
+              </div>
+              {rbm("bib", (t) => <RbBig icon={BookText} label="Bibliografia" chevron tip="Bibliografia" desc="Insere a lista das fontes citadas no documento, no estilo escolhido." onClick={t}/>, <>
+                <button onClick={() => fmt.insertBibliography(citeStyle)}>Inserir Bibliografia</button>
+                <button onClick={() => fmt.insertBibliography()}>Atualizar Bibliografia</button>
+              </>)}
+            </RbGroup>
+            <RbGroup label="Legendas" wide>
+              {rbm("caption", (t) => <RbBig icon={Tags} label={"Inserir\nLegenda"} chevron tip="Inserir Legenda" desc="Adiciona uma legenda numerada (Figura, Tabela ou Equação) abaixo da imagem ou do bloco onde está o cursor." onClick={t}/>, <>
+                <button onClick={() => fmt.insertCaption("Figura", selectedImg)}>Figura</button>
+                <button onClick={() => fmt.insertCaption("Tabela", selectedImg)}>Tabela</button>
+                <button onClick={() => fmt.insertCaption("Equação", selectedImg)}>Equação</button>
+              </>)}
+              <div className="rbStack">
+                {rbm("tof", (t) => <RbSm icon={ListTree} label="Índice de Ilustrações" chevron tip="Inserir Índice de Ilustrações" desc="Lista todas as legendas do tipo escolhido, com link para cada uma." onClick={t}/>, <>
+                  <button onClick={() => fmt.insertTableOfFigures("Figura")}>Figuras</button>
+                  <button onClick={() => fmt.insertTableOfFigures("Tabela")}>Tabelas</button>
+                  <button onClick={() => fmt.insertTableOfFigures("Equação")}>Equações</button>
+                </>)}
+                <RbSm icon={RotateCw} label="Atualizar Tabela" tip="Atualizar Índice de Ilustrações" desc="Atualiza os índices de ilustrações depois de adicionar ou apagar legendas." onClick={fmt.refreshAllTablesOfFigures}/>
+                {rbm("crossref2", (t) => <RbSm icon={Crosshair} label="Referência Cruzada" chevron tip="Referência Cruzada" desc="Insere um link para um título ou indicador já existente no documento." onClick={t}/>, <>
+                  {fmt.listCrossRefTargets().length ? fmt.listCrossRefTargets().map(t => <button key={t.id} onClick={() => fmt.insertCrossReference(t.id, t.label)}>{t.label}</button>) : <span className="wordDropdownEmpty">Nenhum título ou indicador ainda</span>}
+                </>)}
+              </div>
+            </RbGroup>
+            <RbGroup label="Índice">
+              <RbBig icon={ListTree} label={"Inserir\nÍndice"} tip="Inserir Índice" desc="Insere um índice remissivo (A-Z) com as entradas marcadas no documento." onClick={fmt.insertIndex}/>
+              <div className="rbStack">
+                <RbSm icon={Tag} label="Marcar Entrada" tip="Marcar Entrada" desc="Marca o texto selecionado como entrada do índice remissivo." onClick={fmt.markIndexEntry}/>
+                <RbSm icon={RotateCw} label="Atualizar Índice" tip="Atualizar Índice" desc="Atualiza o índice remissivo depois de marcar novas entradas." onClick={fmt.insertIndex}/>
+              </div>
+            </RbGroup>
+            <RbGroup label="Tabela de Autoridades">
+              <RbBig icon={Scale} label={"Inserir Tabela\nde Autoridades"} tip="Inserir Tabela de Autoridades" desc="Lista as citações jurídicas marcadas (casos, leis, tratados), agrupadas por categoria." onClick={fmt.insertAuthorities}/>
+              <div className="rbStack">
+                <RbSm icon={Tag} label="Marcar Citação" tip="Marcar Citação" desc="Marca o trecho selecionado como citação jurídica, escolhendo a categoria." onClick={fmt.markAuthority}/>
+                <RbSm icon={RotateCw} label="Atualizar Tabela" tip="Atualizar Tabela de Autoridades" desc="Atualiza a tabela de autoridades depois de marcar novas citações." onClick={fmt.insertAuthorities}/>
+              </div>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "mailings" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Cartas" data-tipdesc="Insere um modelo de carta (data, destinatário, saudação e despedida), usando campos de mesclagem se já houver destinatários." onClick={insertLetterTemplate}><FileText size={15}/></button>
-                <button data-tip="Envelopes" data-tipdesc="Insere um bloco de endereço no formato de envelope (remetente e destinatário)." onClick={insertEnvelopeTemplate}><RectangleHorizontal size={15}/></button>
-                <button data-tip="Etiquetas" data-tipdesc="Gera uma folha de etiquetas já preenchida, uma por destinatário selecionado." onClick={insertLabelSheet}><Grid3x3 size={15}/></button>
+            <RbGroup label="Criar">
+              <RbBig icon={RectangleHorizontal} label="Envelopes" tip="Envelopes" desc="Insere um bloco de endereço no formato de envelope (remetente e destinatário)." onClick={insertEnvelopeTemplate}/>
+              <RbBig icon={Grid3x3} label="Etiquetas" tip="Etiquetas" desc="Gera uma folha de etiquetas já preenchida, uma por destinatário selecionado." onClick={insertLabelSheet}/>
+            </RbGroup>
+            <RbGroup label="Iniciar Mala Direta" wide>
+              {rbm("startmerge", (t) => <RbBig icon={Mail} label={"Iniciar Mala\nDireta"} chevron tip="Iniciar Mala Direta" desc="Escolhe o tipo de documento da mala direta: carta, envelope, etiquetas ou documento normal." onClick={t}/>, <>
+                <button onClick={() => startMailMerge("letter")}>Cartas</button>
+                <button onClick={() => startMailMerge("envelope")}>Envelopes</button>
+                <button onClick={() => startMailMerge("label")}>Etiquetas</button>
+                <button onClick={() => startMailMerge("normal")}>Documento Normal</button>
+              </>)}
+              <div className="rbStack">
+                {rbm("recipients", (t) => <RbSm icon={Users} label={`Destinatários${recipients ? ` (${recipients.rows.length})` : ""}`} chevron tip="Selecionar Destinatários" desc="Define a lista de pessoas que receberão o documento: digite uma nova lista ou importe um arquivo CSV." onClick={t}/>, <>
+                  <button onClick={openRecipientsDialog}>Digitar Nova Lista…</button>
+                  <button onClick={importRecipientsFile}>Usar Lista Existente (CSV)…</button>
+                </>)}
+                <RbSm icon={Pencil} label="Editar Lista" tip="Editar Lista de Destinatários" desc="Abre a lista de destinatários para corrigir nomes e campos." onClick={openRecipientsDialog}/>
               </div>
-              <span className="wordRibbonGroupLabel">Iniciar Mala Direta</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Selecionar Destinatários" data-tipdesc="Cole ou edite a lista de destinatários (uma coluna por campo, uma linha por pessoa)." onClick={openRecipientsDialog}><Users size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Destinatários {recipients ? `(${recipients.rows.length})` : ""}</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Inserir Campo de Mesclagem" data-tipdesc="Insere um campo (ex: «Nome») que será trocado pelo valor de cada destinatário." onClick={() => setInsertFieldOpen(o => !o)}><FileDigit size={14}/> Inserir Campo <ChevronDown size={12}/></button>
-                  {insertFieldOpen && (
-                    <div className="wordDropdownMenu">
-                      {recipients?.headers?.length ? recipients.headers.map(h => (
-                        <button key={h} onClick={() => insertMergeField(h)}>{h}</button>
-                      )) : <span className="wordDropdownEmpty">Selecione destinatários primeiro</span>}
-                    </div>
-                  )}
+            </RbGroup>
+            <RbGroup label="Gravar e Inserir Campos" wide>
+              <div className="rbStack">
+                <RbSm icon={Highlighter} label="Realçar Campos" tip="Realçar Campos de Mesclagem" desc="Pinta de amarelo todos os campos de mesclagem do documento, para você localizá-los." active={highlightFields} onClick={() => setHighlightFields(h => !h)}/>
+                <RbSm icon={MapPin} label="Bloco de Endereço" tip="Bloco de Endereço" desc="Insere nome, endereço e cidade do destinatário em um bloco." onClick={insertAddressBlock}/>
+                <RbSm icon={MessageSquarePlus} label="Linha de Saudação" tip="Linha de Saudação" desc="Insere uma saudação personalizada, como 'Prezado(a) Nome,'." onClick={insertGreetingLine}/>
+              </div>
+              <div className="rbStack">
+                {rbm("insfield", (t) => <RbSm icon={FileDigit} label="Inserir Campo" chevron tip="Inserir Campo de Mesclagem" desc="Insere um campo (ex: «Nome») que será trocado pelo valor de cada destinatário." onClick={t}/>, <>
+                  {recipients?.headers?.length ? recipients.headers.map(h => <button key={h} onClick={() => insertMergeField(h)}>{h}</button>) : <span className="wordDropdownEmpty">Selecione destinatários primeiro</span>}
+                </>)}
+                {rbm("rules", (t) => <RbSm icon={GitBranch} label="Regras" chevron tip="Regras" desc="Insere uma regra condicional: se um campo tiver certo valor, mostra um texto; senão, outro." onClick={t}/>, <>
+                  <button onClick={insertMergeRule}>Se… Então… Senão…</button>
+                </>)}
+                <RbSm icon={Columns2} label="Coincidir Campos" tip="Coincidir Campos" desc="Mostra quais campos do documento têm coluna correspondente na lista de destinatários." onClick={() => openDlg("matchfields")}/>
+              </div>
+            </RbGroup>
+            <RbGroup label="Visualizar Resultados" wide>
+              <RbBig icon={Eye} label={"Visualizar\nResultados"} tip="Visualizar Resultados" desc="Alterna entre mostrar «Campo» ou o valor real de cada destinatário." active={mergePreview} onClick={toggleMergePreview}/>
+              <div className="rbCol">
+                <div className="rbRow">
+                  <button type="button" className="rbIco" data-tip="Primeiro Registro" data-tipdesc="Mostra o primeiro destinatário na pré-visualização." onClick={() => mergeGoTo(0)}><ChevronsLeft size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Registro Anterior" data-tipdesc="Mostra o destinatário anterior na pré-visualização." onClick={() => navigateMergeRecord(-1)}><ChevronLeft size={15}/></button>
+                  <span className="wordZoomValue">{recipients?.rows?.length ? `${mergeIndex + 1}/${recipients.rows.length}` : "0/0"}</span>
+                  <button type="button" className="rbIco" data-tip="Próximo Registro" data-tipdesc="Mostra o próximo destinatário na pré-visualização." onClick={() => navigateMergeRecord(1)}><ChevronRight size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Último Registro" data-tipdesc="Mostra o último destinatário na pré-visualização." onClick={() => mergeGoTo((recipients?.rows?.length || 1) - 1)}><ChevronsRight size={15}/></button>
+                </div>
+                <div className="rbRow">
+                  <RbSm icon={Search} label="Localizar Destinatário" tip="Localizar Destinatário" desc="Procura um destinatário pelo nome ou por qualquer campo." onClick={findRecipient}/>
                 </div>
               </div>
-              <span className="wordRibbonGroupLabel">Campos</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Visualizar Resultados" data-tipdesc="Alterna entre mostrar «Campo» ou o valor real de cada destinatário." className={mergePreview ? "active" : ""} onClick={toggleMergePreview}><Eye size={15}/></button>
-                <button data-tip="Registro Anterior" data-tipdesc="Mostra o destinatário anterior na pré-visualização." onClick={() => navigateMergeRecord(-1)}><ChevronLeft size={15}/></button>
-                <span className="wordZoomValue">{recipients?.rows?.length ? `${mergeIndex + 1}/${recipients.rows.length}` : "0/0"}</span>
-                <button data-tip="Próximo Registro" data-tipdesc="Mostra o próximo destinatário na pré-visualização." onClick={() => navigateMergeRecord(1)}><ChevronRight size={15}/></button>
+              <div className="rbStack">
+                <RbSm icon={ShieldCheck} label="Verificar Erros" tip="Verificar Erros" desc="Confere se os campos do documento existem na lista e se não há valores vazios." onClick={checkMergeErrors}/>
               </div>
-              <span className="wordRibbonGroupLabel">Visualizar Resultados</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Mesclar para Word" data-tipdesc="Gera um documento .docx para cada destinatário, com os campos já substituídos." onClick={() => finishMerge("docx")}><FileType2 size={15}/></button>
-                <button data-tip="Mesclar para PDF" data-tipdesc="Gera um PDF para cada destinatário, com os campos já substituídos." onClick={() => finishMerge("pdf")}><FileDown size={15}/></button>
-              </div>
-              <span className="wordRibbonGroupLabel">Concluir e Mesclar</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Concluir">
+              {rbm("finish", (t) => <RbBig icon={FileDown} label={"Concluir e\nMesclar"} chevron tip="Concluir e Mesclar" desc="Gera um arquivo por destinatário, com os campos já substituídos." onClick={t}/>, <>
+                <button onClick={() => finishMerge("docx")}>Editar Documentos Individuais (Word)</button>
+                <button onClick={() => finishMerge("pdf")}>Mesclar para PDF</button>
+              </>)}
+            </RbGroup>
           </>)}
 
           {ribbonTab === "review" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Ortografia" data-tipdesc="Liga ou desliga a verificação ortográfica do navegador (sublinhado vermelho nas palavras)." className={spellcheckOn ? "active" : ""} onClick={() => setSpellcheckOn(s => !s)}><SpellCheck size={15}/></button>
-                <button data-tip="Contagem de Palavras" data-tipdesc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}><FileDigit size={15}/></button>
+            <RbGroup label="Revisão de Texto" wide>
+              <RbBig icon={SpellCheck} label="Ortografia" tip="Ortografia" desc="Liga ou desliga a verificação ortográfica do navegador (sublinhado vermelho nas palavras)." active={spellcheckOn} onClick={() => setSpellcheckOn(s => !s)}/>
+              <div className="rbStack">
+                <RbSm icon={BookOpenText} label="Sinônimos" tip="Dicionário de Sinônimos" desc="Abre uma página de sinônimos para a palavra selecionada." onClick={openThesaurus}/>
+                <RbSm icon={FileDigit} label="Contagem de Palavras" tip="Contagem de Palavras" desc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}/>
               </div>
-              <span className="wordRibbonGroupLabel">Verificação</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Novo Comentário" data-tipdesc="Adiciona um comentário ao trecho selecionado." onClick={addComment}><MessageSquarePlus size={15}/></button>
-                <button data-tip="Comentário Anterior" data-tipdesc="Vai para o comentário anterior no documento." onClick={() => navigateComment(-1)}><ChevronLeft size={15}/></button>
-                <button data-tip="Próximo Comentário" data-tipdesc="Vai para o próximo comentário no documento." onClick={() => navigateComment(1)}><ChevronRight size={15}/></button>
-                <button data-tip="Excluir Comentário" data-tipdesc="Exclui o comentário aberto no momento." onClick={deleteCurrentComment}><Trash2 size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Fala">
+              <RbBig icon={Volume2} label={speaking ? "Parar\nLeitura" : "Ler em\nVoz Alta"} tip="Ler em Voz Alta" desc="Lê o texto selecionado (ou o documento inteiro) em voz alta. Clique de novo para parar." active={speaking} onClick={toggleReadAloud}/>
+            </RbGroup>
+            <RbGroup label="Acessibilidade">
+              {rbm("a11y", (t) => <RbBig icon={MonitorCheck} label={"Verificar\nAcessibilidade"} chevron tip="Verificar Acessibilidade" desc="Procura problemas que dificultam a leitura por pessoas com deficiência, como imagens sem texto alternativo." onClick={t}/>, (() => {
+                const issues = getA11yIssues();
+                return (
+                  <>
+                    <div className="wordEditorScore">{issues.length === 0 ? "Nenhum problema de acessibilidade encontrado" : `${issues.length} tipo(s) de problema encontrado(s)`}</div>
+                    {issues.map(i => <div key={i} className="wordEditorRow">{i}</div>)}
+                  </>
+                );
+              })(), "wordDropdownMenu wordEditorPanel")}
+            </RbGroup>
+            <RbGroup label="Idioma">
+              {rbm("lang", (t) => <RbBig icon={Globe} label={docLanguage ? languageName(docLanguage) : "Idioma"} chevron tip="Idioma" desc="Define o idioma deste documento, usado na tradução e na verificação ortográfica." onClick={t}/>, <>
+                <button className={!docLanguage ? "active" : ""} onClick={() => applyDocLanguage(null)}>Padrão</button>
+                {LANGUAGES.map(l => (
+                  <button key={l.code} className={docLanguage === l.code ? "active" : ""} onClick={() => applyDocLanguage(l.code)}>{l.name}</button>
+                ))}
+              </>)}
+              <RbBig icon={Type} label="Traduzir" tip="Traduzir" desc="Traduz o trecho selecionado para o idioma do documento." onClick={openTranslatePopover}/>
+            </RbGroup>
+            <RbGroup label={`Comentários (${comments.length})`} wide>
+              <RbBig icon={MessageSquarePlus} label={"Novo\nComentário"} tip="Novo Comentário" desc="Adiciona um comentário ao trecho selecionado." onClick={addComment}/>
+              <div className="rbStack">
+                <RbSm icon={Trash2} label="Excluir" tip="Excluir Comentário" desc="Exclui o comentário aberto no momento." onClick={deleteCurrentComment}/>
+                <RbSm icon={ChevronLeft} label="Anterior" tip="Comentário Anterior" desc="Vai para o comentário anterior no documento." onClick={() => navigateComment(-1)}/>
+                <RbSm icon={ChevronRight} label="Próximo" tip="Próximo Comentário" desc="Vai para o próximo comentário no documento." onClick={() => navigateComment(1)}/>
               </div>
-              <span className="wordRibbonGroupLabel">Comentários ({comments.length})</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Controlar Alterações" data-tipdesc="A partir de agora, o que for digitado ou apagado fica marcado em vez de mudar o texto direto." className={trackChanges ? "active" : ""} onClick={toggleTrackChanges}><Pencil size={15}/></button>
-                <button data-tip="Mostrar Alterações" data-tipdesc="Mostra as marcações de inserção/exclusão, ou esconde para ver como o documento ficaria." className={showChangesMarkup ? "active" : ""} onClick={toggleShowChangesMarkup}><Eye size={15}/></button>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Aceitar" data-tipdesc="Aceita as alterações marcadas, tornando-as parte definitiva do texto." onClick={() => { setAcceptMenuOpen(o => !o); setRejectMenuOpen(false); }}><Check size={13}/> <ChevronDown size={12}/></button>
-                  {acceptMenuOpen && (
-                    <div className="wordDropdownMenu">
-                      <button onClick={acceptOneChange}>Aceitar esta alteração</button>
-                      <button onClick={acceptAllChanges}>Aceitar todas as alterações</button>
-                    </div>
-                  )}
-                </div>
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Rejeitar" data-tipdesc="Rejeita as alterações marcadas, voltando ao texto original." onClick={() => { setRejectMenuOpen(o => !o); setAcceptMenuOpen(false); }}><XCircle size={13}/> <ChevronDown size={12}/></button>
-                  {rejectMenuOpen && (
-                    <div className="wordDropdownMenu">
-                      <button onClick={rejectOneChange}>Rejeitar esta alteração</button>
-                      <button onClick={rejectAllChanges}>Rejeitar todas as alterações</button>
-                    </div>
-                  )}
-                </div>
+            </RbGroup>
+            <RbGroup label="Controle de Alterações" wide>
+              <RbBig icon={Pencil} label={"Controlar\nAlterações"} tip="Controlar Alterações" desc="A partir de agora, o que for digitado ou apagado fica marcado em vez de mudar o texto direto." active={trackChanges} onClick={toggleTrackChanges}/>
+              <div className="rbStack">
+                <RbSm icon={Eye} label="Mostrar Marcação" tip="Mostrar Alterações" desc="Mostra as marcações de inserção/exclusão, ou esconde para ver como o documento ficaria." active={showChangesMarkup} onClick={toggleShowChangesMarkup}/>
+                <RbSm icon={PanelLeft} label="Painel de Revisão" tip="Painel de Revisão" desc="Lista todas as alterações e comentários do documento em um painel lateral." active={sidePane === "review"} onClick={() => setSidePane(p => (p === "review" ? null : "review"))}/>
               </div>
-              <span className="wordRibbonGroupLabel">Controle de Alterações</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip={docProtected ? "Desproteger Documento" : "Proteger Documento"} data-tipdesc="Bloqueia o documento contra edição até ser desprotegido de novo." className={docProtected ? "active" : ""} onClick={toggleProtectDoc}><Lock size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Alterações">
+              <div className="rbStack">
+                {rbm("accept", (t) => <RbSm icon={Check} label="Aceitar" chevron tip="Aceitar" desc="Aceita as alterações marcadas, tornando-as parte definitiva do texto." onClick={t}/>, <>
+                  <button onClick={acceptOneChange}>Aceitar esta alteração</button>
+                  <button onClick={acceptAllChanges}>Aceitar todas as alterações</button>
+                </>)}
+                {rbm("reject", (t) => <RbSm icon={XCircle} label="Rejeitar" chevron tip="Rejeitar" desc="Rejeita as alterações marcadas, voltando ao texto original." onClick={t}/>, <>
+                  <button onClick={rejectOneChange}>Rejeitar esta alteração</button>
+                  <button onClick={rejectAllChanges}>Rejeitar todas as alterações</button>
+                </>)}
               </div>
-              <span className="wordRibbonGroupLabel">Proteger</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <div className="wordDropdownWrap">
-                  <button className="wordDropdownBtn" data-tip="Idioma" data-tipdesc="Define o idioma deste documento, usado na tradução e na verificação ortográfica." onClick={() => setReviewLangOpen(o => !o)}><Globe size={14}/> {docLanguage ? languageName(docLanguage) : "Idioma"} <ChevronDown size={12}/></button>
-                  {reviewLangOpen && (
-                    <div className="wordDropdownMenu">
-                      <button className={!docLanguage ? "active" : ""} onClick={() => applyDocLanguage(null)}>Padrão</button>
-                      {LANGUAGES.map(l => (
-                        <button key={l.code} className={docLanguage === l.code ? "active" : ""} onClick={() => applyDocLanguage(l.code)}>{l.name}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <button data-tip="Traduzir" data-tipdesc="Traduz o trecho selecionado para o idioma do documento." onClick={openTranslatePopover}><Type size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Navegar">
+              <div className="rbStack">
+                <RbSm icon={ChevronLeft} label="Anterior" tip="Alteração Anterior" desc="Vai para a alteração marcada anterior." onClick={() => navigateChange(-1)}/>
+                <RbSm icon={ChevronRight} label="Próxima" tip="Próxima Alteração" desc="Vai para a próxima alteração marcada." onClick={() => navigateChange(1)}/>
               </div>
-              <span className="wordRibbonGroupLabel">Idioma</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow"><button data-tip="Comparar Documentos" data-tipdesc="Compara este documento com outro, palavra por palavra, e mostra as diferenças." onClick={() => { setCompareDialogOpen(true); setCompareResult(null); setCompareTargetId(""); }}><Columns2 size={15}/></button></div>
-              <span className="wordRibbonGroupLabel">Comparar</span>
-            </div>
+            </RbGroup>
+            <RbGroup label="Comparar">
+              <RbBig icon={Columns2} label="Comparar" tip="Comparar Documentos" desc="Compara este documento com outro, palavra por palavra, e mostra as diferenças." onClick={() => { setCompareDialogOpen(true); setCompareResult(null); setCompareTargetId(""); }}/>
+            </RbGroup>
+            <RbGroup label="Tinta">
+              <RbBig icon={PenTool} label={"Iniciar\nTinta"} tip="Iniciar Entrada de Tinta" desc="Abre a tela de desenho para fazer anotações à mão e inseri-las no documento." onClick={() => { setInkMode(false); setDrawOpen(true); }}/>
+            </RbGroup>
+            <RbGroup label="Proteger">
+              <RbBig icon={Lock} label={docProtected ? "Desproteger" : "Restringir\nEdição"} tip={docProtected ? "Desproteger Documento" : "Proteger Documento"} desc="Bloqueia o documento contra edição até ser desprotegido de novo." active={docProtected} onClick={toggleProtectDoc}/>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "view" && (<>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Layout de Impressão" data-tipdesc="Mostra o documento como ele ficará quando impresso, com as páginas separadas." className={viewMode === "print" ? "active" : ""} onClick={() => setViewMode("print")}><FileText size={15}/></button>
-                <button data-tip="Rascunho" data-tipdesc="Mostra o texto em fluxo contínuo, sem quebras de página, ideal para digitar rápido." className={viewMode === "draft" ? "active" : ""} onClick={() => setViewMode("draft")}><ScrollText size={15}/></button>
+            <RbGroup label="Modos de Exibição" wide>
+              <RbBig icon={BookOpen} label={"Modo de\nLeitura"} tip="Modo de Leitura" desc="Esconde a faixa de opções e deixa o documento somente para leitura." onClick={() => enterReadMode(false)}/>
+              <RbBig icon={FileText} label={"Layout de\nImpressão"} tip="Layout de Impressão" desc="Mostra o documento como ele ficará quando impresso, com as páginas separadas." active={viewMode === "print"} onClick={() => setViewMode("print")}/>
+              <div className="rbStack">
+                <RbSm icon={Globe} label="Layout da Web" tip="Layout da Web" desc="Mostra o documento como uma página da web, sem limites de página." active={viewMode === "web"} onClick={() => setViewMode("web")}/>
+                <RbSm icon={ListTree} label="Estrutura de Tópicos" tip="Estrutura de Tópicos" desc="Mostra a hierarquia dos títulos e abre ferramentas para reorganizar o documento." active={viewMode === "outline"} onClick={() => setViewMode("outline")}/>
+                <RbSm icon={ScrollText} label="Rascunho" tip="Rascunho" desc="Mostra o texto em fluxo contínuo, sem quebras de página, ideal para digitar rápido." active={viewMode === "draft"} onClick={() => setViewMode("draft")}/>
               </div>
-              <span className="wordRibbonGroupLabel">Modos de Exibição</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup">
-              <div className="wordRibbonRow">
-                <button data-tip="Régua" data-tipdesc="Mostra ou oculta a régua no topo da página, usada para ajustar margens e recuos." className={showRuler ? "active" : ""} onClick={() => setShowRuler(r => !r)}><Ruler size={15}/></button>
-                <button data-tip="Linhas de Grade" data-tipdesc="Mostra ou oculta linhas de grade que ajudam a alinhar objetos na página." className={showGrid ? "active" : ""} onClick={() => setShowGrid(g => !g)}><Grid3x3 size={15}/></button>
-                <button data-tip="Painel de Navegação" data-tipdesc="Mostra uma barra lateral com os títulos do documento e os resultados de busca, pra pular direto pro trecho." className={navPaneOpen ? "active" : ""} onClick={() => setNavPaneOpen(o => !o)}><ListTree size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Imersivo">
+              <RbBig icon={Maximize2} label="Foco" tip="Foco" desc="Esconde a faixa de opções para você se concentrar só no texto. Pressione Esc para sair." onClick={() => setFocusMode(true)}/>
+              <RbBig icon={Volume2} label={"Leitor\nImersivo"} tip="Leitor Imersivo" desc="Abre o texto ampliado, com leitura em voz alta." onClick={() => enterReadMode(true)}/>
+            </RbGroup>
+            <RbGroup label="Movimento de Página">
+              <div className="rbStack">
+                <RbSm icon={ArrowDown} label="Vertical" tip="Vertical" desc="As páginas rolam de cima para baixo." active={!sideToSide} onClick={() => setSideToSide(false)}/>
+                <RbSm icon={ChevronRight} label="Lado a Lado" tip="Lado a Lado" desc="As páginas rolam da esquerda para a direita." active={sideToSide} onClick={() => setSideToSide(true)}/>
               </div>
-              <span className="wordRibbonGroupLabel">Mostrar</span>
-            </div>
-            <span className="wordRibbonDivider"/>
-            <div className="wordRibbonGroup wordRibbonGroupWide">
-              <div className="wordRibbonRow">
-                <button data-tip="Diminuir Zoom" data-tipdesc="Reduz o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={15}/></button>
-                <span className="wordZoomValue">{zoom}%</span>
-                <button data-tip="Aumentar Zoom" data-tipdesc="Aumenta o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={15}/></button>
+            </RbGroup>
+            <RbGroup label="Mostrar">
+              <div className="rbStack">
+                <label className="rbCheck" data-tip="Régua" data-tipdesc="Mostra ou oculta a régua no topo da página, usada para ajustar margens e recuos."><input type="checkbox" checked={showRuler} onChange={() => setShowRuler(r => !r)}/> Régua</label>
+                <label className="rbCheck" data-tip="Linhas de Grade" data-tipdesc="Mostra ou oculta linhas de grade que ajudam a alinhar objetos na página."><input type="checkbox" checked={showGrid} onChange={() => setShowGrid(g => !g)}/> Linhas de Grade</label>
+                <label className="rbCheck" data-tip="Painel de Navegação" data-tipdesc="Mostra uma barra lateral com os títulos do documento e os resultados de busca, pra pular direto pro trecho."><input type="checkbox" checked={navPaneOpen} onChange={() => setNavPaneOpen(o => !o)}/> Painel de Navegação</label>
               </div>
-              <div className="wordRibbonRow">
-                <button className="wordTextBtn" data-tip="100%" data-tipdesc="Retorna o zoom para o tamanho normal do documento." onClick={() => setZoom(100)}>100%</button>
-                <button className="wordTextBtn" data-tip="Largura da Página" data-tipdesc="Ajusta o zoom para que a largura da página preencha a janela." onClick={fitZoomToWidth}>Largura</button>
-                <button className="wordTextBtn" data-tip="Uma Página" data-tipdesc="Ajusta o zoom para exibir a página inteira na janela." onClick={fitZoomToPage}>Página inteira</button>
+            </RbGroup>
+            <RbGroup label="Zoom" wide>
+              {rbm("zoom", (t) => <RbBig icon={Search} label="Zoom" chevron tip="Zoom" desc="Escolhe o nível de ampliação do documento na tela." onClick={t}/>, <>
+                {[50, 75, 100, 125, 150, 200].map(z => <button key={z} className={zoom === z ? "active" : ""} onClick={() => setZoom(z)}>{z}%</button>)}
+              </>)}
+              <RbBig icon={Maximize2} label="100%" tip="100%" desc="Retorna o zoom para o tamanho normal do documento." onClick={() => setZoom(100)}/>
+              <div className="rbStack">
+                <RbSm icon={ZoomIn} label="Aumentar Zoom" tip="Aumentar Zoom" desc="Aumenta o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.min(200, z + 10))}/>
+                <RbSm icon={ZoomOut} label="Diminuir Zoom" tip="Diminuir Zoom" desc="Reduz o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.max(50, z - 10))}/>
+                <span className="rbSmallLabel">{zoom}%</span>
               </div>
-              <span className="wordRibbonGroupLabel">Zoom</span>
-            </div>
+              <div className="rbStack">
+                <RbSm icon={FileText} label="Uma Página" tip="Uma Página" desc="Ajusta o zoom para exibir a página inteira na janela." onClick={fitZoomToPage}/>
+                <RbSm icon={Columns2} label="Várias Páginas" tip="Várias Páginas" desc="Reduz o zoom para ver várias páginas ao mesmo tempo." onClick={() => setZoom(50)}/>
+                <RbSm icon={RectangleHorizontal} label="Largura da Página" tip="Largura da Página" desc="Ajusta o zoom para que a largura da página preencha a janela." onClick={fitZoomToWidth}/>
+              </div>
+            </RbGroup>
+            <RbGroup label="Modo Escuro">
+              <RbBig icon={Contrast} label={"Modo\nEscuro"} tip="Modo Escuro" desc="Inverte as cores da página (fundo escuro, texto claro) para ler com menos brilho." active={darkPage} onClick={() => setDarkPage(d => !d)}/>
+            </RbGroup>
+            <RbGroup label="Janela">
+              <RbBig icon={Copy} label={"Nova\nJanela"} tip="Nova Janela" desc="Abre este aplicativo em uma nova janela." onClick={() => window.open(window.location.href, "_blank")}/>
+              <RbBig icon={Rows3} label="Dividir" tip="Dividir" desc="Mostra uma segunda visão do documento abaixo, para consultar outro trecho enquanto edita." active={splitOn} onClick={() => { setSplitOn(s => !s); setSplitHtml(bodyRef.current?.innerHTML || ""); }}/>
+            </RbGroup>
+            <RbGroup label="Macros">
+              {rbm("macros", (t) => <RbBig icon={Play} label="Macros" chevron tip="Macros" desc="Grave uma sequência de comandos de formatação e execute depois com um clique." onClick={t}/>, <>
+                <button onClick={() => openDlg("macros")}>Exibir Macros…</button>
+                {macroRecording ? <button onClick={stopMacro}>■ Parar Gravação</button> : <button onClick={startMacro}>● Gravar Macro</button>}
+              </>)}
+            </RbGroup>
+            <RbGroup label="Modelos">
+              <RbBig icon={LayoutTemplate} label="Modelos" tip="Modelos" desc="Insere um modelo pronto (carta, currículo, relatório, ata, contrato) na posição do cursor." onClick={() => openDlg("templates")}/>
+            </RbGroup>
+          </>)}
+
+          {ribbonTab === "developer" && (<>
+            <RbGroup label="Controles" wide>
+              <div className="rbGrid3">
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Rich Text" data-tipdesc="Insere um campo de texto que aceita formatação." onClick={() => fmt.insertContentControl("rich")}><Type size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Texto Simples" data-tipdesc="Insere um campo de texto sem formatação especial." onClick={() => fmt.insertContentControl("plain")}><Pilcrow size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Imagem" data-tipdesc="Insere um espaço onde você clica para escolher uma imagem." onClick={() => fmt.insertContentControl2("picture")}><ImageIcon size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Galeria de Blocos" data-tipdesc="Insere um campo que, ao clicar, escolhe um bloco pronto para colocar no lugar." onClick={() => fmt.insertContentControl2("gallery")}><Puzzle size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Caixa de Seleção" data-tipdesc="Insere uma caixa que alterna entre marcada e desmarcada ao clicar." onClick={() => fmt.insertContentControl("check")}><CheckSquare size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Caixa de Combinação" data-tipdesc="Insere uma lista de opções que também aceita um valor digitado (última opção)." onClick={() => fmt.insertContentControl2("combo")}><TextCursorInput size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Lista Suspensa" data-tipdesc="Insere um campo com uma lista de opções; cada clique passa para a próxima opção." onClick={() => fmt.insertContentControl("dropdown")}><ChevronsUpDown size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Seletor de Data" data-tipdesc="Insere um campo que abre um calendário para escolher a data." onClick={() => fmt.insertContentControl("date")}><CalendarDays size={15}/></button>
+                <button type="button" className="rbIco" data-tip="Controle de Conteúdo de Seção Repetida" data-tipdesc="Insere uma seção cujo item pode ser repetido com o botão de adicionar." onClick={() => fmt.insertContentControl2("repeat")}><Repeat size={15}/></button>
+              </div>
+              <div className="rbStack">
+                <RbSm icon={SquareDashed} label="Modo Design" tip="Modo Design" desc="Destaca os controles de conteúdo do documento com uma moldura tracejada." active={designMode} onClick={() => setDesignMode(d => !d)}/>
+                <RbSm icon={SlidersHorizontal} label="Propriedades" tip="Propriedades do Controle" desc="Edita o título (e o texto de espaço reservado) do controle de conteúdo onde está o cursor." onClick={fmt.controlProperties}/>
+              </div>
+            </RbGroup>
+          </>)}
+
+          {ribbonTab === "help" && (<>
+            <RbGroup label="Ajuda">
+              <RbBig icon={CircleHelp} label="Ajuda" tip="Ajuda" desc="Mostra informações sobre o editor." onClick={() => openDlg("about")}/>
+              {rbm("helpkeys", (t) => <RbBig icon={Keyboard} label={"Atalhos de\nTeclado"} chevron tip="Atalhos de Teclado" desc="Lista os atalhos de teclado do editor." onClick={t}/>, <div className="rbHelpList">
+                {[["Negrito", "Ctrl+B"], ["Itálico", "Ctrl+I"], ["Sublinhado", "Ctrl+U"], ["Inserir link", "Ctrl+K"], ["Localizar", "Ctrl+F"], ["Substituir", "Ctrl+H"], ["Selecionar tudo", "Ctrl+A"], ["Quebra de página", "Ctrl+Enter"], ["Desfazer", "Ctrl+Z"], ["Refazer", "Ctrl+Y"], ["Mostrar/ocultar marcas", "Ctrl+*"]].map(([n, k]) => <div key={n} className="rbHelpRow"><span>{n}</span><b>{k}</b></div>)}
+              </div>, "wordDropdownMenu wordEditorPanel")}
+            </RbGroup>
+            <RbGroup label="Comandos">
+              <RbBig icon={Search} label={"Buscar\nComandos"} tip="Comandos" desc="Busca qualquer ação do editor pelo nome e a executa." onClick={() => { setCmdQuery(""); openDlg("commands"); }}/>
+            </RbGroup>
+          </>)}
+
+          {ribbonTab === "outlining" && viewMode === "outline" && (<>
+            <RbGroup label="Ferramentas de Estrutura de Tópicos" wide>
+              <div className="rbCol">
+                <div className="rbRow">
+                  <button type="button" className="rbIco" data-tip="Promover para o Título 1" data-tipdesc="Transforma o parágrafo atual em Título 1." onClick={() => fmt.outlineSetLevel(1)}><ChevronsLeft size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Promover" data-tipdesc="Sobe um nível de título (ex.: Título 2 vira Título 1)." onClick={fmt.outlinePromote}><ChevronLeft size={15}/></button>
+                  {rbm("outlevel", (t) => <button type="button" className="rbCombo rbComboSize" data-tip="Nível da Estrutura de Tópicos" data-tipdesc="Escolhe o nível do parágrafo atual." onClick={t}><span>Nível</span><ChevronDown size={11}/></button>, <>
+                    <button onClick={() => fmt.outlineSetLevel(1)}>Nível 1</button>
+                    <button onClick={() => fmt.outlineSetLevel(2)}>Nível 2</button>
+                    <button onClick={() => fmt.outlineSetLevel(3)}>Nível 3</button>
+                    <button onClick={() => fmt.outlineSetLevel(0)}>Corpo do Texto</button>
+                  </>)}
+                  <button type="button" className="rbIco" data-tip="Rebaixar" data-tipdesc="Desce um nível de título (ex.: Título 1 vira Título 2)." onClick={fmt.outlineDemote}><ChevronRight size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Rebaixar para Corpo do Texto" data-tipdesc="Transforma o título atual em parágrafo normal." onClick={() => fmt.outlineSetLevel(0)}><ChevronsRight size={15}/></button>
+                </div>
+                <div className="rbRow">
+                  <button type="button" className="rbIco" data-tip="Mover para Cima" data-tipdesc="Move o título e o conteúdo abaixo dele para antes da seção anterior." onClick={() => fmt.outlineMove(-1)}><ArrowUp size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Mover para Baixo" data-tipdesc="Move o título e o conteúdo abaixo dele para depois da próxima seção." onClick={() => fmt.outlineMove(1)}><ArrowDown size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Expandir" data-tipdesc="Mostra o conteúdo sob o título atual." onClick={() => fmt.outlineToggle(false)}><Plus size={15}/></button>
+                  <button type="button" className="rbIco" data-tip="Recolher" data-tipdesc="Esconde o conteúdo sob o título atual." onClick={() => fmt.outlineToggle(true)}><Minus size={15}/></button>
+                </div>
+              </div>
+            </RbGroup>
+            <RbGroup label="Dados da Estrutura de Tópicos">
+              {rbm("showlevel", (t) => <RbBig icon={ListTree} label={"Mostrar\nNível"} chevron tip="Mostrar Nível" desc="Mostra só os títulos até o nível escolhido, escondendo o resto." onClick={t}/>, <>
+                <button onClick={() => outlineShowLevel(1)}>Nível 1</button>
+                <button onClick={() => outlineShowLevel(2)}>Nível 2</button>
+                <button onClick={() => outlineShowLevel(3)}>Nível 3</button>
+                <button onClick={() => outlineShowLevel(0)}>Todos os Níveis</button>
+              </>)}
+            </RbGroup>
+            <RbGroup label="Fechar">
+              <RbBig icon={X} label={"Fechar Estrutura\nde Tópicos"} tip="Fechar Modo Estrutura de Tópicos" desc="Volta ao Layout de Impressão." onClick={() => setViewMode("print")}/>
+            </RbGroup>
           </>)}
 
           {ribbonTab === "pictureformat" && selectedImg && (<>
@@ -21149,7 +22458,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             )}
           </div>
         )}
-        <div className="wordPageArea" ref={pageAreaRef} onClick={() => fmt.closeAllPopovers()}>
+        <div className={"wordPageArea" + (designMode ? " wordDesignMode" : "") + (sideToSide ? " wordSideToSide" : "") + (darkPage ? " wordDarkPage" : "") + (immersive ? " wordImmersive" : "") + (lineNumbers ? " wordLineNumbers" : "") + (hyphenation ? " wordHyphens" : "") + (highlightFields ? " wordHighlightFields" : "")} ref={pageAreaRef} onClick={() => { fmt.closeAllPopovers(); setRbMenu(null); }}>
           {fmt.findOpen && (
             <div className="wordFindBar" onMouseDown={fmt.keepFocus} onClick={e => e.stopPropagation()}>
               <Search size={13}/>
@@ -21161,6 +22470,23 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               <button className="ghost" onClick={fmt.replaceCurrent}>Substituir</button>
               <button className="ghost" onClick={fmt.replaceAll}>Substituir tudo</button>
               <button onClick={fmt.closeFind}><X size={13}/></button>
+            </div>
+          )}
+          {focusMode && (
+            <div className="wordReadBar">
+              <b>Modo Foco</b>
+              <span>Pressione Esc para sair</span>
+              <button className="primary" onClick={() => setFocusMode(false)}>Sair</button>
+            </div>
+          )}
+          {readMode && (
+            <div className="wordReadBar">
+              <b>{immersive ? "Leitor Imersivo" : "Modo de Leitura"}</b>
+              <button onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={14}/></button>
+              <span>{zoom}%</span>
+              <button onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={14}/></button>
+              {immersive && <button onClick={toggleReadAloud}><Volume2 size={14}/> {speaking ? "Parar" : "Ler em voz alta"}</button>}
+              <button className="primary" onClick={exitReadMode}>Sair</button>
             </div>
           )}
           <div className="wordPageWrap" style={{ zoom: zoom / 100 }}>
@@ -21186,7 +22512,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             )}
             <div
               ref={pageRef}
-              className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "")}
+              className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "") + (viewMode === "web" ? " wordPage-web" : "") + (viewMode === "outline" ? " wordPage-outline" : "")}
               style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...pageBorderStyle(pageBorder) }}
             >
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
@@ -21196,8 +22522,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 style={{
                   paddingLeft: marginLeftCm != null ? marginLeftCm + "cm" : undefined,
                   paddingRight: marginRightCm != null ? marginRightCm + "cm" : undefined,
+                  writingMode: textDir === "vertical" ? "vertical-rl" : undefined,
                 }}
-                contentEditable={!docProtected}
+                contentEditable={!docProtected && !readMode}
                 suppressContentEditableWarning
                 spellCheck={spellcheckOn}
                 lang={docLanguage || undefined}
@@ -21218,8 +22545,37 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               />
             </div>
           </div>
+          {splitOn && <div className="wordSplitPane wordRichBody" dangerouslySetInnerHTML={{ __html: splitHtml }}/>}
           <NoteLinkFloatingUI fmt={fmt}/>
         </div>
+          {sidePane && (
+            <div className="wordNavPane rbSidePane">
+              <div className="wordNavPaneTabs">
+                <button className="active">{sidePane === "review" ? "Painel de Revisão" : sidePane === "clipboard" ? "Área de Transferência" : sidePane === "styles" ? "Estilos" : "Painel de Seleção"}</button>
+                <button className="wordNavPaneClose" onClick={() => setSidePane(null)}><X size={13}/></button>
+              </div>
+              <div className="wordNavPaneList">
+                {sidePane === "review" && (() => {
+                  const ch = Array.from(bodyRef.current?.querySelectorAll(".word-ins, .word-del") || []);
+                  return (<>
+                    <div className="wordEditorScore">{ch.length} alteração(ões) · {comments.length} comentário(s)</div>
+                    {ch.map((c, i) => <button key={i} className="wordNavPaneItem" onClick={() => goToEl(c)}>{c.classList.contains("word-ins") ? "Inserido: " : "Excluído: "}{(c.textContent || "").slice(0, 60)}</button>)}
+                    {comments.map(c => <div key={c.id} className="rbPaneNote">💬 {c.text}</div>)}
+                  </>);
+                })()}
+                {sidePane === "clipboard" && (<>
+                  {clipHistory.length === 0 && <span className="wordDropdownEmpty">Nada copiado ainda.</span>}
+                  {clipHistory.map((t, i) => <button key={i} className="wordNavPaneItem" onClick={() => fmt.exec("insertText", t)}>{t.slice(0, 80)}</button>)}
+                  {clipHistory.length > 0 && <button className="wordNavPaneItem" onClick={() => setClipHistory([])}>Limpar tudo</button>}
+                </>)}
+                {sidePane === "styles" && ([["Normal", "P"], ["Título 1", "H1"], ["Título 2", "H2"], ["Título 3", "H3"], ["Citação", "BLOCKQUOTE"]].map(([n, t]) => <button key={n} className="wordNavPaneItem" onClick={() => fmt.applyHeading(t)}>{n}</button>))}
+                {sidePane === "selection" && (() => {
+                  const objs = listObjects();
+                  return objs.length ? objs.map((o, i) => <button key={i} className="wordNavPaneItem" onClick={() => goToEl(o)}>{(o.tagName === "IMG" ? "Imagem " : o.className.includes("chart") ? "Gráfico " : o.className.includes("textbox") ? "Caixa de texto " : "Objeto ") + (i + 1)}</button>) : <span className="wordDropdownEmpty">Nenhum objeto no documento.</span>;
+                })()}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="wordStatusBar">
@@ -21244,10 +22600,223 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           <WordTableDialog onClose={() => setTableDialogOpen(false)} onConfirm={(r, c) => { setTableDialogOpen(false); fmt.insertTable(r, c); }}/>
         )}
 
+        {dlg === "font" && (
+          <WordModal title="Fonte" onClose={closeDlg} actions={<>
+            <button className="ghost" onClick={closeDlg}>Cancelar</button>
+            <button className="primary" onClick={() => {
+              restoreRange();
+              if (dlgForm.font) fmt.applyFont(dlgForm.font);
+              if (Number(dlgForm.size)) fmt.applyFontSize(Number(dlgForm.size));
+              if (!!dlgForm.bold !== fmtState.bold) fmt.exec("bold");
+              if (!!dlgForm.italic !== fmtState.italic) fmt.exec("italic");
+              if (!!dlgForm.underline !== fmtState.underline) fmt.exec("underline");
+              if (dlgForm.color) fmt.applyTextColor(dlgForm.color);
+              ["shadow", "outline", "smallcaps", "allcaps", "dblstrike"].forEach(k => { if (dlgForm["fx_" + k]) applyTextEffect(k); });
+              closeDlg();
+            }}>OK</button>
+          </>}>
+            <label>Fonte <select value={dlgForm.font || "Calibri"} onChange={e => setF("font", e.target.value)}>{WORD_FONTS.map(f => <option key={f}>{f}</option>)}</select></label>
+            <label>Tamanho <select value={dlgForm.size || 11} onChange={e => setF("size", e.target.value)}>{WORD_SIZES.map(s => <option key={s}>{s}</option>)}</select></label>
+            <label>Negrito <input type="checkbox" checked={!!dlgForm.bold} onChange={e => setF("bold", e.target.checked)}/></label>
+            <label>Itálico <input type="checkbox" checked={!!dlgForm.italic} onChange={e => setF("italic", e.target.checked)}/></label>
+            <label>Sublinhado <input type="checkbox" checked={!!dlgForm.underline} onChange={e => setF("underline", e.target.checked)}/></label>
+            <label>Cor da fonte <input type="color" value={dlgForm.color || "#1a1a1a"} onChange={e => setF("color", e.target.value)}/></label>
+            <label>Sombra <input type="checkbox" checked={!!dlgForm.fx_shadow} onChange={e => setF("fx_shadow", e.target.checked)}/></label>
+            <label>Contorno <input type="checkbox" checked={!!dlgForm.fx_outline} onChange={e => setF("fx_outline", e.target.checked)}/></label>
+            <label>Versalete <input type="checkbox" checked={!!dlgForm.fx_smallcaps} onChange={e => setF("fx_smallcaps", e.target.checked)}/></label>
+            <label>Todas em maiúsculas <input type="checkbox" checked={!!dlgForm.fx_allcaps} onChange={e => setF("fx_allcaps", e.target.checked)}/></label>
+            <label>Tachado duplo <input type="checkbox" checked={!!dlgForm.fx_dblstrike} onChange={e => setF("fx_dblstrike", e.target.checked)}/></label>
+          </WordModal>
+        )}
+
+        {dlg === "para" && (
+          <WordModal title="Parágrafo" onClose={closeDlg} actions={<>
+            <button className="ghost" onClick={closeDlg}>Cancelar</button>
+            <button className="primary" onClick={() => {
+              restoreRange();
+              const map = { left: "justifyLeft", center: "justifyCenter", right: "justifyRight", justify: "justifyFull" };
+              if (map[dlgForm.align]) fmt.exec(map[dlgForm.align]);
+              fmt.setParagraphIndent(Number(dlgForm.left) || 0);
+              fmt.setParagraphIndentRight(Number(dlgForm.right) || 0);
+              fmt.setFirstLineIndent(Number(dlgForm.first) || 0);
+              fmt.setParagraphSpacingBefore(Number(dlgForm.before) || 0);
+              fmt.setParagraphSpacing(Number(dlgForm.after) || 0);
+              if (dlgForm.line) fmt.applyLineHeight(dlgForm.line);
+              closeDlg();
+            }}>OK</button>
+          </>}>
+            <label>Alinhamento <select value={dlgForm.align || "left"} onChange={e => setF("align", e.target.value)}><option value="left">Esquerda</option><option value="center">Centralizado</option><option value="right">Direita</option><option value="justify">Justificado</option></select></label>
+            <label>Recuo à esquerda (cm) <input type="number" step="0.5" value={dlgForm.left ?? 0} onChange={e => setF("left", e.target.value)}/></label>
+            <label>Recuo à direita (cm) <input type="number" step="0.5" value={dlgForm.right ?? 0} onChange={e => setF("right", e.target.value)}/></label>
+            <label>Primeira linha (cm) <input type="number" step="0.5" value={dlgForm.first ?? 0} onChange={e => setF("first", e.target.value)}/></label>
+            <label>Espaço antes (pt) <input type="number" step="2" value={dlgForm.before ?? 0} onChange={e => setF("before", e.target.value)}/></label>
+            <label>Espaço depois (pt) <input type="number" step="2" value={dlgForm.after ?? 0} onChange={e => setF("after", e.target.value)}/></label>
+            <label>Espaçamento entre linhas <select value={dlgForm.line || "1.15"} onChange={e => setF("line", e.target.value)}>{WORD_LINE_HEIGHTS.map(v => <option key={v}>{v}</option>)}</select></label>
+          </WordModal>
+        )}
+
+        {dlg === "pagesetup" && (
+          <WordModal title="Configurar Página" onClose={closeDlg} actions={<>
+            <button className="ghost" onClick={closeDlg}>Fechar</button>
+          </>}>
+            <label>Margem esquerda (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.left ?? 2} onChange={e => { setF("left", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("left", Number(e.target.value)); }}/></label>
+            <label>Margem direita (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.right ?? 2} onChange={e => { setF("right", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("right", Number(e.target.value)); }}/></label>
+            <label>Predefinição <select value={margins} onChange={e => changePageSetting("margins", e.target.value)}><option value="estreita">Estreita</option><option value="normal">Normal</option><option value="larga">Larga</option></select></label>
+            <label>Orientação <select value={orientation} onChange={e => changePageSetting("orientation", e.target.value)}><option value="retrato">Retrato</option><option value="paisagem">Paisagem</option></select></label>
+            <label>Papel <select value={pageSize} onChange={e => changePageSetting("page_size", e.target.value)}><option value="a4">A4</option><option value="carta">Carta</option></select></label>
+          </WordModal>
+        )}
+
+        {dlg === "chart" && (
+          <WordModal title="Inserir Gráfico" onClose={closeDlg} wide actions={<>
+            <button className="ghost" onClick={closeDlg}>Cancelar</button>
+            <button className="primary" onClick={() => {
+              const labels = (dlgForm.labels || "").split(",").map(s => s.trim()).filter(Boolean);
+              const values = (dlgForm.values || "").split(",").map(s => Number(s.trim().replace(",", "."))).filter(v => !Number.isNaN(v));
+              if (!values.length) { alert("Informe ao menos um valor numérico."); return; }
+              restoreRange();
+              fmt.insertChart(dlgForm.type || "bar", dlgForm.title || "Gráfico", labels, values);
+              closeDlg();
+            }}>Inserir</button>
+          </>}>
+            <label>Tipo <select value={dlgForm.type || "bar"} onChange={e => setF("type", e.target.value)}><option value="bar">Colunas</option><option value="line">Linhas</option><option value="pie">Pizza</option></select></label>
+            <label>Título <input style={{ width: 240 }} value={dlgForm.title || ""} onChange={e => setF("title", e.target.value)}/></label>
+            <label>Categorias <input style={{ width: 240 }} placeholder="A, B, C" value={dlgForm.labels || ""} onChange={e => setF("labels", e.target.value)}/></label>
+            <label>Valores <input style={{ width: 240 }} placeholder="10, 20, 15" value={dlgForm.values || ""} onChange={e => setF("values", e.target.value)}/></label>
+          </WordModal>
+        )}
+
+        {dlg === "sources" && (
+          <WordModal title="Gerenciador de Fontes" onClose={closeDlg} wide actions={<>
+            <button className="ghost" onClick={closeDlg}>Fechar</button>
+          </>}>
+            <div className="rbSourceList">
+              {sourcesList.length === 0 && <span className="wordDropdownEmpty">Nenhuma fonte cadastrada.</span>}
+              {sourcesList.map(s => (
+                <div key={s.id} className="rbSourceRow">
+                  <span><b>{s.author}</b> — {s.title} ({s.year || "s.d."})</span>
+                  <button className="ghost" onClick={() => { const l = sourcesList.filter(x => x.id !== s.id); setSourcesList(l); fmt.saveSources(l); }}><Trash2 size={13}/></button>
+                </div>
+              ))}
+            </div>
+            <label>Autor <input style={{ width: 220 }} placeholder="Sobrenome, Nome" value={dlgForm.author || ""} onChange={e => setF("author", e.target.value)}/></label>
+            <label>Título <input style={{ width: 220 }} value={dlgForm.title || ""} onChange={e => setF("title", e.target.value)}/></label>
+            <label>Ano <input value={dlgForm.year || ""} onChange={e => setF("year", e.target.value)}/></label>
+            <label>Editora <input style={{ width: 220 }} value={dlgForm.publisher || ""} onChange={e => setF("publisher", e.target.value)}/></label>
+            <label>URL <input style={{ width: 220 }} value={dlgForm.url || ""} onChange={e => setF("url", e.target.value)}/></label>
+            <button className="primary" onClick={() => {
+              if (!(dlgForm.author || "").trim() || !(dlgForm.title || "").trim()) { alert("Informe ao menos autor e título."); return; }
+              const l = [...sourcesList, { id: "src" + Date.now().toString(36), author: dlgForm.author.trim(), title: dlgForm.title.trim(), year: (dlgForm.year || "").trim(), publisher: (dlgForm.publisher || "").trim(), url: (dlgForm.url || "").trim() }];
+              setSourcesList(l);
+              fmt.saveSources(l);
+              setDlgForm({});
+            }}>Adicionar fonte</button>
+          </WordModal>
+        )}
+
+        {dlg === "macros" && (
+          <WordModal title="Macros" onClose={closeDlg} wide actions={<>
+            <button className="ghost" onClick={closeDlg}>Fechar</button>
+          </>}>
+            <p className="wordBackstageHint">Grave uma sequência de comandos de formatação e execute-a depois com um clique.</p>
+            <div className="rbSourceList">
+              {Object.keys(loadMacros()).length === 0 && <span className="wordDropdownEmpty">Nenhuma macro gravada.</span>}
+              {Object.entries(loadMacros()).map(([name, rec]) => (
+                <div key={name} className="rbSourceRow">
+                  <span><b>{name}</b> — {rec.length} comando(s)</span>
+                  <span>
+                    <button className="ghost" onClick={() => { closeDlg(); setTimeout(() => runMacro(name), 0); }}><Play size={13}/> Executar</button>
+                    <button className="ghost" onClick={() => deleteMacro(name)}><Trash2 size={13}/></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </WordModal>
+        )}
+
+        {dlg === "templates" && (
+          <WordModal title="Modelos" onClose={closeDlg} wide actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
+            <p className="wordBackstageHint">O modelo escolhido é inserido na posição do cursor.</p>
+            <div className="rbSourceList">
+              {WORD_TEMPLATES.map(t => (
+                <div key={t.name} className="rbSourceRow"><span><b>{t.name}</b></span><button className="ghost" onClick={() => applyTemplate(t)}>Inserir</button></div>
+              ))}
+            </div>
+          </WordModal>
+        )}
+
+        {dlg === "pastespecial" && (
+          <WordModal title="Colar Especial" onClose={closeDlg} wide actions={<button className="ghost" onClick={closeDlg}>Cancelar</button>}>
+            <div className="rbSourceList">
+              <div className="rbSourceRow"><span>Texto sem formatação</span><button className="ghost" onClick={async () => { closeDlg(); restoreRange(); await pasteTextOnly(); }}>Colar</button></div>
+              <div className="rbSourceRow"><span>HTML (com formatação)</span><button className="ghost" onClick={async () => {
+                closeDlg(); restoreRange();
+                try { const items = await navigator.clipboard.read(); for (const it of items) { if (it.types.includes("text/html")) { fmt.exec("insertHTML", await (await it.getType("text/html")).text()); return; } } alert("A área de transferência não tem conteúdo HTML."); } catch { alert("Não foi possível ler a área de transferência."); }
+              }}>Colar</button></div>
+              <div className="rbSourceRow"><span>Imagem</span><button className="ghost" onClick={async () => {
+                closeDlg(); restoreRange();
+                try { const items = await navigator.clipboard.read(); for (const it of items) { const t = it.types.find(x => x.startsWith("image/")); if (t) { fmt.insertImageFile(new File([await it.getType(t)], "colado.png", { type: t })); return; } } alert("A área de transferência não tem imagem."); } catch { alert("Não foi possível ler a área de transferência."); }
+              }}>Colar</button></div>
+            </div>
+          </WordModal>
+        )}
+
+        {dlg === "commands" && (
+          <WordModal title="Comandos" onClose={closeDlg} wide actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
+            <input autoFocus className="rbCmdInput" placeholder="Buscar comando…" value={cmdQuery} onChange={e => setCmdQuery(e.target.value)}/>
+            <div className="rbSourceList">
+              {commandList.filter(([n]) => n.toLowerCase().includes(cmdQuery.toLowerCase())).map(([n, run]) => (
+                <div key={n} className="rbSourceRow"><button className="ghost rbCmdBtn" onClick={() => { closeDlg(); setCmdQuery(""); setTimeout(() => { restoreRange(); run(); }, 0); }}>{n}</button></div>
+              ))}
+            </div>
+          </WordModal>
+        )}
+
+        {dlg === "about" && (
+          <WordModal title="Ajuda" onClose={closeDlg} actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
+            <p className="wordBackstageHint">Editor de documentos com a mesma organização de abas e grupos do Word. Use Ajuda &gt; Comandos para buscar qualquer ação pelo nome e Ajuda &gt; Atalhos de Teclado para ver os atalhos.</p>
+          </WordModal>
+        )}
+
+        {dlg === "goto" && (
+          <WordModal title="Ir Para" onClose={closeDlg} wide actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
+            <div className="rbSourceList">
+              {listGoToTargets().length === 0 && <span className="wordDropdownEmpty">Nenhum título, indicador, tabela ou imagem.</span>}
+              {listGoToTargets().map((t, i) => (
+                <div key={i} className="rbSourceRow"><span><b>{t.kind}</b> — {t.label}</span><button className="ghost" onClick={() => { closeDlg(); setTimeout(() => goToEl(t.el), 0); }}>Ir</button></div>
+              ))}
+            </div>
+          </WordModal>
+        )}
+
+        {dlg === "matchfields" && (
+          <WordModal title="Coincidir Campos" onClose={closeDlg} wide actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
+            <div className="rbSourceList">
+              {(() => {
+                const used = [...new Set(Array.from(bodyRef.current?.querySelectorAll(".word-mergefield") || []).map(s => s.dataset.field).filter(f => f && f !== "__rule"))];
+                if (!used.length) return <span className="wordDropdownEmpty">Nenhum campo de mesclagem no documento.</span>;
+                return used.map(f => <div key={f} className="rbSourceRow"><span><b>«{f}»</b></span><span>{recipients?.headers?.includes(f) ? "✔ coluna encontrada" : "✘ sem coluna na lista"}</span></div>);
+              })()}
+            </div>
+          </WordModal>
+        )}
+
         {drawOpen && (
           <WordDrawDialog
-            onClose={() => setDrawOpen(false)}
-            onInsert={(file) => { setDrawOpen(false); fmt.insertImageFile(file); }}
+            onClose={() => { setDrawOpen(false); setInkMode(false); }}
+            onInsert={async (file) => {
+              setDrawOpen(false);
+              if (!inkMode) { fmt.insertImageFile(file); return; }
+              const mode = inkMode;
+              setInkMode(false);
+              try {
+                const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+                const txt = await recognizeHandwriting(url);
+                if (!txt) { alert("Não foi possível reconhecer a escrita."); return; }
+                if (mode === "math") fmt.exec("insertHTML", `<span class="word-equation" contenteditable="true">${txt.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</span>&nbsp;`);
+                else fmt.exec("insertText", txt);
+              } catch (err) { alert(err?.message || "Falha ao reconhecer a escrita."); }
+            }}
             defaultTool={drawTool} defaultColor={drawColor} defaultSize={drawSize} defaultRuler={drawRuler}
           />
         )}
