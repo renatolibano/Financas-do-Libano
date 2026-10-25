@@ -1,4 +1,4 @@
-import React, {useMemo, useState, useEffect, useRef} from "react";
+import React, {useMemo, useState, useEffect, useLayoutEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
 import {createPortal} from "react-dom";
 import {
@@ -28,7 +28,8 @@ import {
   Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
   Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight,
  Keyboard, ChevronsUpDown, PilcrowLeft, PilcrowRight,
- Puzzle, PenLine, FileInput, Tag, Scale, MapPin, GitBranch, ShieldCheck, ChevronsLeft, ChevronsRight, BringToFront, SendToBack, Move, Contrast, LayoutTemplate, CircleHelp, TextCursorInput, Languages, ArrowDownRight, BookOpenText, BookType, SlidersHorizontal, Mail, ListChecks, PanelLeft, BookText
+ Puzzle, PenLine, FileInput, Tag, Scale, MapPin, GitBranch, ShieldCheck, ChevronsLeft, ChevronsRight, BringToFront, SendToBack, Move, Contrast, LayoutTemplate, CircleHelp, TextCursorInput, Languages, ArrowDownRight, BookOpenText, BookType, SlidersHorizontal, Mail, ListChecks, PanelLeft, BookText,
+ Save, FilePlus
 } from "lucide-react";
 import { recognizeHandwriting } from "./lib/handwriting";
 import "./styles.css";
@@ -19340,10 +19341,30 @@ function WordModal({ title, onClose, children, actions, wide }) {
 // pilhas de 3 botões pequenos com texto e botões divididos (ação + seta).
 // ====================================================================
 function RbGroup({ label, wide, children, onLauncher, launcherTip }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
+  }, [open]);
+  // Quando o grupo está recolhido, uma ação (que não abre outro menu) fecha o painel do grupo.
+  const onBodyClick = (e) => {
+    const btn = e.target.closest?.("button");
+    if (!btn || btn.classList.contains("rbSplitArrow")) return;
+    const wrap = btn.parentElement;
+    if (wrap?.classList.contains("wordDropdownWrap") && wrap.firstElementChild === btn) return;
+    setOpen(false);
+  };
   return (
     <>
-      <div className={"wordRibbonGroup rbGroup" + (wide ? " wordRibbonGroupWide" : "")}>
-        <div className="rbBody">{children}</div>
+      <div ref={ref} data-label={label} className={"wordRibbonGroup rbGroup" + (wide ? " wordRibbonGroupWide" : "") + (open ? " rbOpen" : "")}>
+        <button type="button" className="rbCollapsedBtn" data-tip={label} data-tipdesc="Este grupo foi recolhido porque a janela está estreita. Clique para abrir os comandos dele." onClick={() => setOpen(o => !o)}>
+          <LayoutGrid size={22}/>
+          <span className="rbLabel">{label}<ChevronDown size={10}/></span>
+        </button>
+        <div className="rbBody" onClick={onBodyClick}>{children}</div>
         <span className="wordRibbonGroupLabel">{label}</span>
         {onLauncher && <button type="button" className="rbLauncher" data-tip={launcherTip || label} onClick={onLauncher}><ArrowDownRight size={9}/></button>}
       </div>
@@ -19432,6 +19453,21 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const [sourcesList, setSourcesList] = useState([]);
   const dlgRangeRef = useRef(null);
   const [hoverGrid, setHoverGrid] = useState(null);
+  const [miniPos, setMiniPos] = useState(null);
+  const [ctxMenu, setCtxMenu] = useState(null);
+  const [qatIds, setQatIds] = useState(() => { try { const v = JSON.parse(localStorage.getItem("libano.word.qat") || "null"); if (Array.isArray(v)) return v; } catch {} return ["save", "undo", "redo"]; });
+  const [searchQ, setSearchQ] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [pageInfo, setPageInfo] = useState({ page: 1, pages: 1 });
+  const [selWords, setSelWords] = useState(0);
+  const [kt, setKt] = useState({ phase: "off", prefix: "", tab: null });
+  const [ktBadges, setKtBadges] = useState([]);
+  const miniRef = useRef(null);
+  const miniDismissedRef = useRef(null);
+  const bodyDownRef = useRef(false);
+  const ribbonElRef = useRef(null);
+  const ribbonFitSigRef = useRef("");
+  const [fitTick, setFitTick] = useState(0);
   const [zoom, setZoom] = useState(100);
   const [showRuler, setShowRuler] = useState(true);
   const [wordCount, setWordCount] = useState(() => countWords(doc.content || ""));
@@ -19713,6 +19749,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
       redo();
       return;
     }
+    if (handleWordcraftKeys(e)) return;
     fmt.handleBodyKeyDown(e);
   };
 
@@ -21281,6 +21318,343 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     });
   };
 
+  // ====== Portado do wordcraft: atalhos, mini barra, acesso rápido, pesquisa, dicas de tecla ======
+  const stepSizePt = (d) => fmt.applyFontSize(Math.max(1, (Number(fmtState.size) || 11) + d));
+  const handleWordcraftKeys = (e) => {
+    const k = e.key;
+    const kl = k.length === 1 ? k.toLowerCase() : k;
+    const mod = e.ctrlKey || e.metaKey;
+    const run = (fn) => { e.preventDefault(); fn(); return true; };
+    if (k === "F7" && !mod) return run(() => setSpellcheckOn(s => !s));
+    if (!mod) return false;
+    const shift = e.shiftKey;
+    if (e.altKey) {
+      if (shift) return false;
+      if (k === "1") return run(() => fmt.applyHeading("H1"));
+      if (k === "2") return run(() => fmt.applyHeading("H2"));
+      if (k === "3") return run(() => fmt.applyHeading("H3"));
+      if (kl === "m" || kl === "a") return run(addComment);
+      if (kl === "f") return run(fmt.insertFootnote);
+      if (kl === "d") return run(fmt.insertEndnote);
+      return false;
+    }
+    if (shift) {
+      if (kl === "m") return run(() => fmt.exec("outdent"));
+      if (kl === "n") return run(() => fmt.applyHeading("P"));
+      if (k === ">" || k === ".") return run(() => fmt.growShrinkFont(1));
+      if (k === "<" || k === ",") return run(() => fmt.growShrinkFont(-1));
+      if (k === "+") return run(() => fmt.exec("superscript"));
+      if (kl === "x") return run(() => fmt.exec("strikeThrough"));
+      if (kl === "a") return run(() => applyTextEffect("allcaps"));
+      if (kl === "k") return run(() => applyTextEffect("smallcaps"));
+      if (kl === "e") return run(toggleTrackChanges);
+      if (kl === "f" || kl === "p") return run(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }));
+      return false;
+    }
+    if (k === "Enter") return run(fmt.insertPageBreak);
+    if (k === "=") return run(() => fmt.exec("subscript"));
+    if (k === "]") return run(() => stepSizePt(1));
+    if (k === "[") return run(() => stepSizePt(-1));
+    if (k === " ") return run(fmt.clearFormatting);
+    switch (kl) {
+      case "l": return run(() => fmt.exec("justifyLeft"));
+      case "e": return run(() => fmt.exec("justifyCenter"));
+      case "r": return run(() => fmt.exec("justifyRight"));
+      case "j": return run(() => fmt.exec("justifyFull"));
+      case "m": return run(() => fmt.exec("indent"));
+      case "d": return run(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }));
+      case "k": return run(() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); });
+      case "f": return run(() => fmt.setFindOpen(true));
+      case "h": return run(() => fmt.setFindOpen(true));
+      case "p": return run(() => window.print());
+      case "s": return run(flushSave);
+      case "1": return run(() => fmt.applyLineHeight("1"));
+      case "2": return run(() => fmt.applyLineHeight("2"));
+      case "5": return run(() => fmt.applyLineHeight("1.5"));
+      case "0": return run(() => fmt.setParagraphSpacingBefore(12));
+      default: return false;
+    }
+  };
+
+  // ---- Barra de Acesso Rápido ----
+  const QAT_CMDS = {
+    new: { label: "Novo", icon: FilePlus, desc: "Cria um novo documento em branco.", run: fileMenuNew },
+    save: { label: "Salvar", icon: Save, desc: "Salva o documento agora (ele também é salvo automaticamente).", run: flushSave },
+    print: { label: "Imprimir", icon: Printer, desc: "Imprime o documento ou salva como PDF pela caixa de impressão do navegador.", run: () => window.print() },
+    undo: { label: "Desfazer", icon: Undo2, desc: "Desfaz a última alteração (Ctrl+Z).", run: undo },
+    redo: { label: "Refazer", icon: Redo2, desc: "Refaz a alteração desfeita (Ctrl+Y).", run: redo },
+    spelling: { label: "Ortografia", icon: SpellCheck, desc: "Liga ou desliga a verificação ortográfica (F7).", run: () => setSpellcheckOn(s => !s) },
+    readmode: { label: "Modo de Leitura", icon: BookOpen, desc: "Esconde a faixa de opções e deixa o documento somente para leitura.", run: () => enterReadMode(false) },
+    table: { label: "Inserir Tabela", icon: Table2, desc: "Insere uma tabela no documento.", run: () => setTableDialogOpen(true) },
+  };
+  const saveQat = (ids) => { setQatIds(ids); try { localStorage.setItem("libano.word.qat", JSON.stringify(ids)); } catch {} };
+  const toggleQat = (id) => saveQat(qatIds.includes(id) ? qatIds.filter(x => x !== id) : [...qatIds, id]);
+  const undoSteps = () => Math.min(10, historyRef.current.length + (((bodyRef.current?.innerHTML || "") !== historyBaselineRef.current) ? 1 : 0));
+
+  // ---- pesquisa de comandos ----
+  const searchResults = searchQ.trim() ? commandList.filter(([n]) => n.toLowerCase().includes(searchQ.trim().toLowerCase())).slice(0, 8) : [];
+  const runSearchCmd = (run) => { setSearchOpen(false); setSearchQ(""); setTimeout(() => { restoreRange(); run(); }, 0); };
+
+  // ---- mini barra flutuante (posição = anchor_rect do wordcraft) ----
+  const MINI_W = 301, MINI_H = 56, MINI_GAP = 8;
+  useEffect(() => {
+    const popup = (t) => t.closest?.(".wordDropdownMenu, .colorPopover, .rbPop, .emojiPopover");
+    const compute = () => {
+      const el = bodyRef.current;
+      const sel = window.getSelection();
+      if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed || !el.contains(sel.anchorNode) || bodyDownRef.current) { setMiniPos(null); return; }
+      const sig = sel.anchorOffset + ":" + sel.focusOffset + ":" + sel.toString().length + ":" + sel.toString().slice(0, 24);
+      if (miniDismissedRef.current && miniDismissedRef.current !== sig) miniDismissedRef.current = null;
+      if (miniDismissedRef.current === sig) { setMiniPos(null); return; }
+      const rects = Array.from(sel.getRangeAt(0).getClientRects()).filter(r => r.height > 1 && r.width >= 0);
+      const area = pageAreaRef.current?.getBoundingClientRect();
+      if (!rects.length || !area) { setMiniPos(null); return; }
+      const first = rects.reduce((a, b) => (b.top < a.top ? b : a));
+      if (first.bottom < area.top || first.top > area.bottom) { setMiniPos(null); return; }
+      const cx = Math.min(Math.max(first.left + 4, area.left), area.right);
+      const left = Math.min(Math.max(cx - MINI_W / 2, area.left), Math.max(area.right - MINI_W, area.left));
+      const above = first.top - MINI_GAP - MINI_H;
+      const below = first.bottom + MINI_GAP;
+      const fits = (y) => y >= area.top && y + MINI_H <= area.bottom;
+      let top = fits(above) ? above : fits(below) ? below : Math.min(Math.max(above < area.top ? below : above, area.top), Math.max(area.bottom - MINI_H, area.top));
+      setMiniPos(prev => (prev && Math.abs(prev.left - left) < 1 && Math.abs(prev.top - top) < 1 ? prev : { left, top }));
+    };
+    const onDown = (e) => {
+      const t = e.target;
+      if (bodyRef.current?.contains(t)) { bodyDownRef.current = true; miniDismissedRef.current = null; return; }
+      if (miniRef.current?.contains(t) || popup(t)) return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) miniDismissedRef.current = sel.anchorOffset + ":" + sel.focusOffset + ":" + sel.toString().length + ":" + sel.toString().slice(0, 24);
+      setMiniPos(null);
+    };
+    const onUp = () => { if (bodyDownRef.current) { bodyDownRef.current = false; setTimeout(compute, 0); } };
+    const onSel = () => { if (!bodyDownRef.current) requestAnimationFrame(compute); };
+    const area = pageAreaRef.current;
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("mouseup", onUp, true);
+    document.addEventListener("selectionchange", onSel);
+    area?.addEventListener("scroll", compute);
+    window.addEventListener("resize", compute);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("mouseup", onUp, true);
+      document.removeEventListener("selectionchange", onSel);
+      area?.removeEventListener("scroll", compute);
+      window.removeEventListener("resize", compute);
+    };
+  }, []);
+  const miniVisible = !!miniPos && !readMode && !focusMode && !dlg && !fileMenuOpen && !ctxMenu && kt.phase === "off";
+  const miniContent = () => (
+    <>
+      <div className="rbRow">
+        {rbm("mini-font", (t) => <button type="button" className="rbCombo rbComboFont" data-tip="Fonte" onClick={t}><span style={{ fontFamily: fmtState.font }}>{fmtState.font}</span><ChevronDown size={11}/></button>, <>
+          {WORD_FONTS.map(f => <button key={f} className={fmtState.font === f ? "active" : ""} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}
+        </>)}
+        {rbm("mini-size", (t) => <button type="button" className="rbCombo rbComboSize" data-tip="Tamanho da Fonte" onClick={t}><span>{fmtState.size}</span><ChevronDown size={11}/></button>, <>
+          {WORD_SIZES.map(s => <button key={s} className={fmtState.size === s ? "active" : ""} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}
+        </>)}
+        <button type="button" className="rbIco" data-tip="Aumentar Fonte" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
+        <button type="button" className="rbIco" data-tip="Diminuir Fonte" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
+      </div>
+      <div className="rbRow">
+        <button type="button" className={"rbIco" + (fmtState.bold ? " active" : "")} data-tip="Negrito" onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.italic ? " active" : "")} data-tip="Itálico" onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.underline ? " active" : "")} data-tip="Sublinhado" onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.strike ? " active" : "")} data-tip="Tachado" onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
+        <span className="rbMiniSep"/>
+        <div className="wordDropdownWrap">
+          <RbSplit icon={PaintBucket} tip="Cor de Realce do Texto" color={lastHilite} onMain={() => fmt.applyHilite(lastHilite)} onArrow={() => setRbMenu(m => (m === "mini-hl" ? null : "mini-hl"))}/>
+          {rbMenu === "mini-hl" && <div className="colorPopover rbPop">{NOTE_HILITE_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => { setLastHilite(c); fmt.applyHilite(c); setRbMenu(null); }}/>)}</div>}
+        </div>
+        <div className="wordDropdownWrap">
+          <RbSplit icon={Palette} tip="Cor da Fonte" color={lastFontColor} onMain={() => fmt.applyTextColor(lastFontColor)} onArrow={() => setRbMenu(m => (m === "mini-fc" ? null : "mini-fc"))}/>
+          {rbMenu === "mini-fc" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>)}</div>}
+        </div>
+        <span className="rbMiniSep"/>
+        <button type="button" className={"rbIco" + (fmtState.align === "left" ? " active" : "")} data-tip="Alinhar à Esquerda" onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.align === "center" ? " active" : "")} data-tip="Centralizar" onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.align === "right" ? " active" : "")} data-tip="Alinhar à Direita" onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
+        <button type="button" className={"rbIco" + (fmtState.align === "justify" ? " active" : "")} data-tip="Justificar" onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
+      </div>
+    </>
+  );
+
+  // ---- menu de contexto (botão direito), com a mini barra no topo ----
+  const handleBodyContextMenu = (e) => {
+    if (readMode || docProtected) return;
+    e.preventDefault();
+    saveRange();
+    setRbMenu(null);
+    setCtxMenu({ x: Math.min(e.clientX, window.innerWidth - 320), y: Math.min(e.clientY, window.innerHeight - 420) });
+  };
+  const ctxRun = (fn) => { setCtxMenu(null); setTimeout(() => { restoreRange(); fn(); }, 0); };
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const close = (e) => { if (!e.target.closest?.(".wordContextMenu")) setCtxMenu(null); };
+    const esc = (e) => { if (e.key === "Escape") setCtxMenu(null); };
+    document.addEventListener("mousedown", close, true);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close, true); document.removeEventListener("keydown", esc); };
+  }, [ctxMenu]);
+
+  // ---- barra de status: página X de Y e palavras selecionadas ----
+  useEffect(() => {
+    const calc = () => {
+      const body = bodyRef.current;
+      const area = pageAreaRef.current;
+      if (!body || !area) return;
+      const ph = currentPageDims().h * (zoom / 100);
+      if (!ph) return;
+      const br = body.getBoundingClientRect();
+      const ar = area.getBoundingClientRect();
+      const pages = Math.max(1, Math.ceil((br.height - 2) / ph));
+      let page = Math.floor((ar.top + ar.height / 2 - br.top) / ph) + 1;
+      page = Math.min(Math.max(page, 1), pages);
+      setPageInfo(p => (p.page === page && p.pages === pages ? p : { page, pages }));
+      const s = window.getSelection();
+      const n = s && !s.isCollapsed && body.contains(s.anchorNode) ? (s.toString().trim().match(/\S+/g) || []).length : 0;
+      setSelWords(w => (w === n ? w : n));
+    };
+    const t = setInterval(calc, 500);
+    calc();
+    return () => clearInterval(t);
+  }, [zoom, pageSize, orientation, viewMode]);
+
+  // ---- dicas de tecla (Alt), igual ao keytips do wordcraft ----
+  const KT_TAB_LETTERS = { "arquivo": "F", "página inicial": "H", "inserir": "N", "desenhar": "D", "design": "G", "layout": "P", "referências": "S", "correspondências": "M", "revisão": "R", "exibir": "W", "desenvolvedor": "L", "ajuda": "Y", "estrutura de tópicos": "O" };
+  useEffect(() => {
+    let pending = false;
+    const down = (e) => { if (e.key === "Alt") { if (!e.repeat) pending = true; return; } pending = false; };
+    const up = (e) => {
+      if (e.key !== "Alt" || !pending) return;
+      pending = false;
+      e.preventDefault();
+      setKt(k => (k.phase === "off" && !readMode ? { phase: "tabs", prefix: "", tab: null } : { phase: "off", prefix: "", tab: null }));
+    };
+    document.addEventListener("keydown", down, true);
+    document.addEventListener("keyup", up, true);
+    return () => { document.removeEventListener("keydown", down, true); document.removeEventListener("keyup", up, true); };
+  }, [readMode]);
+  useEffect(() => {
+    if (kt.phase === "off") { setKtBadges([]); return undefined; }
+    const timer = setTimeout(() => {
+      const list = [];
+      const rectOf = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 ? r : null; };
+      if (kt.phase === "tabs") {
+        document.querySelectorAll(".wordRibbonTabs > button").forEach(b => {
+          const key = (b.textContent || "").trim().toLowerCase();
+          const letter = KT_TAB_LETTERS[key];
+          const r = rectOf(b);
+          if (!letter || !r) return;
+          list.push({ label: letter, rect: r, action: () => {
+            if (key === "arquivo") { setKt({ phase: "off", prefix: "", tab: null }); openFileMenu("info"); return; }
+            b.click();
+            setKt({ phase: "cmds", prefix: "", tab: key });
+          } });
+        });
+        document.querySelectorAll(".wordQat [data-qat]").forEach((b, i) => {
+          const r = rectOf(b);
+          if (r) list.push({ label: String(i + 1), rect: r, action: () => { setKt({ phase: "off", prefix: "", tab: null }); b.click(); } });
+        });
+        const s = document.querySelector(".wordSearchWrap input");
+        const sr = s && rectOf(s);
+        if (sr) list.push({ label: "Q", rect: sr, action: () => { setKt({ phase: "off", prefix: "", tab: null }); s.focus(); } });
+      } else {
+        const els = Array.from(document.querySelectorAll(".wordRibbon button, .wordRibbon label.rbCheck")).filter(el => !el.disabled && rectOf(el) && rectOf(el).left >= 0 && rectOf(el).right <= window.innerWidth + 4);
+        const used = [];
+        els.forEach(el => {
+          const name = (el.dataset.tip || el.textContent || "").replace(/\(.*?\)/g, "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9 ]/g, "").trim();
+          const words = name.split(/\s+/).filter(Boolean);
+          const letters = name.replace(/ /g, "");
+          const cand = [];
+          if (words[0]) cand.push(words[0][0]);
+          words.forEach(w => cand.push(w[0]));
+          for (let i = 1; i < Math.min(letters.length, 5); i++) cand.push(letters[0] + letters[i]);
+          let pick = cand.find(c => !used.some(u => u.startsWith(c) || c.startsWith(u)));
+          if (!pick) { let n = 1; while (used.some(u => u === "Z" + n)) n += 1; pick = "Z" + n; }
+          used.push(pick);
+          list.push({ label: pick, rect: rectOf(el), action: () => { setKt({ phase: "off", prefix: "", tab: null }); el.click(); } });
+        });
+      }
+      setKtBadges(list);
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [kt.phase, kt.tab]);
+  useEffect(() => {
+    if (kt.phase === "off") return undefined;
+    const onKey = (e) => {
+      if (["Alt", "Shift", "Control", "Meta"].includes(e.key)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setKt(k => (k.phase === "cmds" ? { phase: "tabs", prefix: "", tab: null } : { phase: "off", prefix: "", tab: null })); return; }
+      if (e.key === "Backspace") { setKt(k => ({ ...k, prefix: k.prefix.slice(0, -1) })); return; }
+      if (e.key.length === 1) setKt(k => ({ ...k, prefix: k.prefix + e.key.toUpperCase() }));
+    };
+    const onMouse = () => setKt({ phase: "off", prefix: "", tab: null });
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("mousedown", onMouse, true);
+    return () => { document.removeEventListener("keydown", onKey, true); document.removeEventListener("mousedown", onMouse, true); };
+  }, [kt.phase]);
+  useEffect(() => {
+    if (kt.phase === "off" || !kt.prefix) return;
+    const matches = ktBadges.filter(b => b.label.startsWith(kt.prefix));
+    if (!matches.length) { setKt(k => ({ ...k, prefix: "" })); return; }
+    const exact = matches.find(b => b.label === kt.prefix);
+    if (exact) exact.action();
+  }, [kt.prefix]);
+
+  // ---- ribbon que se ajusta à largura da janela (portado do ribbon_fit.rs do wordcraft) ----
+  // Da direita para a esquerda os grupos perdem o texto dos botões pequenos (compacto) e depois
+  // viram um único botão com menu (recolhido), parando assim que a aba cabe; o que sobrar de
+  // espaço é devolvido, da esquerda para a direita.
+  useEffect(() => {
+    const ribbon = ribbonElRef.current;
+    if (!ribbon || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(() => setFitTick(t => t + 1));
+    ro.observe(ribbon);
+    return () => ro.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const ribbon = ribbonElRef.current;
+    if (!ribbon || readMode || focusMode) return;
+    const groups = Array.from(ribbon.querySelectorAll(":scope > .rbGroup"));
+    const cs = getComputedStyle(ribbon);
+    const avail = ribbon.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    if (avail <= 0) return;
+    const sig = ribbonTab + "|" + avail + "|" + groups.map(g => g.dataset.label + g.textContent.length).join(",");
+    if (sig === ribbonFitSigRef.current) return;
+    ribbonFitSigRef.current = sig;
+    ribbon.classList.remove("rbWrap");
+    if (!groups.length) { if (ribbon.scrollWidth > ribbon.clientWidth + 1) ribbon.classList.add("rbWrap"); return; }
+    const div = ribbon.querySelector(":scope > .wordRibbonDivider");
+    const dcs = div ? getComputedStyle(div) : null;
+    const dw = div ? div.offsetWidth + parseFloat(dcs.marginLeft) + parseFloat(dcs.marginRight) : 9;
+    const widths = [0, 1, 2].map(lvl => {
+      groups.forEach(g => { g.dataset.level = String(lvl); });
+      return groups.map(g => g.getBoundingClientRect().width + dw);
+    });
+    const levels = groups.map(() => 0);
+    let total = widths[0].reduce((a, b) => a + b, 0);
+    for (const target of [1, 2]) {
+      for (let i = groups.length - 1; i >= 0; i -= 1) {
+        if (total <= avail) break;
+        total += widths[target][i] - widths[levels[i]][i];
+        levels[i] = target;
+      }
+    }
+    groups.forEach((g, i) => {
+      while (levels[i] > 0) {
+        const wider = levels[i] - 1;
+        const next = total + widths[wider][i] - widths[levels[i]][i];
+        if (next > avail) break;
+        total = next;
+        levels[i] = wider;
+      }
+    });
+    groups.forEach((g, i) => { g.dataset.level = String(levels[i]); });
+    if (ribbon.scrollWidth > ribbon.clientWidth + 1) ribbon.classList.add("rbWrap");
+  });
+
   const getA11yIssues = () => {
     const el = bodyRef.current;
     if (!el) return [];
@@ -21306,11 +21680,36 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
         onMouseDown={(e) => { dismissRibbonTip(); if (!e.target.closest?.(".wordCommentPopover")) setCommentPopover(null); }}
       >
         <div className="readerHead">
-          <div className="wordUndoRedoGroup">
-            <button data-tip="Desfazer" data-tipdesc="Desfaz a última alteração (Ctrl+Z)." onClick={undo}><Undo2 size={16}/></button>
-            <button data-tip="Refazer" data-tipdesc="Refaz a alteração desfeita (Ctrl+Y)." onClick={redo}><Redo2 size={16}/></button>
+          <div className="wordQat">
+            {qatIds.filter(id => QAT_CMDS[id]).map(id => {
+              const c = QAT_CMDS[id];
+              const Icon = c.icon;
+              const disabled = (id === "undo" && !historyRef.current.length && (bodyRef.current?.innerHTML || "") === historyBaselineRef.current) || (id === "redo" && !redoStackRef.current.length);
+              return (
+                <React.Fragment key={id}>
+                  <button type="button" data-qat={id} className="rbQatBtn" data-tip={c.label} data-tipdesc={c.desc} disabled={disabled} onClick={c.run} onContextMenu={(e) => { e.preventDefault(); toggleQat(id); }}><Icon size={16}/></button>
+                  {id === "undo" && rbm("undolist", (t) => <button type="button" className="rbQatBtn rbQatArrow" data-tip="Lista de Desfazer" data-tipdesc="Escolha quantas alterações desfazer de uma vez." disabled={undoSteps() === 0} onClick={t}><ChevronDown size={10}/></button>, <>
+                    {Array.from({ length: undoSteps() }).map((_, i) => <button key={i} onClick={() => { for (let n = 0; n <= i; n += 1) undo(); }}>{i === 0 ? "Desfazer 1 ação" : `Desfazer ${i + 1} ações`}</button>)}
+                  </>)}
+                </React.Fragment>
+              );
+            })}
+            {rbm("qatmenu", (t) => <button type="button" className="rbQatBtn" data-tip="Personalizar Barra de Acesso Rápido" data-tipdesc="Escolha quais comandos ficam sempre à mão no topo da janela. Clique com o botão direito num ícone para removê-lo." onClick={t}><ChevronDown size={14}/></button>, <>
+              <div className="wordDropdownEmpty">Personalizar Barra de Acesso Rápido</div>
+              {Object.entries(QAT_CMDS).map(([id, c]) => <button key={id} className={qatIds.includes(id) ? "active" : ""} onClick={() => toggleQat(id)}>{qatIds.includes(id) ? "✔ " : "\u2003"}{c.label}</button>)}
+            </>)}
           </div>
           <input ref={titleInputRef} className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Documento sem título" autoFocus/>
+          <div className="wordSearchWrap">
+            <Search size={14}/>
+            <input value={searchQ} placeholder="Pesquisar comandos e ajuda" onFocus={() => { saveRange(); setSearchOpen(true); }} onBlur={() => setTimeout(() => setSearchOpen(false), 150)} onChange={e => { setSearchQ(e.target.value); setSearchOpen(true); }} onKeyDown={e => { if (e.key === "Enter" && searchResults[0]) runSearchCmd(searchResults[0][1]); if (e.key === "Escape") { setSearchOpen(false); setSearchQ(""); } }}/>
+            {searchOpen && searchQ.trim() && (
+              <div className="wordSearchMenu">
+                {searchResults.length === 0 && <span className="wordDropdownEmpty">Nenhum comando encontrado</span>}
+                {searchResults.map(([n, run]) => <button key={n} onMouseDown={e => e.preventDefault()} onClick={() => runSearchCmd(run)}>{n}</button>)}
+              </div>
+            )}
+          </div>
           <div className="readerHeadActions">
             <div className="wordExportWrap">
               <button className="ghost" onClick={() => setExportOpen(o => !o)}><Download size={15}/> <span>Baixar</span></button>
@@ -21390,7 +21789,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </div>
         )}
 
-        <div className={"wordRibbon" + ((readMode || focusMode) ? " rbHidden" : "")} onMouseDown={fmt.keepFocus}>
+        <div ref={ribbonElRef} className={"wordRibbon" + ((readMode || focusMode) ? " rbHidden" : "")} onMouseDown={fmt.keepFocus}>
           {ribbonTab === "home" && (<>
             <RbGroup label="Área de Transferência" onLauncher={() => setSidePane("clipboard")} launcherTip="Área de Transferência">
               <div className="rbPasteWrap">
@@ -21508,9 +21907,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                   <button type="button" className={"rbIco" + (showMarks ? " active" : "")} data-tip="Mostrar Tudo (Ctrl+*)" data-tipdesc="Exibe marcas de formatação ocultas, como parágrafos e espaços." onClick={() => setShowMarks(v => !v)}><Pilcrow size={15}/></button>
                 </div>
                 <div className="rbRow">
-                  <button type="button" className={"rbIco" + (fmtState.align === "left" ? " active" : "")} data-tip="Alinhar Texto à Esquerda (Ctrl+Q)" data-tipdesc="Alinha o texto pela margem esquerda." onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.align === "left" ? " active" : "")} data-tip="Alinhar Texto à Esquerda (Ctrl+L)" data-tipdesc="Alinha o texto pela margem esquerda." onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
                   <button type="button" className={"rbIco" + (fmtState.align === "center" ? " active" : "")} data-tip="Centralizar (Ctrl+E)" data-tipdesc="Centraliza o texto entre as margens." onClick={() => fmt.exec("justifyCenter")}><AlignCenter size={15}/></button>
-                  <button type="button" className={"rbIco" + (fmtState.align === "right" ? " active" : "")} data-tip="Alinhar Texto à Direita (Ctrl+G)" data-tipdesc="Alinha o texto pela margem direita." onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
+                  <button type="button" className={"rbIco" + (fmtState.align === "right" ? " active" : "")} data-tip="Alinhar Texto à Direita (Ctrl+R)" data-tipdesc="Alinha o texto pela margem direita." onClick={() => fmt.exec("justifyRight")}><AlignRight size={15}/></button>
                   <button type="button" className={"rbIco" + (fmtState.align === "justify" ? " active" : "")} data-tip="Justificar (Ctrl+J)" data-tipdesc="Distribui o texto uniformemente entre as margens. O texto justificado proporciona bordas limpas e nítidas ao documento, criando uma aparência mais elegante." onClick={() => fmt.exec("justifyFull")}><AlignJustify size={15}/></button>
                   <button type="button" className={"rbIco" + (fmtState.dir === "ltr" ? " active" : "")} data-tip="Direção do Texto: Esquerda para a Direita" data-tipdesc="Define a direção do parágrafo atual como esquerda para a direita." onClick={() => setParaDir("ltr")}><PilcrowRight size={15}/></button>
                   <button type="button" className={"rbIco" + (fmtState.dir === "rtl" ? " active" : "")} data-tip="Direção do Texto: Direita para a Esquerda" data-tipdesc="Define a direção do parágrafo atual como direita para a esquerda." onClick={() => setParaDir("rtl")}><PilcrowLeft size={15}/></button>
@@ -22184,7 +22583,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             <RbGroup label="Ajuda">
               <RbBig icon={CircleHelp} label="Ajuda" tip="Ajuda" desc="Mostra informações sobre o editor." onClick={() => openDlg("about")}/>
               {rbm("helpkeys", (t) => <RbBig icon={Keyboard} label={"Atalhos de\nTeclado"} chevron tip="Atalhos de Teclado" desc="Lista os atalhos de teclado do editor." onClick={t}/>, <div className="rbHelpList">
-                {[["Negrito", "Ctrl+B"], ["Itálico", "Ctrl+I"], ["Sublinhado", "Ctrl+U"], ["Inserir link", "Ctrl+K"], ["Localizar", "Ctrl+F"], ["Substituir", "Ctrl+H"], ["Selecionar tudo", "Ctrl+A"], ["Quebra de página", "Ctrl+Enter"], ["Desfazer", "Ctrl+Z"], ["Refazer", "Ctrl+Y"], ["Mostrar/ocultar marcas", "Ctrl+*"]].map(([n, k]) => <div key={n} className="rbHelpRow"><span>{n}</span><b>{k}</b></div>)}
+                {[["Negrito", "Ctrl+B"], ["Itálico", "Ctrl+I"], ["Sublinhado", "Ctrl+U"], ["Alinhar à esquerda", "Ctrl+L"], ["Centralizar", "Ctrl+E"], ["Alinhar à direita", "Ctrl+R"], ["Justificar", "Ctrl+J"], ["Aumentar recuo", "Ctrl+M"], ["Diminuir recuo", "Ctrl+Shift+M"], ["Título 1/2/3", "Ctrl+Alt+1/2/3"], ["Estilo Normal", "Ctrl+Shift+N"], ["Aumentar/diminuir fonte", "Ctrl+Shift+> / <"], ["Fonte +/- 1 pt", "Ctrl+] / ["], ["Subscrito / Sobrescrito", "Ctrl+= / Ctrl+Shift+="], ["Limpar formatação", "Ctrl+Espaço"], ["Janela Fonte", "Ctrl+D"], ["Inserir link", "Ctrl+K"], ["Localizar / Substituir", "Ctrl+F / Ctrl+H"], ["Quebra de página", "Ctrl+Enter"], ["Espaçamento 1 / 1,5 / 2", "Ctrl+1 / 5 / 2"], ["Novo comentário", "Ctrl+Alt+M"], ["Nota de rodapé / de fim", "Ctrl+Alt+F / D"], ["Controlar alterações", "Ctrl+Shift+E"], ["Ortografia", "F7"], ["Imprimir", "Ctrl+P"], ["Desfazer / Refazer", "Ctrl+Z / Ctrl+Y"], ["Dicas de tecla", "Alt"]].map(([n, k]) => <div key={n} className="rbHelpRow"><span>{n}</span><b>{k}</b></div>)}
               </div>, "wordDropdownMenu wordEditorPanel")}
             </RbGroup>
             <RbGroup label="Comandos">
@@ -22541,6 +22940,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
                 onKeyUp={(e) => { fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
                 onKeyDown={handleEditorKeyDown}
+                onContextMenu={handleBodyContextMenu}
                 data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
               />
             </div>
@@ -22579,7 +22979,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
         </div>
 
         <div className="wordStatusBar">
-          <span>{wordCount.words} palavra{wordCount.words === 1 ? "" : "s"}</span>
+          <button className="wordStatusItem" data-tip="Ir Para" data-tipdesc="Abre a janela Ir Para, para pular direto a um título, indicador, tabela ou imagem." onClick={() => openDlg("goto")}>Página {pageInfo.page} de {pageInfo.pages}</button>
+          <button className="wordStatusItem" data-tip="Contagem de Palavras" data-tipdesc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}>{selWords ? `${selWords} de ${wordCount.words} palavras` : `${wordCount.words} palavra${wordCount.words === 1 ? "" : "s"}`}</button>
           <span>{wordCount.chars} caractere{wordCount.chars === 1 ? "" : "s"}</span>
           {trackChanges && <span className="wordStatusBadge"><Pencil size={11}/> Controlando Alterações</span>}
           {docProtected && <span className="wordStatusBadge"><Lock size={11}/> Protegido</span>}
@@ -22587,7 +22988,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           <Globe size={12}/> <span>{docLanguage ? languageName(docLanguage) : "Português (Brasil)"}</span>
           <SpellCheck size={13}/> <span>Verificação ortográfica {spellcheckOn ? "ativada" : "desativada"}</span>
           <span className="wordStatusDivider"/>
-          <button className={"wordStatusViewBtn" + (viewMode === "print" ? " active" : "")} data-tip="Layout de Impressão" onClick={() => setViewMode("print")}><FileText size={13}/></button>
+          <button className={"wordStatusViewBtn" + (viewMode === "web" ? " active" : "")} data-tip="Layout da Web" onClick={() => setViewMode("web")}><Globe size={13}/></button>
+          <button className={"wordStatusViewBtn" + (viewMode === "print" && !readMode ? " active" : "")} data-tip="Layout de Impressão" onClick={() => { exitReadMode(); setViewMode("print"); }}><FileText size={13}/></button>
+          <button className={"wordStatusViewBtn" + (readMode ? " active" : "")} data-tip="Modo de Leitura" onClick={() => enterReadMode(false)}><BookOpen size={13}/></button>
+          <button className={"wordStatusViewBtn" + (focusMode ? " active" : "")} data-tip="Foco" onClick={() => setFocusMode(true)}><Maximize2 size={13}/></button>
           <button className={"wordStatusViewBtn" + (viewMode === "draft" ? " active" : "")} data-tip="Rascunho" onClick={() => setViewMode("draft")}><FileType size={13}/></button>
           <span className="wordStatusDivider"/>
           <button className="wordStatusZoomBtn" data-tip="Diminuir Zoom" onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={13}/></button>
@@ -22595,6 +22999,35 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           <button className="wordStatusZoomBtn" data-tip="Aumentar Zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={13}/></button>
           <span className="wordZoomValue">{zoom}%</span>
         </div>
+
+        {miniVisible && createPortal(
+          <div ref={miniRef} className="wordMiniToolbar" style={{ left: miniPos.left, top: miniPos.top }} onMouseDown={fmt.keepFocus}>{miniContent()}</div>,
+          document.body
+        )}
+        {ctxMenu && createPortal(
+          <div className="wordContextMenu" style={{ left: ctxMenu.x, top: ctxMenu.y }} onMouseDown={fmt.keepFocus}>
+            <div className="wordMiniToolbar wordMiniInline">{miniContent()}</div>
+            <button onClick={() => ctxRun(() => fmt.exec("cut"))}><Scissors size={14}/> Recortar <kbd>Ctrl+X</kbd></button>
+            <button onClick={() => ctxRun(() => fmt.exec("copy"))}><Copy size={14}/> Copiar <kbd>Ctrl+C</kbd></button>
+            <button onClick={() => ctxRun(() => fmt.exec("paste"))}><ClipboardPaste size={14}/> Colar <kbd>Ctrl+V</kbd></button>
+            <button onClick={() => ctxRun(pasteTextOnly)}><ClipboardPaste size={14}/> Manter Somente Texto</button>
+            <button onClick={() => ctxRun(() => openDlg("pastespecial"))}><ClipboardPaste size={14}/> Colar Especial…</button>
+            <div className="wordContextSep"/>
+            <button onClick={() => ctxRun(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }))}><Type size={14}/> Fonte… <kbd>Ctrl+D</kbd></button>
+            <button onClick={() => ctxRun(() => openDlg("para", { align: fmtState.align, left: fmt.paraIndent.left, right: fmt.paraIndent.right, first: fmt.paraIndent.firstLine, before: 0, after: 0, line: "1.15" }))}><AlignLeft size={14}/> Parágrafo…</button>
+            <button onClick={() => ctxRun(() => fmt.exec("insertUnorderedList"))}><List size={14}/> Marcadores</button>
+            <button onClick={() => ctxRun(() => fmt.exec("insertOrderedList"))}><ListOrdered size={14}/> Numeração</button>
+            <div className="wordContextSep"/>
+            <button onClick={() => ctxRun(() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); })}><Link2 size={14}/> Link <kbd>Ctrl+K</kbd></button>
+            <button onClick={() => ctxRun(addComment)}><MessageSquarePlus size={14}/> Novo Comentário</button>
+            <button onClick={() => ctxRun(openResearch)}><Search size={14}/> Pesquisar na Web…</button>
+          </div>,
+          document.body
+        )}
+        {kt.phase !== "off" && createPortal(
+          <>{ktBadges.filter(b => b.label.startsWith(kt.prefix)).map((b, i) => <span key={i} className="rbKeytip" style={{ left: b.rect.left + b.rect.width / 2 - 9, top: b.rect.bottom - 8 }}>{b.label}</span>)}</>,
+          document.body
+        )}
 
         {tableDialogOpen && (
           <WordTableDialog onClose={() => setTableDialogOpen(false)} onConfirm={(r, c) => { setTableDialogOpen(false); fmt.insertTable(r, c); }}/>
