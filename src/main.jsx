@@ -74,6 +74,9 @@ import {
 } from "./lib/calendar";
 import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
+import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
+import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
+import { CITE_STYLES, citeInText, bibEntryText, orderSources } from "./lib/wordCitations";
 import {
   playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
@@ -16905,7 +16908,26 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
   const [activeDoc, setActiveDoc] = useState(null);
   const [openingId, setOpeningId] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef(null);
   const [query, setQuery] = useState("");
+
+  // Importar .docx/.odt/.rtf/.html/.md/.txt/.tex como um documento novo (lib/wordFormats.js).
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    try {
+      const { title, html } = await importWordFile(file);
+      const inserted = await add({ title, content: html, preview: stripHtml(html).trim().slice(0, 200), page_size: "a4", orientation: "retrato", margins: "normal" });
+      if (inserted) setActiveDoc(inserted);
+    } catch (err) {
+      alert("Não foi possível importar: " + (err?.message || err));
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const openDoc = async (doc) => {
     setOpeningId(doc.id);
@@ -16982,6 +17004,8 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
             <Search size={14}/>
             <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar documentos..."/>
           </div>
+          <button className="ghost" onClick={() => importInputRef.current?.click()} disabled={importing} title="Importar .docx, .odt, .rtf, .html, .md, .txt ou .tex"><Upload size={14}/> {importing ? "Importando..." : "Importar"}</button>
+          <input ref={importInputRef} type="file" accept={IMPORT_ACCEPT} hidden onChange={handleImport}/>
         </div>
       </div>
 
@@ -18568,11 +18592,22 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     const parts = s.split(/\s+/);
     return { last: parts.pop() || "", first: parts.join(" ") };
   };
-  const citeText = (s, style) => { const { last } = splitAuthor(s.author); return style === "apa" ? `(${last}, ${s.year || "s.d."})` : `(${last.toUpperCase()}, ${s.year || "s.d."})`; };
+  // Número da fonte nos estilos numerados (IEEE, GB/T…): ordem da primeira citação no documento.
+  const citationNumber = (id) => {
+    const order = [];
+    Array.from(bodyRef.current?.querySelectorAll(".word-citation") || []).forEach(c => { if (!order.includes(c.dataset.src)) order.push(c.dataset.src); });
+    const i = order.indexOf(id);
+    return i >= 0 ? i + 1 : order.length + 1;
+  };
+  const citeText = (s, style) => {
+    if (style !== "apa" && style !== "abnt") return citeInText(s, style, citationNumber(s.id));
+    const { last } = splitAuthor(s.author); return style === "apa" ? `(${last}, ${s.year || "s.d."})` : `(${last.toUpperCase()}, ${s.year || "s.d."})`;
+  };
   const insertCitation = (src, style) => {
     exec("insertHTML", `<span class="word-citation" data-src="${escHtml(src.id)}" contenteditable="false">${escHtml(citeText(src, style))}</span>&nbsp;`);
   };
-  const bibEntry = (s, style) => {
+  const bibEntry = (s, style, n = 1) => {
+    if (style !== "apa" && style !== "abnt") return escHtml(bibEntryText(s, style, n));
     const { last, first } = splitAuthor(s.author);
     const init = first.split(/\s+/).filter(Boolean).map(w => w[0].toUpperCase() + ".").join(" ");
     if (style === "apa") return `${escHtml(last)}${init ? ", " + escHtml(init) : ""} (${escHtml(s.year || "s.d.")}). <i>${escHtml(s.title)}</i>.${s.publisher ? " " + escHtml(s.publisher) + "." : ""}${s.url ? " " + escHtml(s.url) : ""}`;
@@ -18607,9 +18642,16 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     const citedIds = new Set(Array.from(el.querySelectorAll(".word-citation")).map(c => c.dataset.src));
     let list = all.filter(s => citedIds.has(s.id));
     if (!list.length) list = all;
-    list = list.slice().sort((a, b) => splitAuthor(a.author).last.localeCompare(splitAuthor(b.author).last));
-    const body = list.length ? list.map(s => `<p class="word-bib-entry">${bibEntry(s, st)}</p>`).join("") : '<p class="word-toc-empty">Nenhuma fonte cadastrada. Use Referências &gt; Gerenciar Fontes.</p>';
-    upsertBlock("word-bib", "bib", st === "apa" ? "Referências" : "Referências Bibliográficas", body, { style: st });
+    const legacy = st === "apa" || st === "abnt";
+    const citedOrder = [];
+    Array.from(el.querySelectorAll(".word-citation")).forEach(c => { if (!citedOrder.includes(c.dataset.src)) citedOrder.push(c.dataset.src); });
+    list = legacy
+      ? list.slice().sort((a, b) => splitAuthor(a.author).last.localeCompare(splitAuthor(b.author).last))
+      : orderSources(list, st, citedOrder);
+    // estilos numerados: renumera as citações já inseridas pela ordem da primeira citação
+    if (!legacy) Array.from(el.querySelectorAll(".word-citation")).forEach(c => { const src = all.find(x => x.id === c.dataset.src); if (src) c.textContent = citeText(src, st); });
+    const body = list.length ? list.map((s, i) => `<p class="word-bib-entry">${bibEntry(s, st, i + 1)}</p>`).join("") : '<p class="word-toc-empty">Nenhuma fonte cadastrada. Use Referências &gt; Gerenciar Fontes.</p>';
+    upsertBlock("word-bib", "bib", legacy ? (st === "apa" ? "Referências" : "Referências Bibliográficas") : (CITE_STYLES.find(x => x.key === st)?.bibTitle || "Referências"), body, { style: st });
   };
 
   // ---- índice remissivo ----
@@ -19737,8 +19779,37 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     restoreHtml(historyBaselineRef.current);
   };
 
+  // ---- AutoCorreção ao digitar (lib/wordAutocorrect.js, port do WordCraft): aspas inteligentes,
+  // listas automáticas ("* ", "1. "), travessões, maiúscula no início da frase, ordinais, links
+  // e linhas de borda. Os handlers leem sempre o estado mais recente via refs.
+  const [acPrefs, setAcPrefs] = useState(loadAutocorrectPrefs);
+  const acLive = useRef({});
+  acLive.current = { prefs: acPrefs, lang: docLanguage, tracking: trackChanges, before: commitHistoryCheckpoint, after: handleBodyInput };
+  const autocorrect = useRef(null);
+  if (!autocorrect.current) {
+    autocorrect.current = createAutocorrect({
+      getBody: () => bodyRef.current,
+      getPrefs: () => acLive.current.prefs,
+      getLang: () => acLive.current.lang,
+      isTracking: () => acLive.current.tracking,
+      beforeApply: () => acLive.current.before(),
+      afterApply: () => acLive.current.after(),
+    });
+  }
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return undefined;
+    const onBefore = (e) => autocorrect.current.onBeforeInput(e);
+    const onIn = (e) => autocorrect.current.onInput(e);
+    el.addEventListener("beforeinput", onBefore);
+    el.addEventListener("input", onIn);
+    return () => { el.removeEventListener("beforeinput", onBefore); el.removeEventListener("input", onIn); };
+  }, []);
+
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
+    autocorrect.current.onKeyDown(e);
+    if (e.defaultPrevented) return;
     if (mod && !e.altKey && e.key.toLowerCase() === "z") {
       e.preventDefault();
       if (e.shiftKey) redo(); else undo();
@@ -20876,6 +20947,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   };
   const fileMenuExport = (kind) => {
     if (kind === "docx") downloadWordDocx(currentDocForExport());
+    else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
   };
   const fileMenuPrint = () => { closeFileMenu(); setTimeout(() => window.print(), 50); };
@@ -21717,6 +21789,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 <div className="wordExportMenu" onClick={e => e.stopPropagation()}>
                   <button onClick={() => { setExportOpen(false); downloadWordDocx(currentDocForExport()); }}><FileType2 size={14}/> Word (.docx)</button>
                   <button onClick={() => { setExportOpen(false); downloadWordPdf(currentDocForExport()); }}><FileDown size={14}/> PDF</button>
+                  {Object.entries(EXPORT_FORMATS).map(([k, f]) => <button key={k} onClick={() => { setExportOpen(false); fileMenuExport(k); }}><FileType2 size={14}/> {f.label}</button>)}
                 </div>
               )}
             </div>
@@ -21774,6 +21847,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 <p className="wordBackstageHint">Baixa uma cópia deste documento no formato escolhido.</p>
                 <button className="wordBackstageBig" onClick={() => fileMenuExport("docx")}><FileType2 size={20}/> <div><b>Word (.docx)</b><span>Mantém formatação, tabelas e imagens.</span></div></button>
                 <button className="wordBackstageBig" onClick={() => fileMenuExport("pdf")}><FileDown size={20}/> <div><b>PDF</b><span>Pronto para leitura e impressão.</span></div></button>
+                {Object.entries(EXPORT_FORMATS).map(([k, f]) => (
+                  <button key={k} className="wordBackstageBig" onClick={() => fileMenuExport(k)}><FileType2 size={20}/> <div><b>{f.label}</b><span>{({ txt: "Só o texto, sem formatação.", md: "Títulos, listas, tabelas e links em Markdown.", html: "Página da web com a formatação do documento.", rtf: "Abre em qualquer editor de texto.", tex: "Código-fonte LaTeX.", odt: "Formato do LibreOffice/OpenOffice." })[k]}</span></div></button>
+                ))}
               </>) : (<>
                 <h3>Informações</h3>
                 <div className="wordBackstageInfoRow"><span>Título</span><b>{title.trim() || "Documento sem título"}</b></div>
@@ -22317,9 +22393,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                   <button onClick={() => { setSourcesList(fmt.loadSources()); openDlg("sources"); }}>+ Adicionar Nova Fonte…</button>
                 </>)}
                 <RbSm icon={Library} label="Gerenciar Fontes" tip="Gerenciar Fontes" desc="Abre a lista mestra de fontes bibliográficas, onde você adiciona ou remove autores e obras." onClick={() => { setSourcesList(fmt.loadSources()); openDlg("sources"); }}/>
-                {rbm("citestyle", (t) => <RbSm icon={BookType} label={`Estilo: ${citeStyle.toUpperCase()}`} chevron tip="Estilo" desc="Escolhe o estilo das citações e da bibliografia: ABNT ou APA." onClick={t}/>, <>
+                {rbm("citestyle", (t) => <RbSm icon={BookType} label={`Estilo: ${citeStyle === "abnt" || citeStyle === "apa" ? citeStyle.toUpperCase() : (CITE_STYLES.find(x => x.key === citeStyle)?.name || citeStyle)}`} chevron tip="Estilo" desc="Escolhe o estilo das citações e da bibliografia: ABNT, APA, MLA, Chicago, IEEE, Harvard, ISO 690, Turabian e outros." onClick={t}/>, <>
                   <button className={citeStyle === "abnt" ? "active" : ""} onClick={() => setCiteStyle("abnt")}>ABNT</button>
                   <button className={citeStyle === "apa" ? "active" : ""} onClick={() => setCiteStyle("apa")}>APA</button>
+                  {CITE_STYLES.filter(x => x.key !== "apa").map(x => <button key={x.key} className={citeStyle === x.key ? "active" : ""} onClick={() => setCiteStyle(x.key)}>{x.name}</button>)}
                 </>)}
               </div>
               {rbm("bib", (t) => <RbBig icon={BookText} label="Bibliografia" chevron tip="Bibliografia" desc="Insere a lista das fontes citadas no documento, no estilo escolhido." onClick={t}/>, <>
@@ -22428,6 +22505,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               <RbBig icon={SpellCheck} label="Ortografia" tip="Ortografia" desc="Liga ou desliga a verificação ortográfica do navegador (sublinhado vermelho nas palavras)." active={spellcheckOn} onClick={() => setSpellcheckOn(s => !s)}/>
               <div className="rbStack">
                 <RbSm icon={BookOpenText} label="Sinônimos" tip="Dicionário de Sinônimos" desc="Abre uma página de sinônimos para a palavra selecionada." onClick={openThesaurus}/>
+                <RbSm icon={SlidersHorizontal} label="Opções de AutoCorreção" tip="Opções de AutoCorreção" desc="Liga ou desliga aspas inteligentes, listas automáticas, travessões, maiúsculas no início da frase, ordinais e links automáticos." onClick={() => openDlg("autocorrect", { ...acPrefs })}/>
                 <RbSm icon={FileDigit} label="Contagem de Palavras" tip="Contagem de Palavras" desc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}/>
               </div>
             </RbGroup>
@@ -23119,6 +23197,32 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </WordModal>
         )}
 
+        {dlg === "autocorrect" && (
+          <WordModal title="Opções de AutoCorreção" onClose={closeDlg} actions={<>
+            <button className="ghost" onClick={() => setDlgForm({ ...AC_DEFAULTS, entries: dlgForm.entries || [] })}>Restaurar padrão</button>
+            <button className="ghost" onClick={closeDlg}>Cancelar</button>
+            <button className="primary" onClick={() => { const next = { ...acPrefs, ...dlgForm }; setAcPrefs(next); saveAutocorrectPrefs(next); closeDlg(); }}>OK</button>
+          </>}>
+            {[
+              ["enabled", "Ativar AutoCorreção e formatação automática"],
+              ["replaceText", "Substituir texto ao digitar ((c) → ©, ... → …, --> → →)"],
+              ["twoInitialCaps", "Corrigir DUas MAiúsculas INiciais"],
+              ["capSentences", "Primeira letra de cada frase em maiúscula"],
+              ["capCells", "Primeira letra de células de tabela em maiúscula"],
+              ["capDays", "Nomes de dias em inglês em maiúscula"],
+              ["capsLock", "Corrigir uso acidental de cAPS LOCK"],
+              ["smartQuotes", "Aspas retas por aspas inteligentes"],
+              ["fractions", "Frações (1/2) por caracteres de fração (½)"],
+              ["ordinals", "Ordinais em inglês (1st) com sobrescrito"],
+              ["dashes", "Hífens (--) por travessões"],
+              ["links", "Endereços da Internet por hiperlinks"],
+              ["bullets", "Listas com marcadores automáticas (* , - , > )"],
+              ["numbering", "Listas numeradas automáticas (1. , a) , i. )"],
+              ["borderLines", "Linhas de borda (--- , === , ***) ao pressionar Enter"],
+            ].map(([k, label]) => <label key={k}>{label} <input type="checkbox" checked={dlgForm[k] !== false} onChange={e => setF(k, e.target.checked)}/></label>)}
+          </WordModal>
+        )}
+
         {dlg === "sources" && (
           <WordModal title="Gerenciador de Fontes" onClose={closeDlg} wide actions={<>
             <button className="ghost" onClick={closeDlg}>Fechar</button>
@@ -23137,9 +23241,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             <label>Ano <input value={dlgForm.year || ""} onChange={e => setF("year", e.target.value)}/></label>
             <label>Editora <input style={{ width: 220 }} value={dlgForm.publisher || ""} onChange={e => setF("publisher", e.target.value)}/></label>
             <label>URL <input style={{ width: 220 }} value={dlgForm.url || ""} onChange={e => setF("url", e.target.value)}/></label>
+            <label>Cidade <input value={dlgForm.city || ""} onChange={e => setF("city", e.target.value)}/></label>
+            <label>Periódico <input style={{ width: 220 }} placeholder="só para artigos" value={dlgForm.journal || ""} onChange={e => setF("journal", e.target.value)}/></label>
+            <label>Volume <input value={dlgForm.volume || ""} onChange={e => setF("volume", e.target.value)}/></label>
+            <label>Páginas <input placeholder="ex.: 12-20" value={dlgForm.pages || ""} onChange={e => setF("pages", e.target.value)}/></label>
             <button className="primary" onClick={() => {
               if (!(dlgForm.author || "").trim() || !(dlgForm.title || "").trim()) { alert("Informe ao menos autor e título."); return; }
-              const l = [...sourcesList, { id: "src" + Date.now().toString(36), author: dlgForm.author.trim(), title: dlgForm.title.trim(), year: (dlgForm.year || "").trim(), publisher: (dlgForm.publisher || "").trim(), url: (dlgForm.url || "").trim() }];
+              const l = [...sourcesList, { id: "src" + Date.now().toString(36), author: dlgForm.author.trim(), title: dlgForm.title.trim(), year: (dlgForm.year || "").trim(), publisher: (dlgForm.publisher || "").trim(), url: (dlgForm.url || "").trim(), city: (dlgForm.city || "").trim(), journal: (dlgForm.journal || "").trim(), volume: (dlgForm.volume || "").trim(), pages: (dlgForm.pages || "").trim() }];
               setSourcesList(l);
               fmt.saveSources(l);
               setDlgForm({});

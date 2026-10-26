@@ -13,10 +13,10 @@ import {
 // por servidor nenhum pra ser gerado, então não gasta egress além do próprio
 // download final.
 
-const safeFileName = (title) =>
+export const safeFileName = (title) =>
   (title || "documento").trim().replace(/[^\p{L}\p{N}\-_ ]+/gu, "").replace(/\s+/g, "_").slice(0, 60) || "documento";
 
-function downloadBlob(blob, filename) {
+export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -66,7 +66,7 @@ function parseAlign(el) {
 
 // Percorre um nó (e filhos) acumulando formatação herdada, devolvendo uma
 // lista plana de "runs" de texto já com bold/italic/underline/etc resolvidos.
-function collectRuns(node, ctx) {
+export function collectRuns(node, ctx) {
   let runs = [];
   if (node.nodeType === Node.TEXT_NODE) {
     if (node.textContent) runs.push({ text: node.textContent, ...ctx });
@@ -76,7 +76,7 @@ function collectRuns(node, ctx) {
   if (node.classList?.contains("word-del")) return runs; // trecho marcado como excluído (Controlar Alterações) — não sai na exportação
   if (node.classList?.contains("word-pagenum")) { runs.push({ pageField: node.dataset.fmt || "label", ...ctx }); return runs; } // campo de número de página — vira campo dinâmico de verdade na exportação
   if (node.tagName === "BR") { runs.push({ text: "\n", ...ctx }); return runs; }
-  if (node.tagName === "IMG") { runs.push({ image: node.getAttribute("src") }); return runs; }
+  if (node.tagName === "IMG") { runs.push({ image: node.getAttribute("src"), alt: node.getAttribute("alt") || "" }); return runs; }
 
   const next = { ...ctx };
   const tag = node.tagName;
@@ -86,6 +86,8 @@ function collectRuns(node, ctx) {
   if (tag === "S" || tag === "STRIKE" || tag === "DEL") next.strike = true;
   if (tag === "SUP") next.sup = true;
   if (tag === "SUB") next.sub = true;
+  if (tag === "A" && node.getAttribute("href")) next.link = node.getAttribute("href"); // usado pelos exportadores de wordFormats.js
+  if (tag === "CODE" || tag === "TT" || tag === "KBD" || tag === "SAMP") next.code = true;
   const style = node.style;
   if (style) {
     if (style.color) next.color = rgbToHex(style.color) || next.color;
