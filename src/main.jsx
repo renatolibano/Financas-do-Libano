@@ -47,6 +47,7 @@ import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
+import { pdfFileToNote } from "./lib/pdfToNote";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
 import { jsPDF } from "jspdf";
@@ -3303,6 +3304,55 @@ function insertSanitizedPaste(e) {
   }
 }
 
+// Normaliza as listas do editor de notas:
+// - remove o atributo "start" (o Chrome o coloca ao dividir uma lista numerada,
+//   o que fazia a numeração continuar em 4, 5... depois de um texto no meio);
+// - tira blocos soltos (<div>/<p>) de dentro de <ol>/<ul>, dividindo a lista
+//   em duas, pra que a segunda recomece do 1.
+function normalizeNoteLists(root) {
+  if (!root || !root.querySelector("ol, ul")) return false;
+  let changed = false;
+  const sel = window.getSelection();
+  const saved = sel && sel.rangeCount && sel.isCollapsed && root.contains(sel.anchorNode)
+    ? { node: sel.anchorNode, offset: sel.anchorOffset } : null;
+
+  root.querySelectorAll("ol[start]").forEach((ol) => { ol.removeAttribute("start"); changed = true; });
+  root.querySelectorAll("li[value]").forEach((li) => { li.removeAttribute("value"); changed = true; });
+
+  const STRAY = /^(DIV|P|H[1-6]|BLOCKQUOTE)$/;
+  const findBad = () => {
+    for (const list of root.querySelectorAll("ol, ul")) {
+      const stray = Array.from(list.children).find((c) => STRAY.test(c.tagName));
+      if (stray) return { list, stray };
+    }
+    return null;
+  };
+  let bad, guard = 0, moved = false;
+  while ((bad = findBad()) && guard++ < 50) {
+    const { list, stray } = bad;
+    const nodes = Array.from(list.childNodes);
+    const after = nodes.slice(nodes.indexOf(stray) + 1);
+    list.after(stray);
+    if (after.some((n) => n.nodeType === 1)) {
+      const tail = list.cloneNode(false);
+      after.forEach((n) => tail.appendChild(n));
+      stray.after(tail);
+    }
+    if (!list.children.length) list.remove();
+    changed = moved = true;
+  }
+
+  if (moved && saved && saved.node.isConnected) {
+    const max = saved.node.nodeType === 3 ? saved.node.length : saved.node.childNodes.length;
+    const r = document.createRange();
+    r.setStart(saved.node, Math.min(saved.offset, max));
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+  return changed;
+}
+
 function useNoteFormatting(bodyRef, onChange) {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
@@ -3393,7 +3443,31 @@ function useNoteFormatting(bodyRef, onChange) {
 
   // Ao apertar Enter dentro de um item de marcação, cria automaticamente o próximo
   // (mesmo comportamento das listas com bolinhas). Enter num item vazio sai da lista.
+  // Digitar "1." + espaço no começo de uma linha vira lista numerada.
+  const tryAutoNumberedList = (e) => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+    const node = sel.anchorNode;
+    const offset = sel.anchorOffset;
+    if (!node || node.nodeType !== 3 || !bodyRef.current?.contains(node)) return false;
+    if (node.data.slice(0, offset) !== "1.") return false;
+    if (node.parentElement?.closest("li, .checklist-item, pre")) return false;
+    const prev = node.previousSibling;
+    if (prev && !(prev.nodeName === "BR" || /^(DIV|P|UL|OL|H[1-6]|BLOCKQUOTE|PRE)$/.test(prev.nodeName))) return false;
+    e.preventDefault();
+    const r = document.createRange();
+    r.setStart(node, 0);
+    r.setEnd(node, offset);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    document.execCommand("delete");
+    document.execCommand("insertOrderedList");
+    onChange();
+    return true;
+  };
+
   const handleBodyKeyDown = (e) => {
+    if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && tryAutoNumberedList(e)) return;
     if (e.key !== "Enter" || e.shiftKey) return;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
@@ -16562,6 +16636,8 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
   // enxerga título/tags/preview, ver visibleNotes).
   const [searchResults, setSearchResults] = useState(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
+  const [importingPdf, setImportingPdf] = useState(false);
+  const pdfInputRef = useRef(null);
   const purgedRef = useRef(false);
   const searchTimer = useRef(null);
   const searchToken = useRef(0);
@@ -16634,6 +16710,29 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     } finally {
       setCreating(false);
     }
+  };
+
+  // Converte PDFs em notas (texto extraído localmente, sem egress extra).
+  const handleImportPdf = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length || importingPdf) return;
+    setImportingPdf(true);
+    const failed = [];
+    try {
+      for (const file of files) {
+        try {
+          const { title, content } = await pdfFileToNote(file);
+          await add({ title, content, preview: stripHtml(content).trim().slice(0, 200), tags: [] });
+        } catch (err) {
+          console.error(err);
+          failed.push(`${file.name}: ${err.message || err}`);
+        }
+      }
+    } finally {
+      setImportingPdf(false);
+    }
+    if (failed.length) alert("Não foi possível importar:\n" + failed.join("\n"));
   };
 
   const handleTrash = async (note) => {
@@ -16739,6 +16838,14 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
             <Search size={14}/>
             <input value={query} onChange={e=>setQuery(e.target.value)} placeholder={view==="lixeira"?"Buscar na lixeira...":"Buscar em título, texto ou tags..."}/>
           </div>
+          {view==="notas" && (
+            <>
+              <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={handleImportPdf}/>
+              <button className="ghost" disabled={importingPdf} onClick={() => pdfInputRef.current?.click()}>
+                <Upload size={15}/> {importingPdf ? "Importando..." : "Importar PDF"}
+              </button>
+            </>
+          )}
           {view==="notas" && activeNotes.length > 0 && (
             <button className="ghost" disabled={downloadingAll} onClick={handleDownloadAll}>
               <Download size={15}/> {downloadingAll ? "Baixando..." : "Baixar todas em PDF"}
@@ -16836,13 +16943,20 @@ function NoteEditor({ note, onClose, onSave }) {
   const [title, setTitle] = useState(note.title);
   const saveTimer = useRef(null);
   const bodyRef = useRef(null);
+  // Modo leitura (padrão para notas que já têm texto) x modo edição.
+  const [readOnly, setReadOnly] = useState(() => !!stripHtml(note.content || "").trim());
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
     setTitle(note.title);
-    if (bodyRef.current) bodyRef.current.innerHTML = note.content || "";
+    if (bodyRef.current) {
+      bodyRef.current.innerHTML = note.content || "";
+      normalizeNoteLists(bodyRef.current);
+    }
   }, [note.id]);
 
   const scheduleSave = (patch) => {
+    dirtyRef.current = true;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => onSave(patch), 600);
   };
@@ -16854,6 +16968,7 @@ function NoteEditor({ note, onClose, onSave }) {
   };
 
   const handleBodyInput = () => {
+    normalizeNoteLists(bodyRef.current);
     scheduleSave({ content: bodyRef.current?.innerHTML || "" });
   };
 
@@ -16861,9 +16976,23 @@ function NoteEditor({ note, onClose, onSave }) {
 
   const handleClose = () => {
     clearTimeout(saveTimer.current);
-    onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
+    // Em modo leitura sem alterações não grava nada (evita mexer em "editado há...").
+    if (!readOnly || dirtyRef.current) onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
+  };
+
+  const toggleReadOnly = () => {
+    fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover();
+    window.getSelection()?.removeAllRanges();
+    setReadOnly(r => !r);
+    if (readOnly) setTimeout(() => bodyRef.current?.focus(), 0);
+  };
+
+  // Em leitura, o clique no quadradinho da checklist não marca/desmarca; links continuam abrindo.
+  const handleBodyClick = (e) => {
+    if (readOnly && e.target.closest?.(".check-box")) return;
+    fmt.handleBodyClick(e);
   };
 
   const modalRef = useRef(null);
@@ -16873,27 +17002,27 @@ function NoteEditor({ note, onClose, onSave }) {
     <div className="readerBack">
       <div ref={modalRef} className={"readerModal noteModal"+(fullscreen?" readerModalFull":"")}>
         <div className="readerHead">
-          <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Título da nota" autoFocus/>
+          <input className="noteTitleInput" value={title} onChange={handleTitleChange} placeholder="Título da nota" readOnly={readOnly} autoFocus={!readOnly}/>
+          <button title={readOnly ? "Modo edição" : "Modo leitura"} onClick={toggleReadOnly}>{readOnly ? <Pencil size={16}/> : <Eye size={16}/>}</button>
           <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           <button onClick={handleClose}><X/></button>
         </div>
         <div className="noteToolbar" onMouseDown={fmt.keepFocus}>
-          <NoteFormatButtons fmt={fmt}/>
-          <span className="noteToolDivider"/>
+          {!readOnly && <><NoteFormatButtons fmt={fmt}/><span className="noteToolDivider"/></>}
           <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
         </div>
         <div className="noteEditorBody" onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
           <div
             ref={bodyRef}
             className="noteTextarea noteRichBody"
-            contentEditable
+            contentEditable={!readOnly}
             suppressContentEditableWarning
             onInput={handleBodyInput}
-            onClick={fmt.handleBodyClick}
+            onClick={handleBodyClick}
             onKeyDown={fmt.handleBodyKeyDown}
             onPaste={fmt.handlePaste}
-            onMouseUp={fmt.updateLinkBar}
-            onKeyUp={fmt.updateLinkBar}
+            onMouseUp={readOnly ? undefined : fmt.updateLinkBar}
+            onKeyUp={readOnly ? undefined : fmt.updateLinkBar}
             data-placeholder="Escreva o que quiser..."
           />
           <NoteLinkFloatingUI fmt={fmt}/>

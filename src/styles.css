@@ -1223,6 +1223,7 @@ h1{font-size:23px}
 .noteTagChip button:hover{background:var(--bg-hover-2)}
 .noteTagInput{flex:1;min-width:100px;background:transparent;border:none;outline:none;color:var(--text-1);font-size:12px;padding:3px 2px}
 .noteRichBody{outline:none;overflow-wrap:break-word}
+.noteRichBody[contenteditable="false"] .checklist-item .check-box{cursor:default}
 .noteRichBody:empty:before{content:attr(data-placeholder);color:var(--text-3)}
 .noteRichBody ul{padding-left:22px;margin:8px 0}
 .noteRichBody ol{padding-left:22px;margin:8px 0}
