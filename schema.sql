@@ -95,6 +95,8 @@ alter table books add constraint books_status_check check (status in ('lido','qu
 -- pastas/coleções na estante de livros — mesmo padrão já usado pra
 -- organizar os PDFs de estudo.
 alter table books add column if not exists favorite_excerpts jsonb not null default '[]';
+-- Páginas já contadas como lidas no ciclo atual (null = livro antigo, sem registro)
+alter table books add column if not exists read_pages jsonb;
 create table if not exists book_groups (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,

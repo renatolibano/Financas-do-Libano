@@ -3738,6 +3738,15 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [reflowParas, setReflowParas] = useState(null); // null = carregando
   const reflowRef = useRef(null);
   const reflowCache = useRef(new Map());
+  // Páginas já contadas como lidas neste ciclo de leitura (cada página conta
+  // uma vez). Livros antigos (read_pages nulo) começam com 1..página atual.
+  const readPagesRef = useRef(new Set(book.read_pages ?? Array.from({ length: Math.max(0, (book.current_page || 1)) }, (_, n) => n + 1)));
+  const newReadRef = useRef(0);
+  const takeNewRead = () => {
+    const added = newReadRef.current;
+    newReadRef.current = 0;
+    return { added, pages: [...readPagesRef.current].sort((a, b) => a - b) };
+  };
   const [textTick, setTextTick] = useState(0); // +1 a cada camada de texto renderizada
   const [editingExcerpt, setEditingExcerpt] = useState(null); // {id, text}
   const setRfKey = (k, v) => setRf(p => ({ ...p, [k]: v }));
@@ -3962,7 +3971,8 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const goTo = (n) => {
     const clamped = Math.max(1, Math.min(numPages || 1, n));
     setPageNum(clamped);
-    onProgress(book.id, clamped);
+    if (!readPagesRef.current.has(clamped)) { readPagesRef.current.add(clamped); newReadRef.current++; }
+    onProgress(book.id, clamped, takeNewRead);
   };
 
   const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
@@ -4690,21 +4700,22 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
     }
   };
 
-  const onProgress = (bookId, page) => {
+  const onProgress = (bookId, page, takeNewRead) => {
     clearTimeout(progressTimer.current);
     progressTimer.current = setTimeout(() => {
       const b = data.find(x => x.id === bookId);
+      const { added, pages } = takeNewRead ? takeNewRead() : { added: 0, pages: null };
       // Um livro que ainda estava em "quero ler" e já passou da primeira
       // página vira "lendo" sozinho — assim o Dashboard reflete a leitura
       // real sem precisar de um clique extra no menu.
       const patch = { current_page: page };
+      if (added > 0) patch.read_pages = pages;
       if (b?.status === "quero_ler" && page > 1) patch.status = "lendo";
       update(bookId, patch);
       syncLinkedGoalsProgress(studyGoals, "livro", bookId, b?.title || "", page);
-      // Só soma no resumo do mês o avanço pra frente — voltar página não
-      // "desconta", mas também não conta de novo.
-      const delta = page - (b?.current_page || page);
-      if (delta > 0) readingStats?.bump({ pages: delta });
+      // Cada página conta uma vez por ciclo de leitura: voltar ou pular pela
+      // busca/sumário não soma de novo (o ciclo reinicia em "Ler de novo").
+      if (added > 0) readingStats?.bump({ pages: added });
     }, 400);
   };
 
@@ -4910,9 +4921,9 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
             opening={openingBookId===book.id}
             onToggleMenu={()=>setOpenMenuId(id=>id===book.id?null:book.id)}
             onOpen={()=>handleOpen(book)}
-            onMarkReading={()=>{setOpenMenuId(null); update(book.id, {status:"lendo"});}}
+            onMarkReading={()=>{setOpenMenuId(null); update(book.id, book.status==="lido" ? {status:"lendo", read_pages: []} : {status:"lendo"});}}
             onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"}); if(status!=="lido") readingStats?.bump({books_completed:1});}}
-            onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, {status:"quero_ler"});}}
+            onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, book.status==="lido" ? {status:"quero_ler", read_pages: []} : {status:"quero_ler"});}}
             onMoveToGroup={(groupId)=>handleMoveToGroup(book, groupId)}
             onDelete={()=>handleDelete(book)}
             onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
