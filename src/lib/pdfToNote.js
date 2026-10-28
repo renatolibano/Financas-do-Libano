@@ -50,7 +50,8 @@ export function pageToParagraphs(items) {
 // no mesmo formato das notas (HTML de contentEditable: um <div> por parágrafo).
 export async function pdfFileToNote(file) {
   const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl }).promise;
+  const task = pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl });
+  const doc = await task.promise;
   const blocks = [];
   try {
     for (let p = 1; p <= doc.numPages; p++) {
@@ -64,7 +65,7 @@ export async function pdfFileToNote(file) {
       page.cleanup();
     }
   } finally {
-    doc.destroy();
+    task.destroy();
   }
   if (!blocks.length) throw new Error("Este PDF não tem texto selecionável (parece ser escaneado).");
   return {
