@@ -4,7 +4,7 @@ const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, 
 
 // Agrupa os itens de texto de uma página em linhas (mesma posição Y) e as
 // linhas em parágrafos (quando o espaçamento vertical é maior que o normal).
-function pageToParagraphs(items) {
+export function pageToParagraphs(items) {
   const rows = [];
   items.forEach((it) => {
     if (typeof it.str !== "string" || !it.transform) return;

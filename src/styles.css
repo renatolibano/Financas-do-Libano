@@ -629,7 +629,8 @@ h1{font-size:23px}
 /* Camada de texto selecionável do pdf.js, alinhada exatamente sobre o canvas */
 .textLayer{position:absolute;inset:0;overflow:clip;opacity:1;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;z-index:2}
 .textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%}
-.textLayer > :not(.markedContent),.textLayer .markedContent span:not(.markedContent){--font-height:0;font-size:calc(var(--total-scale-factor,1) * var(--font-height))}
+.textLayer{--min-font-size:1;--text-scale-factor:calc(var(--total-scale-factor,1) * var(--min-font-size));--min-font-size-inv:calc(1 / var(--min-font-size))}
+.textLayer > :not(.markedContent),.textLayer .markedContent span:not(.markedContent){--font-height:0;font-size:calc(var(--text-scale-factor) * var(--font-height));--scale-x:1;--rotate:0deg;transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv))}
 .textLayer .markedContent{display:contents}
 .textLayer span[role="img"]{user-select:none;cursor:default}
 .textLayer ::selection{background:color-mix(in srgb, var(--accent), transparent 70%)}
@@ -2498,3 +2499,26 @@ h1{font-size:23px}
 .wordEqInlineBar button:last-child{margin-left:auto}
 .wordRichBody .word-equation.word-math[data-eq=""]::after{content:"⬚";opacity:.45;padding:0 .3em}
 .wordRichBody .word-equation.word-math:hover{outline:1px solid #9bb2f0;border-radius:3px}
+
+.reflowPage{width:100%;padding:28px 24px 48px;border-radius:8px;hyphens:auto;-webkit-hyphens:auto;overflow-wrap:break-word;user-select:text}
+.reflowPage p{margin:0 0 .8em}
+.reflowFont-serif{font-family:Georgia,"Times New Roman",serif}
+.reflowFont-sans{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.reflowFont-mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.reflowTheme-light{background:#fff;color:#1a1a1a}
+.reflowTheme-sepia{background:#f4ecd8;color:#5b4636}
+.reflowTheme-dark{background:#14161a;color:#c9ccd1}
+.reflowPop{position:absolute;top:calc(100% + 8px);left:0;z-index:90;width:290px;display:flex;flex-direction:column;gap:10px;padding:12px;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 30px #000a}
+.reflowRow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.reflowRow>span{flex:0 0 100%;font-size:11px;font-weight:700;opacity:.8}
+.reflowRow input[type=range]{flex:1}
+.reflowRow button{padding:6px 10px;border-radius:7px;font-size:12px;font-weight:700}
+.reflowRow button.active{background:var(--bg-hover-2)}
+
+::highlight(book-excerpt){background-color:rgba(250,204,21,.38)}
+.pdfExcerptEditing{flex-direction:column;gap:6px;padding:9px 10px;border-radius:9px;background:var(--bg-hover-2)}
+.pdfExcerptEditing b{font-size:12px;color:var(--accent-2)}
+.pdfExcerptEditing textarea{width:100%;resize:vertical;font:inherit;font-size:12.5px;line-height:1.45;padding:8px;border-radius:8px}
+.pdfExcerptEditing small{font-size:11px;color:var(--text-2)}
+.pdfExcerptEditActions{display:flex;gap:6px}
+.pdfExcerptEditActions button{display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:7px;font-size:12px;font-weight:700}

@@ -47,7 +47,8 @@ import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
-import { pdfFileToNote } from "./lib/pdfToNote";
+import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
+import { findExcerptRanges } from "./lib/excerptHighlight";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
 import { jsPDF } from "jspdf";
@@ -3729,6 +3730,18 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [outline, setOutline] = useState(null); // sumário/índice do PDF (null = ainda não carregado, [] = sem sumário)
   const textLayerRef = useRef(null);
 
+  // --- Modo leitura (estilo Kindle): reflow do texto da página com fonte,
+  // espaçamento, margem e tema ajustáveis. Preferências ficam no aparelho.
+  const [reflow, setReflow] = usePersistentState("bookReflowOn", false);
+  const [rf, setRf] = usePersistentState("bookReflowPrefs", { size: 20, lh: 1.7, width: 640, font: "serif", align: "justify", theme: "sepia" });
+  const [rfOpen, setRfOpen] = useState(false);
+  const [reflowParas, setReflowParas] = useState(null); // null = carregando
+  const reflowRef = useRef(null);
+  const reflowCache = useRef(new Map());
+  const [textTick, setTextTick] = useState(0); // +1 a cada camada de texto renderizada
+  const [editingExcerpt, setEditingExcerpt] = useState(null); // {id, text}
+  const setRfKey = (k, v) => setRf(p => ({ ...p, [k]: v }));
+
   const [panel, setPanel] = useState(null); // null | "notas" | "busca" | "marcadores" | "sumario" | "audios" | "prints"
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
@@ -3852,7 +3865,28 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   }, [book.file_path]);
 
   useEffect(() => {
-    if (!pdf) return;
+    if (!pdf || !reflow) return;
+    let active = true;
+    const cached = reflowCache.current.get(pageNum);
+    if (cached) { setReflowParas(cached); } else {
+      setReflowParas(null);
+      (async () => {
+        try {
+          const page = await pdf.getPage(pageNum);
+          const tc = await page.getTextContent();
+          // junta palavras hifenizadas na quebra de linha ("harmo- niosamente")
+          const paras = pageToParagraphs(tc.items).map(t => t.replace(/(\p{L})-\s(\p{Ll})/gu, "$1$2"));
+          reflowCache.current.set(pageNum, paras);
+          if (active) setReflowParas(paras);
+        } catch (e) { if (active) setReflowParas([]); }
+      })();
+    }
+    if (containerRef.current) containerRef.current.scrollTop = 0;
+    return () => { active = false; };
+  }, [pdf, pageNum, reflow]);
+
+  useEffect(() => {
+    if (!pdf || reflow) return;
     let active = true;
     (async () => {
       const page = await pdf.getPage(pageNum);
@@ -3905,12 +3939,25 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
           const textContent = await page.getTextContent();
           if (!active) return;
           await new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport }).render();
+          if (active) setTextTick(t => t + 1);
         } catch (e) { /* página sem texto extraível (ex.: PDF escaneado) */ }
       }
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, pageNum, fitWidth, zoom]);
+  }, [pdf, pageNum, fitWidth, zoom, reflow]);
+
+  // Citações salvas aparecem marcadas na página (CSS Custom Highlight API,
+  // sem alterar o DOM do PDF).
+  useEffect(() => {
+    if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight === "undefined") return;
+    const root = reflow ? reflowRef.current : textLayerRef.current;
+    const texts = favoriteExcerpts.filter(h => h.page === pageNum).map(h => h.text);
+    const ranges = findExcerptRanges(root, texts);
+    if (ranges.length) CSS.highlights.set("book-excerpt", new Highlight(...ranges));
+    else CSS.highlights.delete("book-excerpt");
+    return () => { CSS.highlights.delete("book-excerpt"); };
+  }, [favoriteExcerpts, pageNum, reflow, reflowParas, textTick]);
 
   const goTo = (n) => {
     const clamped = Math.max(1, Math.min(numPages || 1, n));
@@ -4058,6 +4105,16 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     if (!rect || (rect.width === 0 && rect.height === 0)) { setSelection(null); return; }
     setSelection({ text: sel.toString().trim(), top: rect.top, left: rect.left + rect.width / 2 });
   };
+  const handleReflowSelect = () => {
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) { setSelection(null); return; }
+      if (!reflowRef.current || !reflowRef.current.contains(sel.anchorNode)) { setSelection(null); return; }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      if (!rect || (rect.width === 0 && rect.height === 0)) { setSelection(null); return; }
+      setSelection({ text: sel.toString().trim(), top: rect.top, left: rect.left + rect.width / 2 });
+    }, 0);
+  };
   const clearSelection = () => { window.getSelection()?.removeAllRanges(); setSelection(null); };
   const addFavoriteExcerpt = () => {
     const text = selection?.text || window.getSelection()?.toString().trim();
@@ -4066,6 +4123,22 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     const next = [...favoriteExcerpts, entry];
     setFavoriteExcerpts(next);
     onFavoriteExcerptsChange(book.id, next);
+    clearSelection();
+  };
+  const saveEditedExcerpt = () => {
+    const text = editingExcerpt?.text.trim();
+    if (!text) return;
+    const next = favoriteExcerpts.map(h => h.id === editingExcerpt.id ? { ...h, text, page: editingExcerpt.page ?? h.page } : h);
+    setFavoriteExcerpts(next);
+    onFavoriteExcerptsChange(book.id, next);
+    setEditingExcerpt(null);
+  };
+  const appendToEditing = (replace) => {
+    const t = selection?.text;
+    if (!t) return;
+    setEditingExcerpt(x => x && (replace
+      ? { ...x, text: t, page: pageNum }
+      : { ...x, text: (x.text.trim() + " " + t).trim() }));
     clearSelection();
   };
   const removeFavoriteExcerpt = (id) => {
@@ -4280,7 +4353,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
         <div className="pdfToolbar">
           <div className="pdfToolbarGroup">
-            <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} onClick={()=>{ toggleHighlightMode(); setHlColorOpen(false); }}>
+            <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} disabled={reflow} onClick={()=>{ toggleHighlightMode(); setHlColorOpen(false); }}>
               <Highlighter size={16}/> <span>Marca-texto</span>
             </button>
             <div className="emojiWrap">
@@ -4305,6 +4378,45 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             )}
           </div>
           <div className="pdfToolbarGroup">
+            <button title={reflow?"Voltar ao PDF original":"Modo leitura (texto ajustável)"} className={reflow?"active":""} onClick={()=>{ setReflow(r=>!r); setRfOpen(false); setHighlightMode(false); setSelection(null); }}>
+              <BookOpen size={16}/> <span>Leitura</span>
+            </button>
+            {reflow && (
+              <div className="emojiWrap">
+                <button title="Aparência do texto" className={rfOpen?"active":""} onClick={()=>setRfOpen(o=>!o)}><Type size={16}/> <span>Aa</span></button>
+                {rfOpen && (
+                  <div className="reflowPop">
+                    <div className="reflowRow"><span>Tamanho</span>
+                      <button onClick={()=>setRfKey("size", Math.max(12, rf.size-1))}>A−</button>
+                      <b>{rf.size}</b>
+                      <button onClick={()=>setRfKey("size", Math.min(40, rf.size+1))}>A+</button>
+                    </div>
+                    <div className="reflowRow"><span>Espaço entre linhas</span>
+                      <input type="range" min="1.2" max="2.6" step="0.1" value={rf.lh} onChange={e=>setRfKey("lh", +e.target.value)}/>
+                    </div>
+                    <div className="reflowRow"><span>Margens</span>
+                      <input type="range" min="320" max="960" step="20" value={1280-rf.width} onChange={e=>setRfKey("width", 1280-(+e.target.value))}/>
+                    </div>
+                    <div className="reflowRow"><span>Fonte</span>
+                      {[["serif","Serifa"],["sans","Sem serifa"],["mono","Mono"]].map(([k,l])=>(
+                        <button key={k} className={rf.font===k?"active":""} onClick={()=>setRfKey("font", k)}>{l}</button>
+                      ))}
+                    </div>
+                    <div className="reflowRow"><span>Alinhamento</span>
+                      <button className={rf.align==="left"?"active":""} onClick={()=>setRfKey("align","left")}><AlignLeft size={14}/></button>
+                      <button className={rf.align==="justify"?"active":""} onClick={()=>setRfKey("align","justify")}><AlignJustify size={14}/></button>
+                    </div>
+                    <div className="reflowRow"><span>Tema</span>
+                      {[["light","Claro"],["sepia","Sépia"],["dark","Escuro"]].map(([k,l])=>(
+                        <button key={k} className={rf.theme===k?"active":""} onClick={()=>setRfKey("theme", k)}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="pdfToolbarGroup" style={reflow?{display:"none"}:undefined}>
             <button title="Diminuir zoom" onClick={zoomOut}><ZoomOut size={16}/></button>
             <button title="Ajustar à largura da tela" className={fitWidth?"active":""} onClick={resetZoom}>{Math.round(zoom*100)}%</button>
             <button title="Aumentar zoom" onClick={zoomIn}><ZoomIn size={16}/></button>
@@ -4335,8 +4447,17 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
           <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
+            {!loading && !err && reflow && (
+              <div ref={reflowRef} className={`reflowPage reflowFont-${rf.font} reflowTheme-${rf.theme}`}
+                style={{maxWidth: rf.width, fontSize: rf.size, lineHeight: rf.lh, textAlign: rf.align}}
+                onMouseUp={handleReflowSelect} onTouchEnd={handleReflowSelect}>
+                {reflowParas === null && <p>Carregando texto...</p>}
+                {reflowParas && reflowParas.length === 0 && <p>Esta página não tem texto selecionável (PDF escaneado?). Volte ao PDF original.</p>}
+                {reflowParas && reflowParas.map((t, i) => <p key={i}>{t}</p>)}
+              </div>
+            )}
             {!loading && !err && (
-              <div ref={pageWrapRef} className="pdfPageWrap" onPointerMove={handleImgPointerMove} onPointerUp={handleImgPointerUp} onPointerLeave={handleImgPointerUp}>
+              <div ref={pageWrapRef} className="pdfPageWrap" style={reflow?{display:"none"}:undefined} onPointerMove={handleImgPointerMove} onPointerUp={handleImgPointerUp} onPointerLeave={handleImgPointerUp}>
                 <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode) goTo(pageNum+1); }}/>
                 <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
                 {basePageSize.width>0 && (
@@ -4378,7 +4499,12 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             )}
             {selection && (
               <div className="pdfSelectionToolbar" style={{top:selection.top, left:selection.left}} onMouseDown={e=>e.preventDefault()}>
-                <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar citação</button>
+                {editingExcerpt ? (<>
+                  <button onClick={()=>appendToEditing(false)}><Plus size={13}/> Anexar à citação</button>
+                  <button onClick={()=>appendToEditing(true)}><Pencil size={13}/> Substituir texto</button>
+                </>) : (
+                  <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar citação</button>
+                )}
               </div>
             )}
           </div>
@@ -4425,12 +4551,23 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                   <small><Star size={12}/> Citações</small>
                   {favoriteExcerpts.length===0 && <p className="emptyHint">Selecione um trecho de texto na página pra guardar aqui.</p>}
                   <div className="pdfExcerptList">
-                    {favoriteExcerpts.map(h => (
+                    {favoriteExcerpts.map(h => editingExcerpt?.id === h.id ? (
+                      <div key={h.id} className="pdfExcerptItem pdfExcerptEditing">
+                        <b>Página {editingExcerpt.page ?? h.page}</b>
+                        <textarea rows={6} value={editingExcerpt.text} onChange={e=>setEditingExcerpt(x=>({...x, text:e.target.value}))}/>
+                        <small>Selecione trechos na página e use "Anexar" ou "Substituir" na barra que aparece.</small>
+                        <div className="pdfExcerptEditActions">
+                          <button onClick={saveEditedExcerpt}><Check size={13}/> Salvar</button>
+                          <button onClick={()=>setEditingExcerpt(null)}>Cancelar</button>
+                        </div>
+                      </div>
+                    ) : (
                       <div key={h.id} className="pdfExcerptItem">
                         <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
                           <b>Página {h.page}</b>
                           <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
                         </button>
+                        <button className="pdfExcerptDelete" title="Editar citação" onClick={()=>{ goTo(h.page); setEditingExcerpt({ id: h.id, text: h.text, page: h.page }); }}><Pencil size={13}/></button>
                         <button className="pdfExcerptDelete" title="Remover citação" onClick={()=>removeFavoriteExcerpt(h.id)}><Trash2 size={13}/></button>
                       </div>
                     ))}
