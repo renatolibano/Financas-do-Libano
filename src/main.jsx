@@ -25,7 +25,7 @@ import {
   Ruler, Printer, Replace, Table2, RectangleHorizontal, RectangleVertical,
   FileType2, Heading1, Heading2, Heading3, Pilcrow, FileDown, Scissors, FileType, WrapText, SpellCheck,
   Paintbrush, CaseSensitive, CaseUpper, Columns2, Rows3, SquareDashed, PanelTop, PanelBottom,
-  Frame, PaintRoller, Sigma, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
+  Frame, PaintRoller, Sigma, RefreshCw, FileDigit, ScrollText, Droplets, SwatchBook, MessageSquarePlus, Omega,
   Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight,
  Keyboard, ChevronsUpDown, PilcrowLeft, PilcrowRight,
  Puzzle, PenLine, FileInput, Tag, Scale, MapPin, GitBranch, ShieldCheck, ChevronsLeft, ChevronsRight, BringToFront, SendToBack, Move, Contrast, LayoutTemplate, CircleHelp, TextCursorInput, Languages, ArrowDownRight, BookOpenText, BookType, SlidersHorizontal, Mail, ListChecks, PanelLeft, BookText,
@@ -77,6 +77,11 @@ import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport"
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
 import { CITE_STYLES, citeInText, bibEntryText, orderSources } from "./lib/wordCitations";
+import { buildEquationHtml, mathAutocorrect, parseEquation, toLinear, toLatex } from "./lib/wordMath";
+import { FILTER_OPS, opHasValue, selectRecords, mergeRuleOutcome, ruleLabel, RULE_TYPES, MAX_RULES, MAX_SORT_KEYS } from "./lib/wordMerge";
+import { collectGrammarIssues, setGrammarHighlights, applyGrammarSuggestion, selectGrammarIssue, proofLangOf } from "./lib/wordProof";
+import WordEquationDialog from "./components/WordEquationDialog.jsx";
+import { FIELD_GROUPS, fieldHtml, documentContext, evaluateField, updateFields, fieldsInSelection, toggleFieldCodes, unlinkFields, lockFields, setFieldCode, goToField } from "./lib/wordFields";
 import {
   playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
@@ -18181,9 +18186,28 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     marker.setAttribute("contenteditable", "false");
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
-      const range = sel.getRangeAt(0).cloneRange();
-      range.collapse(true);
-      range.insertNode(marker);
+      const full = sel.getRangeAt(0).cloneRange();
+      if (!full.collapsed) {
+        // guarda o trecho marcado (REF lê esse texto) e o envolve para acompanhar edições
+        const txt = full.toString().replace(/\s+/g, " ").trim();
+        if (txt) marker.dataset.bookmarkText = txt.slice(0, 500);
+        try {
+          const wrap = document.createElement("span");
+          wrap.className = "word-bookmark-text";
+          wrap.dataset.bookmarkFor = name.trim();
+          full.surroundContents(wrap);
+          const at = document.createRange();
+          at.setStartBefore(wrap);
+          at.collapse(true);
+          at.insertNode(marker);
+        } catch {
+          const r = sel.getRangeAt(0).cloneRange();
+          r.collapse(true);
+          r.insertNode(marker);
+        }
+      } else {
+        full.insertNode(marker);
+      }
     } else {
       el.appendChild(marker);
     }
@@ -19566,7 +19590,14 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const [tableSubTab, setTableSubTab] = useState("design"); // lembra a última sub-aba usada
   // Aba "Correspondências" — lista de destinatários colada pelo usuário
   // (CSV/TSV simples), também guardada no marcador invisível do documento.
-  const [recipients, setRecipients] = useState(null); // { headers: string[], rows: string[][] } | null
+  const [recipientsAll, setRecipients] = useState(null); // lista completa: { headers: string[], rows: string[][] } | null
+  const [mergeFilter, setMergeFilter] = useState({ rules: [], sort: [] }); // Filtrar e Ordenar Destinatários (lib/wordMerge.js)
+  // A lista que a mala direta usa: só os registros do filtro, na ordem escolhida.
+  const recipients = useMemo(() => {
+    if (!recipientsAll) return null;
+    const idx = selectRecords(recipientsAll.headers, recipientsAll.rows, mergeFilter.rules, mergeFilter.sort);
+    return { headers: recipientsAll.headers, rows: idx.map(i => recipientsAll.rows[i]) };
+  }, [recipientsAll, mergeFilter]);
   const [recipientsDialogOpen, setRecipientsDialogOpen] = useState(false);
   const [recipientsDraft, setRecipientsDraft] = useState("");
   const [insertFieldOpen, setInsertFieldOpen] = useState(false);
@@ -19660,6 +19691,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
     try { setRecipients(pageMetaEl?.dataset.recipients ? JSON.parse(pageMetaEl.dataset.recipients) : null); } catch { setRecipients(null); }
+    try { setMergeFilter(pageMetaEl?.dataset.mergefilter ? JSON.parse(pageMetaEl.dataset.mergefilter) : { rules: [], sort: [] }); } catch { setMergeFilter({ rules: [], sort: [] }); }
     setMergePreview(false);
     setMergeIndex(0);
     historyRef.current = [];
@@ -19808,6 +19840,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
 
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
+    if (e.altKey && !mod && (e.key === "=" || e.code === "Equal")) { e.preventDefault(); insertEquationInline(); return; }
+    if (runFieldKey(e)) return;
     autocorrect.current.onKeyDown(e);
     if (e.defaultPrevented) return;
     if (mod && !e.altKey && e.key.toLowerCase() === "z") {
@@ -19864,7 +19898,25 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     return { headers, rows };
   };
   const recipientsToCsv = (r) => !r ? "" : [r.headers.join(","), ...r.rows.map(row => row.join(","))].join("\n");
-  const openRecipientsDialog = () => { setRecipientsDraft(recipientsToCsv(recipients)); setRecipientsDialogOpen(true); };
+  const openRecipientsDialog = () => { setRecipientsDraft(recipientsToCsv(recipientsAll)); setRecipientsDialogOpen(true); };
+  const openMergeFilter = () => {
+    if (!recipientsAll?.headers?.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
+    openDlg("mergefilter", { rules: mergeFilter.rules.map(r => ({ ...r })), sort: mergeFilter.sort.map(k => ({ ...k })) });
+  };
+  const saveMergeFilter = () => {
+    const ok = (f) => recipientsAll.headers.includes(f);
+    const next = {
+      rules: (dlgForm.rules || []).filter(r => ok(r.field)).slice(0, MAX_RULES),
+      sort: (dlgForm.sort || []).filter(k => ok(k.field)).slice(0, MAX_SORT_KEYS),
+    };
+    setMergeFilter(next);
+    persistPageMeta({ mergefilter: next.rules.length || next.sort.length ? JSON.stringify(next) : "" });
+    setMergePreview(false);
+    setMergeIndex(0);
+    const el = bodyRef.current;
+    if (el) el.querySelectorAll(".word-mergefield").forEach(span => { if (span.dataset.rule) { try { span.textContent = ruleLabel(JSON.parse(span.dataset.rule)); } catch { /* regra inválida */ } } else span.textContent = `«${span.dataset.field}»`; });
+    closeDlg();
+  };
   const saveRecipients = () => {
     const parsed = parseRecipientsCsv(recipientsDraft);
     setRecipients(parsed);
@@ -19904,7 +19956,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     const row = recipients.rows[index] || [];
     el.querySelectorAll(".word-mergefield").forEach(span => {
       if (span.dataset.rule) {
-        try { const r = JSON.parse(span.dataset.rule); const c = recipients.headers.indexOf(r.field); const v = c >= 0 ? (row[c] || "") : ""; span.textContent = preview ? (v === r.value ? r.then : r.else) : `«Se ${r.field} = ${r.value}»`; } catch {}
+        try { const r = JSON.parse(span.dataset.rule); span.textContent = preview ? mergeRuleOutcome(r, recipients.headers, row, index).text : ruleLabel(r); } catch { /* regra inválida */ }
         return;
       }
       const field = span.dataset.field;
@@ -19932,23 +19984,40 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const finishMerge = async (kind) => {
     if (!recipients || !recipients.rows.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
     if (!bodyRef.current?.querySelector(".word-mergefield")) { alert("Insira ao menos um campo de mesclagem no documento (Correspondências > Inserir Campo)."); return; }
-    for (let i = 0; i < recipients.rows.length; i++) {
-      const row = recipients.rows[i];
+    // Regras (lib/wordMerge.js): SKIPIF pula o registro; NEXT/NEXTIF passam para o registro seguinte
+    // dentro do mesmo documento (os campos depois da regra usam o novo registro).
+    let i = 0;
+    while (i < recipients.rows.length) {
+      let cur = i;
+      let skip = false;
       const div = document.createElement("div");
       div.innerHTML = bodyRef.current.innerHTML;
       div.querySelectorAll(".word-mergefield").forEach(span => {
-        if (span.dataset.rule) { try { const r = JSON.parse(span.dataset.rule); const c = recipients.headers.indexOf(r.field); const v = c >= 0 ? (row[c] || "") : ""; span.replaceWith(document.createTextNode(v === r.value ? r.then : r.else)); } catch { span.remove(); } return; }
+        const row = recipients.rows[cur] || [];
+        if (span.dataset.rule) {
+          let r;
+          try { r = JSON.parse(span.dataset.rule); } catch { span.remove(); return; }
+          const out = mergeRuleOutcome(r, recipients.headers, row, cur);
+          if (out.skip) skip = true;
+          if (out.next) cur++;
+          span.replaceWith(document.createTextNode(out.text || ""));
+          return;
+        }
         const col = recipients.headers.indexOf(span.dataset.field);
         span.replaceWith(document.createTextNode(col >= 0 ? (row[col] || "") : ""));
       });
+      const first = recipients.rows[i] || [];
       const nameCol = recipients.headers.findIndex(h => /nome|name/i.test(h));
-      const suffix = row[nameCol >= 0 ? nameCol : 0] || String(i + 1);
-      const merged = { title: `${title.trim() || "Documento"} - ${suffix}`, content: div.innerHTML, page_size: pageSize, orientation, margins, margin_left: marginLeftCm, margin_right: marginRightCm };
-      if (kind === "docx") downloadWordDocx(merged); else downloadWordPdf(merged);
-      // pequeno intervalo entre downloads — vários de uma vez, disparados no
-      // mesmo instante, costumam ser bloqueados pelo navegador.
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise(res => setTimeout(res, 400));
+      const suffix = first[nameCol >= 0 ? nameCol : 0] || String(i + 1);
+      if (!skip) {
+        const merged = { title: `${title.trim() || "Documento"} - ${suffix}`, content: div.innerHTML, page_size: pageSize, orientation, margins, margin_left: marginLeftCm, margin_right: marginRightCm };
+        if (kind === "docx") downloadWordDocx(merged); else downloadWordPdf(merged);
+        // pequeno intervalo entre downloads — vários de uma vez, disparados no
+        // mesmo instante, costumam ser bloqueados pelo navegador.
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(res => setTimeout(res, 400));
+      }
+      i = Math.max(cur, i) + 1;
     }
   };
 
@@ -21126,6 +21195,211 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const closeDlg = () => setDlg(null);
   const setF = (k, v) => setDlgForm(f => ({ ...f, [k]: v }));
 
+  // ---- Gramática (lib/wordProof.js, port de proof/pt/grammar.rs): painel + realce ondulado ao digitar ----
+  const [grammarLive, setGrammarLive] = useState(() => { try { return localStorage.getItem("libano.word.grammarLive") === "1"; } catch { return false; } });
+  const [grammarItems, setGrammarItems] = useState([]);
+  const [grammarIdx, setGrammarIdx] = useState(0);
+  const grammarIgnored = useRef(new Set());
+  const grammarLang = docLanguage || "pt-BR";
+  const runGrammar = () => collectGrammarIssues(bodyRef.current, grammarLang, grammarIgnored.current);
+  const openGrammar = () => {
+    const items = runGrammar();
+    setGrammarItems(items);
+    setGrammarIdx(0);
+    openDlg("grammar", {});
+  };
+  const refreshGrammar = (keepIdx = true) => {
+    const items = runGrammar();
+    setGrammarItems(items);
+    setGrammarIdx(i => Math.min(keepIdx ? i : 0, Math.max(0, items.length - 1)));
+    if (grammarLive) setGrammarHighlights(items);
+  };
+  const toggleGrammarLive = () => {
+    const next = !grammarLive;
+    setGrammarLive(next);
+    try { localStorage.setItem("libano.word.grammarLive", next ? "1" : "0"); } catch { /* sem storage */ }
+    if (!next) setGrammarHighlights([]);
+  };
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !grammarLive) return undefined;
+    let timer = null;
+    const run = () => { clearTimeout(timer); timer = setTimeout(() => setGrammarHighlights(collectGrammarIssues(el, grammarLang, grammarIgnored.current)), 700); };
+    el.addEventListener("input", run);
+    run();
+    return () => { clearTimeout(timer); el.removeEventListener("input", run); setGrammarHighlights([]); };
+  }, [grammarLive, grammarLang]);
+
+  // ---- Campos (lib/wordFields.js, port de fields.rs/table_formula.rs): DATE, SEQ, IF, =SUM(ABOVE)… ----
+  const fieldEditRef = useRef(null);
+  // Página de um elemento (mesma conta da barra de status: o texto corre numa folha contínua).
+  const pageOfEl = (el) => {
+    const body = bodyRef.current;
+    const ph = currentPageDims().h * (zoom / 100);
+    if (!body || !el || !ph) return pageInfo.page;
+    const pages = Math.max(1, Math.ceil((body.getBoundingClientRect().height - 2) / ph));
+    return Math.min(Math.max(Math.floor((el.getBoundingClientRect().top - body.getBoundingClientRect().top) / ph) + 1, 1), pages);
+  };
+  const fieldBase = () => {
+    const body = bodyRef.current;
+    const ph = currentPageDims().h * (zoom / 100);
+    const pages = body && ph ? Math.max(1, Math.ceil((body.getBoundingClientRect().height - 2) / ph)) : pageInfo.pages;
+    return { ...documentContext(body, { title: currentDocForExport().title, lang: grammarLang, pages, pageOf: pageOfEl }) };
+  };
+  const fieldCell = () => {
+    const n = dlgRangeRef.current?.startContainer;
+    const el = n ? (n.nodeType === 3 ? n.parentElement : n) : null;
+    const td = el?.closest?.("td,th") || null;
+    return td && bodyRef.current?.contains(td) ? { td, table: td.closest("table") } : { td: null, table: null };
+  };
+  const fieldPreview = (code) => {
+    try { return { ok: true, text: evaluateField(code || "", { ...fieldBase(), ...fieldCell(), seq: () => 1 }) }; }
+    catch (e) { return { ok: false, text: e?.message || String(e) }; }
+  };
+  const refreshFields = (only = null) => {
+    const el = bodyRef.current;
+    if (!el) return 0;
+    const all = Array.from(el.querySelectorAll(".word-field"));
+    const list = only && only.length ? only : all;
+    if (!list.length) return 0;
+    commitHistoryCheckpoint();
+    const n = updateFields(el, list, fieldBase());
+    if (n) handleBodyInput();
+    return n;
+  };
+  const openFieldDialog = (opts = {}) => openDlg("field", { code: opts.code || "", formulaOnly: !!opts.formulaOnly, editing: !!opts.editing });
+  const commitField = () => {
+    const code = (dlgForm.code || "").trim();
+    const target = fieldEditRef.current;
+    fieldEditRef.current = null;
+    closeDlg();
+    if (!code) return;
+    if (target && bodyRef.current?.contains(target)) {
+      try { setFieldCode(target, code); } catch (e) { alert(e.message); return; }
+      refreshFields([target]);
+      return;
+    }
+    bodyRef.current?.focus();
+    restoreRange();
+    insertAtCursor(fieldHtml(code, "…"));
+    setTimeout(() => refreshFields(), 0);
+  };
+  const runFieldKey = (e) => {
+    const el = bodyRef.current;
+    if (!el) return false;
+    const mod = e.ctrlKey || e.metaKey;
+    const act = (fn) => { e.preventDefault(); fn(); return true; };
+    if (e.key === "F9" && !mod && !e.altKey) return act(() => { if (e.shiftKey) { const f = fieldsInSelection(el); if (f.length) { toggleFieldCodes(f); handleBodyInput(); } } else { const f = fieldsInSelection(el); refreshFields(f.length ? f : null); } });
+    if (e.key === "F9" && e.altKey && !mod) return act(() => { el.classList.toggle("word-show-codes"); });
+    if (e.key === "F9" && mod && e.shiftKey) return act(() => { const f = fieldsInSelection(el); if (f.length) { commitHistoryCheckpoint(); unlinkFields(f); handleBodyInput(); } });
+    if (e.key === "F11" && mod) return act(() => { const f = fieldsInSelection(el); if (f.length) { lockFields(f, !e.shiftKey); handleBodyInput(); } });
+    if (e.key === "F1" && e.altKey) return act(() => goToField(el, !e.shiftKey));
+    if (e.key === "F11" && e.shiftKey && !mod) return act(() => goToField(el, false));
+    return false;
+  };
+
+  // ---- Equação no texto: clique para editar ali mesmo (Alt+= cria uma nova) ----
+  const [eqInline, setEqInline] = useState(null);
+  const eqInlineRef = useRef(null);
+  eqInlineRef.current = eqInline;
+  const rebuildEquation = (st) => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = buildEquationHtml(st.src, st.fmt, st.display);
+    st.el.dataset.eq = st.src;
+    st.el.dataset.fmt = st.fmt;
+    st.el.dataset.display = st.display ? "1" : "0";
+    st.el.innerHTML = tmp.firstChild.innerHTML;
+  };
+  const startEquationEdit = (el, isNew = false) => {
+    if (!el || !bodyRef.current?.contains(el) || docProtected) return;
+    const r = el.getBoundingClientRect();
+    const cur = { src: el.dataset.eq ?? "", fmt: el.dataset.fmt || "linear", display: el.dataset.display === "1" };
+    commitHistoryCheckpoint();
+    setEqInline({ el, isNew, orig: cur, ...cur, x: r.left, y: r.bottom });
+  };
+  const updateInline = (patch) => {
+    const cur = eqInlineRef.current;
+    if (!cur) return;
+    const next = { ...cur, ...patch };
+    eqInlineRef.current = next;
+    rebuildEquation(next);
+    setEqInline(next);
+    handleBodyInput();
+  };
+  const closeInline = (commit = true) => {
+    const cur = eqInlineRef.current;
+    if (!cur) return;
+    eqInlineRef.current = null;
+    setEqInline(null);
+    if (!commit) { if (cur.isNew) cur.el.remove(); else rebuildEquation({ ...cur, ...cur.orig }); }
+    else if (!cur.src.trim()) cur.el.remove();
+    handleBodyInput();
+    if (bodyRef.current?.contains(cur.el)) {
+      bodyRef.current.focus();
+      const r = document.createRange();
+      r.setStartAfter(cur.el);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  };
+  const insertEquationInline = () => {
+    const el = bodyRef.current;
+    if (!el || docProtected) return;
+    el.focus();
+    insertAtCursor(buildEquationHtml("", "linear", false).replace('class="word-equation', 'data-new="1" class="word-equation'));
+    const made = el.querySelector('[data-new="1"]');
+    if (made) { made.removeAttribute("data-new"); startEquationEdit(made, true); }
+  };
+  const onInlineChange = (e) => {
+    const cur = eqInlineRef.current;
+    const ta = e.target;
+    let value = ta.value, caret = ta.selectionStart;
+    if (cur?.fmt === "linear") {
+      const ac = mathAutocorrect(value, caret);
+      if (ac) { value = ac.value; caret = ac.caret; requestAnimationFrame(() => { ta.value = value; ta.setSelectionRange(caret, caret); }); }
+    }
+    updateInline({ src: value });
+  };
+  useEffect(() => {
+    if (!eqInline) return undefined;
+    const outside = (e) => {
+      const cur = eqInlineRef.current;
+      if (!cur || e.target.closest?.(".wordEqInline") || cur.el.contains(e.target)) return;
+      closeInline(true);
+    };
+    document.addEventListener("mousedown", outside, true);
+    return () => document.removeEventListener("mousedown", outside, true);
+  }, [!!eqInline]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Equação estruturada (lib/wordMath.js): galeria, LaTeX/linear, MathML ----
+  const eqEditRef = useRef(null);
+  const openEquationDialog = (el = null) => {
+    eqEditRef.current = el;
+    if (el) openDlg("equation", { src: el.dataset.eq ?? el.textContent ?? "", format: el.dataset.fmt || "linear", display: el.dataset.display === "1", editing: true });
+    else openDlg("equation", { src: "", format: "linear", display: false });
+  };
+  const commitEquation = () => {
+    const src = (dlgForm.src || "").trim();
+    const target = eqEditRef.current;
+    eqEditRef.current = null;
+    closeDlg();
+    if (!src) return;
+    const html = buildEquationHtml(src, dlgForm.format || "linear", !!dlgForm.display);
+    if (target && bodyRef.current?.contains(target)) {
+      commitHistoryCheckpoint();
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      target.replaceWith(tmp.firstChild);
+      handleBodyInput();
+    } else {
+      bodyRef.current?.focus();
+      restoreRange();
+      insertAtCursor(html + "&nbsp;");
+    }
+  };
+
   useEffect(() => {
     const onCopy = () => {
       const s = window.getSelection();
@@ -21283,18 +21557,26 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     insertAtCursor("<p>" + [mergeFieldSpanHtml(f[0], "[Nome]"), mergeFieldSpanHtml(f[1], "[Endereço]"), mergeFieldSpanHtml(f[2], "[Cidade]")].join("<br>") + "</p>");
   };
   const insertGreetingLine = () => insertAtCursor("<p>Prezado(a) " + mergeFieldSpanHtml(guessField(/nome|name/i), "[Nome]") + ",</p>");
-  const insertMergeRule = () => {
-    if (!recipients?.headers?.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
-    const field = window.prompt("Campo a comparar (" + recipients.headers.join(", ") + "):", recipients.headers[0]);
-    if (!field || !recipients.headers.includes(field)) return;
-    const value = window.prompt("Se o campo for igual a:", "");
-    if (value === null) return;
-    const thenT = window.prompt("Então inserir o texto:", "");
-    if (thenT === null) return;
-    const elseT = window.prompt("Senão inserir o texto:", "");
-    if (elseT === null) return;
-    const rule = JSON.stringify({ field, value, then: thenT, else: elseT });
-    insertAtCursor(`<span class="word-mergefield word-mergerule" contenteditable="false" data-field="__rule" data-rule="${rule.replace(/"/g, "&quot;")}">«Se ${field} = ${value}»</span>`);
+  const insertMergeRule = (type = "IF") => {
+    if (!recipientsAll?.headers?.length) { alert("Selecione destinatários primeiro (Correspondências > Selecionar Destinatários)."); return; }
+    const rule = { type };
+    if (type === "IF" || type === "SKIPIF" || type === "NEXTIF") {
+      const field = window.prompt("Campo a comparar (" + recipientsAll.headers.join(", ") + "):", recipientsAll.headers[0]);
+      if (!field || !recipientsAll.headers.includes(field)) return;
+      const op = window.prompt("Comparação (=, <>, <, >, <=, >=):", "=");
+      if (!op || !["=", "<>", "<", ">", "<=", ">="].includes(op.trim())) return;
+      const value = window.prompt("Valor de comparação:", "");
+      if (value === null) return;
+      Object.assign(rule, { field, op: op.trim(), value });
+      if (type === "IF") {
+        const thenT = window.prompt("Então inserir o texto:", "");
+        if (thenT === null) return;
+        const elseT = window.prompt("Senão inserir o texto:", "");
+        if (elseT === null) return;
+        Object.assign(rule, { then: thenT, else: elseT });
+      }
+    }
+    insertAtCursor(`<span class="word-mergefield word-mergerule" contenteditable="false" data-field="__rule" data-rule="${JSON.stringify(rule).replace(/"/g, "&quot;")}">${ruleLabel(rule).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</span>`);
   };
   const mergeGoTo = (idx) => {
     if (!recipients?.rows?.length) return;
@@ -22157,6 +22439,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 {rbm("quickparts", (t) => <RbSm icon={Puzzle} label="Partes Rápidas" chevron tip="Partes Rápidas" desc="Insere blocos de texto reutilizáveis. Você pode salvar a seleção atual na galeria." onClick={t}/>, <>
                   {[...WORD_QUICKPART_BUILTINS, ...fmt.loadQuickParts()].map(q => <button key={q.name} onClick={() => fmt.insertQuickPart(q.html)}>{q.name}</button>)}
                   <button onClick={fmt.saveQuickPart}>+ Salvar Seleção na Galeria</button>
+                  <button onClick={() => { fieldEditRef.current = null; openFieldDialog(); }}>Campo…</button>
+                  <button onClick={() => refreshFields()}>Atualizar campos (F9)</button>
+                  <button onClick={() => bodyRef.current?.classList.toggle("word-show-codes")}>Alternar códigos de campo (Alt+F9)</button>
                 </>)}
                 {rbm("wordart", (t) => <RbSm icon={Sparkle} label="WordArt" chevron tip="WordArt" desc="Insere um texto com estilo visual pronto (contorno, sombra, cor). Continua editável como qualquer texto." onClick={t}/>, <>
                   {WORDART_STYLES.map(s => <button key={s.id} onClick={() => insertWordArt(s.id)}>{s.label}</button>)}
@@ -22170,7 +22455,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               </div>
             </RbGroup>
             <RbGroup label="Símbolos">
-              <RbBig icon={Omega} label="Equação" tip="Equação" desc="Insere um bloco de equação, editável como texto em itálico." onClick={fmt.insertEquation}/>
+              <RbBig icon={Omega} label="Equação" tip="Equação" desc="Abre o editor de equações: estruturas (frações, raízes, somatórios, matrizes…), símbolos e equações prontas, em formato linear ou LaTeX." onClick={() => openEquationDialog()}/>
               {rbm("symbol", (t) => <RbBig icon={Sigma} label="Símbolo" chevron tip="Símbolo" desc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={t}/>, <>
                 {WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}
               </>, "emojiPopover rbPop")}
@@ -22454,6 +22739,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 {rbm("recipients", (t) => <RbSm icon={Users} label={`Destinatários${recipients ? ` (${recipients.rows.length})` : ""}`} chevron tip="Selecionar Destinatários" desc="Define a lista de pessoas que receberão o documento: digite uma nova lista ou importe um arquivo CSV." onClick={t}/>, <>
                   <button onClick={openRecipientsDialog}>Digitar Nova Lista…</button>
                   <button onClick={importRecipientsFile}>Usar Lista Existente (CSV)…</button>
+                  <button onClick={openMergeFilter}>Filtrar e Ordenar…</button>
                 </>)}
                 <RbSm icon={Pencil} label="Editar Lista" tip="Editar Lista de Destinatários" desc="Abre a lista de destinatários para corrigir nomes e campos." onClick={openRecipientsDialog}/>
               </div>
@@ -22469,7 +22755,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                   {recipients?.headers?.length ? recipients.headers.map(h => <button key={h} onClick={() => insertMergeField(h)}>{h}</button>) : <span className="wordDropdownEmpty">Selecione destinatários primeiro</span>}
                 </>)}
                 {rbm("rules", (t) => <RbSm icon={GitBranch} label="Regras" chevron tip="Regras" desc="Insere uma regra condicional: se um campo tiver certo valor, mostra um texto; senão, outro." onClick={t}/>, <>
-                  <button onClick={insertMergeRule}>Se… Então… Senão…</button>
+                  {Object.entries(RULE_TYPES).map(([k, label]) => <button key={k} onClick={() => insertMergeRule(k)}>{label}</button>)}
                 </>)}
                 <RbSm icon={Columns2} label="Coincidir Campos" tip="Coincidir Campos" desc="Mostra quais campos do documento têm coluna correspondente na lista de destinatários." onClick={() => openDlg("matchfields")}/>
               </div>
@@ -22505,6 +22791,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               <RbBig icon={SpellCheck} label="Ortografia" tip="Ortografia" desc="Liga ou desliga a verificação ortográfica do navegador (sublinhado vermelho nas palavras)." active={spellcheckOn} onClick={() => setSpellcheckOn(s => !s)}/>
               <div className="rbStack">
                 <RbSm icon={BookOpenText} label="Sinônimos" tip="Dicionário de Sinônimos" desc="Abre uma página de sinônimos para a palavra selecionada." onClick={openThesaurus}/>
+                <RbSm icon={SpellCheck} label="Gramática" tip="Gramática" desc="Procura palavras repetidas, espaços e sinais sobrando e letras maiúsculas faltando, no idioma do documento (português do Brasil ou inglês)." onClick={openGrammar}/>
+                <RbSm icon={Eye} label={grammarLive ? "Gramática ao digitar: sim" : "Gramática ao digitar: não"} tip="Gramática ao digitar" desc="Sublinha em azul, enquanto você escreve, os trechos que a revisão gramatical aponta." onClick={toggleGrammarLive}/>
                 <RbSm icon={SlidersHorizontal} label="Opções de AutoCorreção" tip="Opções de AutoCorreção" desc="Liga ou desliga aspas inteligentes, listas automáticas, travessões, maiúsculas no início da frase, ordinais e links automáticos." onClick={() => openDlg("autocorrect", { ...acPrefs })}/>
                 <RbSm icon={FileDigit} label="Contagem de Palavras" tip="Contagem de Palavras" desc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}/>
               </div>
@@ -22901,6 +23189,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               </div>
               <span className="wordRibbonGroupLabel">Alinhamento Vertical</span>
             </div>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button data-tip="Fórmula" data-tipdesc="Insere na célula uma fórmula, como =SUM(ABOVE) para somar os números acima. Aceita referências (A1, B2:C4), operadores e funções (SUM, AVERAGE, COUNT, MAX, MIN, ROUND, IF…)." onClick={() => { fieldEditRef.current = null; openFieldDialog({ code: "=SUM(ABOVE)", formulaOnly: true }); }}><Sigma size={15}/> Fórmula</button>
+                <button data-tip="Atualizar campos" data-tipdesc="Recalcula as fórmulas e os demais campos do documento (F9)." onClick={() => refreshFields()}><RefreshCw size={15}/> Atualizar</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Dados</span>
+            </div>
           </>)}
         </div>
 
@@ -23012,12 +23307,15 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 onClick={(e) => {
                   const anchor = e.target.closest?.(".word-comment-anchor");
                   if (anchor && bodyRef.current?.contains(anchor)) { e.preventDefault(); openCommentPopover(anchor); return; }
+                  const eqEl = e.target.closest?.(".word-equation.word-math");
+                  if (eqEl && bodyRef.current?.contains(eqEl)) { e.preventDefault(); startEquationEdit(eqEl); return; }
                   handleContentSelectionClick(e);
                   fmt.handleBodyClick(e);
                 }}
                 onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
                 onKeyUp={(e) => { fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
                 onKeyDown={handleEditorKeyDown}
+                onDoubleClick={(e) => { const fld = e.target.closest?.(".word-field"); if (fld && bodyRef.current?.contains(fld)) { e.preventDefault(); fieldEditRef.current = fld; openFieldDialog({ code: fld.dataset.code || "", editing: true }); return; } const eq = e.target.closest?.(".word-equation"); if (eq && !eq.classList.contains("word-math") && bodyRef.current?.contains(eq)) { e.preventDefault(); openEquationDialog(eq); } }}
                 onContextMenu={handleBodyContextMenu}
                 data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
               />
@@ -23197,6 +23495,127 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
           </WordModal>
         )}
 
+        {dlg === "mergefilter" && (() => {
+          const heads = recipientsAll?.headers || [];
+          const rules = dlgForm.rules || [], sort = dlgForm.sort || [];
+          const setRules = (v) => setF("rules", v), setSort = (v) => setF("sort", v);
+          const count = recipientsAll ? selectRecords(heads, recipientsAll.rows, rules, sort).length : 0;
+          return (
+            <WordModal title="Filtrar e Ordenar Destinatários" wide onClose={closeDlg} actions={<>
+              <button className="ghost" onClick={() => { setRules([]); setSort([]); }}>Limpar tudo</button>
+              <button className="ghost" onClick={closeDlg}>Cancelar</button>
+              <button className="primary" onClick={saveMergeFilter}>OK</button>
+            </>}>
+              <b>Filtrar</b>
+              {rules.map((r, k) => (
+                <div key={k} className="wordMergeRuleRow">
+                  {k > 0 ? <select value={r.join || "and"} onChange={e => setRules(rules.map((x, j) => j === k ? { ...x, join: e.target.value } : x))}><option value="and">E</option><option value="or">OU</option></select> : <span style={{ width: 52 }}>Onde</span>}
+                  <select value={r.field} onChange={e => setRules(rules.map((x, j) => j === k ? { ...x, field: e.target.value } : x))}>{heads.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                  <select value={r.op || "equal"} onChange={e => setRules(rules.map((x, j) => j === k ? { ...x, op: e.target.value } : x))}>{FILTER_OPS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select>
+                  {opHasValue(r.op || "equal") && <input value={r.value || ""} onChange={e => setRules(rules.map((x, j) => j === k ? { ...x, value: e.target.value } : x))}/>}
+                  <button className="ghost" onClick={() => setRules(rules.filter((_, j) => j !== k))}>✕</button>
+                </div>
+              ))}
+              {rules.length < MAX_RULES && <button className="ghost" onClick={() => setRules([...rules, { field: heads[0], op: "equal", value: "", join: "and" }])}>+ Adicionar regra</button>}
+              <b style={{ marginTop: 8 }}>Ordenar</b>
+              {sort.map((k, j) => (
+                <div key={j} className="wordMergeRuleRow">
+                  <span style={{ width: 52 }}>{j === 0 ? "Por" : "Depois"}</span>
+                  <select value={k.field} onChange={e => setSort(sort.map((x, i) => i === j ? { ...x, field: e.target.value } : x))}>{heads.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                  <label>decrescente <input type="checkbox" checked={!!k.descending} onChange={e => setSort(sort.map((x, i) => i === j ? { ...x, descending: e.target.checked } : x))}/></label>
+                  <button className="ghost" onClick={() => setSort(sort.filter((_, i) => i !== j))}>✕</button>
+                </div>
+              ))}
+              {sort.length < MAX_SORT_KEYS && <button className="ghost" onClick={() => setSort([...sort, { field: heads[0], descending: false }])}>+ Adicionar chave</button>}
+              <div className="wordFieldPreview">{count} de {recipientsAll?.rows.length || 0} registros na mesclagem</div>
+            </WordModal>
+          );
+        })()}
+
+        {dlg === "field" && (() => {
+          const info = fieldPreview(dlgForm.code);
+          const close = () => { fieldEditRef.current = null; closeDlg(); };
+          return (
+            <WordModal title={dlgForm.editing ? "Editar campo" : dlgForm.formulaOnly ? "Fórmula" : "Campo"} wide onClose={close} actions={<>
+              <button className="ghost" onClick={close}>Cancelar</button>
+              <button className="primary" onClick={commitField} disabled={!(dlgForm.code || "").trim()}>{dlgForm.editing ? "Atualizar" : "OK"}</button>
+            </>}>
+              {!dlgForm.formulaOnly && FIELD_GROUPS.map(g => (
+                <div key={g.name} className="wordFieldGroup">
+                  <b>{g.name}</b>
+                  <div className="wordFieldChips">{g.fields.map(([, code, label]) => <button key={code} type="button" className={dlgForm.code === code ? "primary" : "ghost"} title={code} onClick={() => setF("code", code)}>{label}</button>)}</div>
+                </div>
+              ))}
+              <label>{dlgForm.formulaOnly ? "Fórmula" : "Código do campo"} <input style={{ width: "100%" }} spellCheck={false} value={dlgForm.code || ""} onChange={e => setF("code", e.target.value)} placeholder={dlgForm.formulaOnly ? "=SUM(ABOVE)" : 'DATE \\@ "dd/MM/yyyy"'}/></label>
+              <div className="wordFieldPreview">Resultado: {info.ok ? <b>{info.text}</b> : <span className="wordFieldErr">{info.text}</span>}</div>
+              <div className="wordFieldHelp">Opções: <code>\* Upper|Lower|FirstCap|Caps|roman|ROMAN|alphabetic</code> · <code>\# "0.00"</code> (números) · <code>\@ "dd/MM/yyyy"</code> (datas)</div>
+            </WordModal>
+          );
+        })()}
+
+        {dlg === "grammar" && (() => {
+          const it = grammarItems[grammarIdx];
+          const go = (d) => { const n = (grammarIdx + d + grammarItems.length) % grammarItems.length; setGrammarIdx(n); selectGrammarIssue(bodyRef.current, grammarItems[n]); };
+          const fix = (item, text) => { applyGrammarSuggestion(bodyRef.current, item, text); handleBodyInput(); refreshGrammar(); };
+          const ignore = (item) => { grammarIgnored.current.add(item.key); refreshGrammar(); };
+          return (
+            <WordModal title={`Gramática (${proofLangOf(grammarLang) === "en" ? "English" : proofLangOf(grammarLang) === "pt" ? "Português do Brasil" : "idioma sem regras"})`} wide onClose={() => { closeDlg(); setGrammarHighlights(grammarLive ? grammarItems : []); }} actions={<>
+              {grammarItems.length > 0 && <button className="ghost" onClick={() => { grammarItems.filter(x => x.issue.suggestions.length).slice().reverse().forEach(x => applyGrammarSuggestion(bodyRef.current, x, x.issue.suggestions[0])); handleBodyInput(); refreshGrammar(false); }}>Corrigir tudo</button>}
+              <button className="primary" onClick={() => { closeDlg(); setGrammarHighlights(grammarLive ? grammarItems : []); }}>Fechar</button>
+            </>}>
+              {!proofLangOf(grammarLang) && <p>A revisão gramatical existe para português (Brasil) e inglês. Troque o idioma do documento em Revisão › Idioma.</p>}
+              {proofLangOf(grammarLang) && !it && <p>Nenhum problema de gramática encontrado.</p>}
+              {it && (<div className="wordGrammarBox">
+                <div className="wordGrammarCount">{grammarIdx + 1} de {grammarItems.length}</div>
+                <div className="wordGrammarMsg">{it.issue.message}</div>
+                <div className="wordGrammarSentence">{it.sentence.slice(0, it.issue.start)}<mark>{it.sentence.slice(it.issue.start, it.issue.end)}</mark>{it.sentence.slice(it.issue.end)}</div>
+                <div className="wordGrammarActions">
+                  {it.issue.suggestions.map((sg, k) => <button key={k} className="primary" onClick={() => fix(it, sg)}>Alterar para “{sg}”</button>)}
+                  <button className="ghost" onClick={() => ignore(it)}>Ignorar</button>
+                  <button className="ghost" onClick={() => go(-1)}>Anterior</button>
+                  <button className="ghost" onClick={() => go(1)}>Próximo</button>
+                </div>
+              </div>)}
+            </WordModal>
+          );
+        })()}
+
+        {eqInline && (
+          <div className="wordEqInline" style={{ left: Math.max(8, Math.min(eqInline.x, window.innerWidth - 460)), top: Math.min(eqInline.y + 6, window.innerHeight - 190) }}>
+            <textarea
+              autoFocus
+              rows={2}
+              spellCheck={false}
+              value={eqInline.src}
+              placeholder={eqInline.fmt === "latex" ? "\\frac{a}{b}" : "a^2+b^2=c^2  ·  \\alpha␣ vira α"}
+              onChange={onInlineChange}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { e.preventDefault(); closeInline(false); }
+                else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); closeInline(true); }
+              }}
+            />
+            <div className="wordEqInlineBar">
+              <select value={eqInline.fmt} onChange={(e) => {
+                const to = e.target.value;
+                try { const nodes = parseEquation(eqInline.src, eqInline.fmt); updateInline({ fmt: to, src: to === "latex" ? toLatex(nodes) : toLinear(nodes) }); } catch { updateInline({ fmt: to }); }
+              }}><option value="linear">Linear</option><option value="latex">LaTeX</option></select>
+              <label><input type="checkbox" checked={eqInline.display} onChange={(e) => updateInline({ display: e.target.checked })}/> Exibição</label>
+              <button className="ghost" onClick={() => { const st = eqInlineRef.current; const el = st.el; closeInline(true); if (bodyRef.current?.contains(el)) openEquationDialog(el); }}>Estruturas…</button>
+              <button className="ghost" onClick={() => closeInline(false)}>Cancelar</button>
+              <button className="primary" onClick={() => closeInline(true)}>OK</button>
+            </div>
+          </div>
+        )}
+
+        {dlg === "equation" && (
+          <WordModal title={dlgForm.editing ? "Editar equação" : "Equação"} wide onClose={() => { eqEditRef.current = null; closeDlg(); }} actions={<>
+            <button className="ghost" onClick={() => { eqEditRef.current = null; closeDlg(); }}>Cancelar</button>
+            <button className="primary" onClick={commitEquation} disabled={!(dlgForm.src || "").trim()}>{dlgForm.editing ? "Atualizar" : "Inserir"}</button>
+          </>}>
+            <WordEquationDialog form={dlgForm} setF={setF}/>
+          </WordModal>
+        )}
+
         {dlg === "autocorrect" && (
           <WordModal title="Opções de AutoCorreção" onClose={closeDlg} actions={<>
             <button className="ghost" onClick={() => setDlgForm({ ...AC_DEFAULTS, entries: dlgForm.entries || [] })}>Restaurar padrão</button>
@@ -23354,7 +23773,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
                 const txt = await recognizeHandwriting(url);
                 if (!txt) { alert("Não foi possível reconhecer a escrita."); return; }
-                if (mode === "math") fmt.exec("insertHTML", `<span class="word-equation" contenteditable="true">${txt.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</span>&nbsp;`);
+                if (mode === "math") fmt.exec("insertHTML", buildEquationHtml(txt, txt.includes("\\") ? "latex" : "linear", false) + "&nbsp;");
                 else fmt.exec("insertText", txt);
               } catch (err) { alert(err?.message || "Falha ao reconhecer a escrita."); }
             }}

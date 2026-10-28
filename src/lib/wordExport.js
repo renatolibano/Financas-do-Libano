@@ -3,7 +3,11 @@ import {
   Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
   HeadingLevel, AlignmentType, LevelFormat, WidthType, PageBreak, PageOrientation,
   VerticalAlign, BorderStyle, Header, Footer, PageNumber,
+  Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript, MathSubScript, MathSubSuperScript, MathSum, MathIntegral,
+  MathRoundBrackets, MathSquareBrackets, MathCurlyBrackets, MathAngledBrackets, MathFunction, MathLimitLower, MathLimitUpper,
+  SimpleField,
 } from "docx";
+import { parseEquation, toLinear } from "./wordMath";
 
 // ---------------------------------------------------------------------------
 // Exportação do "Word" (Área de Estudos) como .docx de verdade (preserva
@@ -73,6 +77,17 @@ export function collectRuns(node, ctx) {
     return runs;
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return runs;
+  if (node.classList?.contains("word-math") && node.dataset?.eq != null) { // equação estruturada: o MathML é só desenho
+    runs.push({ text: node.dataset.eq, italic: true, math: { src: node.dataset.eq, fmt: node.dataset.fmt || "linear" } });
+    return runs;
+  }
+  if (node.classList?.contains("word-field") && node.dataset?.code != null) { // campo: o texto é o resultado; o código vira campo do Word
+    const fname = node.dataset.code.trim().split(/\s+/)[0].toUpperCase();
+    // REF/PAGEREF/STYLEREF dependem de indicadores que o .docx não leva: saem como texto
+    const wordField = !["REF", "PAGEREF", "STYLEREF"].includes(fname);
+    runs.push({ ...ctx, text: node.querySelector(".wf-result")?.textContent || "", ...(wordField ? { field: { code: node.dataset.code } } : {}) });
+    return runs;
+  }
   if (node.classList?.contains("word-del")) return runs; // trecho marcado como excluído (Controlar Alterações) — não sai na exportação
   if (node.classList?.contains("word-pagenum")) { runs.push({ pageField: node.dataset.fmt || "label", ...ctx }); return runs; } // campo de número de página — vira campo dinâmico de verdade na exportação
   if (node.tagName === "BR") { runs.push({ text: "\n", ...ctx }); return runs; }
@@ -283,10 +298,54 @@ function imageTypeFromDataUrl(dataUrl) {
   return "jpg";
 }
 
+// Equação estruturada -> objeto de matemática do Word (OMML). Estruturas sem equivalente na
+// biblioteca docx viram o texto do formato linear.
+function docxMathKids(a) {
+  const out = [];
+  for (const n of a) {
+    switch (n.t) {
+      case "run": out.push(new MathRun(n.text)); break;
+      case "frac": out.push(new MathFraction({ numerator: docxMathKids(n.num), denominator: docxMathKids(n.den) })); break;
+      case "script":
+        if (n.kind === "sup") out.push(new MathSuperScript({ children: docxMathKids(n.base), superScript: docxMathKids(n.sup) }));
+        else if (n.kind === "sub") out.push(new MathSubScript({ children: docxMathKids(n.base), subScript: docxMathKids(n.sub) }));
+        else if (n.kind === "subsup") out.push(new MathSubSuperScript({ children: docxMathKids(n.base), subScript: docxMathKids(n.sub), superScript: docxMathKids(n.sup) }));
+        else out.push(new MathRun(toLinear([n])));
+        break;
+      case "rad": out.push(new MathRadical(n.degHide || !n.deg.length ? { children: docxMathKids(n.e) } : { children: docxMathKids(n.e), degree: docxMathKids(n.deg) })); break;
+      case "nary": {
+        const opts = { children: docxMathKids(n.e), ...(!n.subHide && n.sub.length ? { subScript: docxMathKids(n.sub) } : {}), ...(!n.supHide && n.sup.length ? { superScript: docxMathKids(n.sup) } : {}) };
+        if (n.chr === "∑") out.push(new MathSum(opts));
+        else if (n.chr === "∫") out.push(new MathIntegral(opts));
+        else out.push(new MathRun(toLinear([n])));
+        break;
+      }
+      case "delim": {
+        const kids = n.elems.flatMap((e, i) => (i ? [new MathRun(n.sep || "|"), ...docxMathKids(e)] : docxMathKids(e)));
+        const key = `${n.beg || ""}${n.end || ""}`;
+        if (key === "()") out.push(new MathRoundBrackets({ children: kids }));
+        else if (key === "[]") out.push(new MathSquareBrackets({ children: kids }));
+        else if (key === "{}") out.push(new MathCurlyBrackets({ children: kids }));
+        else if (key === "⟨⟩") out.push(new MathAngledBrackets({ children: kids }));
+        else out.push(new MathRun(n.beg || ""), ...kids, new MathRun(n.end || ""));
+        break;
+      }
+      case "func": out.push(new MathFunction({ name: docxMathKids(n.name), children: docxMathKids(n.e) })); break;
+      case "lim": out.push(n.upper ? new MathLimitUpper({ children: docxMathKids(n.e), limit: docxMathKids(n.lim) }) : new MathLimitLower({ children: docxMathKids(n.e), limit: docxMathKids(n.lim) })); break;
+      default: out.push(new MathRun(toLinear([n])));
+    }
+  }
+  return out;
+}
+function docxEquation(m) {
+  try { return new DocxMath({ children: docxMathKids(parseEquation(m.src, m.fmt)) }); }
+  catch { return new TextRun({ text: m.src, italics: true }); }
+}
+
 function runsToTextRuns(runs, extra = {}) {
   const list = (runs || []).filter((r) => r.text != null && r.text !== "");
   if (!list.length) return [new TextRun("")];
-  return list.map((r) => new TextRun({
+  return list.map((r) => r.math ? docxEquation(r.math) : r.field ? new SimpleField(r.field.code, r.text) : new TextRun({
     text: r.text,
     bold: r.bold || extra.bold || undefined,
     italics: r.italic || extra.italics || undefined,

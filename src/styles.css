@@ -2443,3 +2443,57 @@ h1{font-size:23px}
 .rbGroup[data-level="2"]>.wordRibbonGroupLabel,.rbGroup[data-level="2"]>.rbLauncher{display:none}
 .rbGroup[data-level="2"]>.rbBody{display:none}
 .rbGroup[data-level="2"].rbOpen>.rbBody{display:flex;position:absolute;top:100%;left:0;z-index:45;padding:8px;background:var(--bg-modal);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 34px #000a}
+
+/* ---- equações estruturadas (lib/wordMath.js) ---- */
+.wordRichBody .word-equation.word-math{font-style:normal;padding:1px 4px;cursor:pointer;user-select:all}
+.wordRichBody .word-equation.word-math[data-display="1"]{display:block;text-align:center;margin:8px 0}
+.wordRichBody .word-equation.word-math math{font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-size:1.15em}
+.wordRichBody .word-equation.word-math[data-display="1"] math{font-size:1.3em}
+.word-equation .wm-box{border:1px solid currentColor;padding:2px 4px}
+.wordEqDialog{display:flex;flex-direction:column;gap:8px;min-width:0}
+.wordEqRow{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.wordEqSrc{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;resize:vertical;box-sizing:border-box}
+.wordEqPreview{min-height:56px;display:flex;align-items:center;justify-content:center;border:1px dashed #b8c0d4;border-radius:8px;padding:8px;background:#fff;color:#111;overflow:auto}
+.wordEqPreview math{font-size:1.5em}
+.wordEqTabs,.wordEqChips{display:flex;gap:6px;flex-wrap:wrap}
+.wordEqScroll{max-height:240px;overflow:auto;border:1px solid #d8dce8;border-radius:8px;padding:6px;background:#fff;color:#111}
+.wordEqSection{font-size:12px;font-weight:600;opacity:.7;margin:6px 0 4px}
+.wordEqGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:4px}
+.wordEqCell{display:flex;align-items:center;justify-content:center;min-height:44px;padding:4px;border:1px solid #e1e5f0;border-radius:6px;background:#fafbff;color:#111;cursor:pointer}
+.wordEqCell:hover{background:#eaf0ff;border-color:#9bb2f0}
+.wordEqSyms{grid-template-columns:repeat(auto-fill,minmax(36px,1fr))}
+.wordEqSym{font-size:18px;min-height:34px}
+.wordEqReady{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;padding:6px 8px;margin:2px 0;border:1px solid #e1e5f0;border-radius:6px;background:#fafbff;color:#111;cursor:pointer;text-align:left}
+.wordEqReady:hover{background:#eaf0ff}
+
+/* ---- gramática (lib/wordProof.js) ---- */
+::highlight(word-grammar){text-decoration:underline wavy #2563eb;text-decoration-thickness:1px}
+.wordGrammarBox{display:flex;flex-direction:column;gap:8px}
+.wordGrammarCount{font-size:12px;opacity:.7}
+.wordGrammarMsg{font-weight:600}
+.wordGrammarSentence{padding:8px;border:1px solid #d8dce8;border-radius:8px;background:#fff;color:#111;white-space:pre-wrap}
+.wordGrammarSentence mark{background:#dbe7ff;border-bottom:2px solid #2563eb;padding:0 1px}
+.wordGrammarActions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ---- campos (lib/wordFields.js) ---- */
+.wordRichBody .word-field{background:#eef0f4;border-radius:2px;padding:0 1px;cursor:default}
+.wordRichBody .word-field:hover{background:#dfe4ee}
+.wordRichBody .word-field .wf-code{display:none;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em;color:#555}
+.wordRichBody.word-show-codes .word-field .wf-code,.wordRichBody .word-field[data-show-code="1"] .wf-code{display:inline}
+.wordRichBody.word-show-codes .word-field .wf-result,.wordRichBody .word-field[data-show-code="1"] .wf-result{display:none}
+.wordRichBody .word-field[data-locked="1"]{outline:1px dashed #9aa3b8}
+.wordFieldGroup{margin:4px 0}
+.wordFieldChips{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.wordFieldPreview{margin:8px 0;padding:8px;border:1px solid #d8dce8;border-radius:8px;background:#fff;color:#111}
+.wordFieldErr{color:#b42318}
+.wordFieldHelp{font-size:12px;opacity:.75}
+
+.wordMergeRuleRow{display:flex;gap:6px;align-items:center;margin:4px 0;flex-wrap:wrap}
+
+/* ---- edição de equação no texto + indicadores ---- */
+.wordEqInline{position:fixed;z-index:9999;width:440px;max-width:calc(100vw - 16px);display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #b8c0d4;border-radius:10px;background:#fff;color:#111;box-shadow:0 8px 28px rgba(0,0,0,.22)}
+.wordEqInline textarea{width:100%;box-sizing:border-box;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;resize:none}
+.wordEqInlineBar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.wordEqInlineBar button:last-child{margin-left:auto}
+.wordRichBody .word-equation.word-math[data-eq=""]::after{content:"⬚";opacity:.45;padding:0 .3em}
+.wordRichBody .word-equation.word-math:hover{outline:1px solid #9bb2f0;border-radius:3px}
