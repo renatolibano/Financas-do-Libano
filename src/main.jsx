@@ -49,6 +49,7 @@ import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
 import { findExcerptRanges } from "./lib/excerptHighlight";
+import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
 import { jsPDF } from "jspdf";
@@ -3523,6 +3524,7 @@ function useNoteFormatting(bodyRef, onChange) {
     const rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) { setLinkBar(null); return; }
     setLinkBar({
+      rect: { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
       top: rect.top - 42,
       left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76),
     });
@@ -3668,10 +3670,11 @@ function NoteFormatButtons({ fmt }) {
 // Botão flutuante "Link" + caixinha de digitar a URL. Usa position:fixed,
 // então não depende de nenhum ancestral posicionado - pode ficar em
 // qualquer container.
-function NoteLinkFloatingUI({ fmt }) {
+function NoteLinkFloatingUI({ fmt, ai }) {
   return (
     <>
-      {fmt.linkBar && !fmt.linkPopover && (
+      {ai && <NoteSelectionMenu fmt={fmt} {...ai} textColors={NOTE_TEXT_COLORS} hiliteColors={NOTE_HILITE_COLORS}/>}
+      {!ai && fmt.linkBar && !fmt.linkPopover && (
         <button
           className="noteLinkBarBtn"
           style={{ position: "fixed", top: fmt.linkBar.top, left: fmt.linkBar.left }}
@@ -17087,6 +17090,16 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
   );
 }
 
+// HTML do corpo da nota sem marcas pendentes da IA (aceita o texto novo)
+function noteBodyHtml(el) {
+  if (!el) return "";
+  if (!el.querySelector(".ai-old, .ai-new")) return el.innerHTML;
+  const c = el.cloneNode(true);
+  c.querySelectorAll(".ai-old").forEach(n => n.remove());
+  c.querySelectorAll(".ai-new").forEach(n => n.replaceWith(...n.childNodes));
+  return c.innerHTML;
+}
+
 function NoteEditor({ note, onClose, onSave }) {
   const [title, setTitle] = useState(note.title);
   const saveTimer = useRef(null);
@@ -17117,7 +17130,7 @@ function NoteEditor({ note, onClose, onSave }) {
 
   const handleBodyInput = () => {
     normalizeNoteLists(bodyRef.current);
-    scheduleSave({ content: bodyRef.current?.innerHTML || "" });
+    scheduleSave({ content: noteBodyHtml(bodyRef.current) });
   };
 
   const fmt = useNoteFormatting(bodyRef, handleBodyInput);
@@ -17125,7 +17138,7 @@ function NoteEditor({ note, onClose, onSave }) {
   const handleClose = () => {
     clearTimeout(saveTimer.current);
     // Em modo leitura sem alterações não grava nada (evita mexer em "editado há...").
-    if (!readOnly || dirtyRef.current) onSave({ title: title.trim() || "Sem título", content: bodyRef.current?.innerHTML || "" });
+    if (!readOnly || dirtyRef.current) onSave({ title: title.trim() || "Sem título", content: noteBodyHtml(bodyRef.current) });
     if (document.fullscreenElement) document.exitFullscreen?.().catch(()=>{});
     onClose();
   };
@@ -17157,7 +17170,7 @@ function NoteEditor({ note, onClose, onSave }) {
         </div>
         <div className="noteToolbar" onMouseDown={fmt.keepFocus}>
           {!readOnly && <><NoteFormatButtons fmt={fmt}/><span className="noteToolDivider"/></>}
-          <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: bodyRef.current?.innerHTML || "" })}><Download size={16}/></button>
+          <button title="Baixar esta nota em PDF" onClick={() => downloadNotePdf({ title, content: noteBodyHtml(bodyRef.current) })}><Download size={16}/></button>
         </div>
         <div className="noteEditorBody" onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
           <div
@@ -17173,7 +17186,7 @@ function NoteEditor({ note, onClose, onSave }) {
             onKeyUp={readOnly ? undefined : fmt.updateLinkBar}
             data-placeholder="Escreva o que quiser..."
           />
-          <NoteLinkFloatingUI fmt={fmt}/>
+          <NoteLinkFloatingUI fmt={fmt} ai={readOnly ? null : { bodyRef, onChange: handleBodyInput }}/>
         </div>
       </div>
     </div>
