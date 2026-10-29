@@ -1,2 +1,5 @@
 [functions.translate-suggestions]
 verify_jwt = false
+
+[functions.note-ai]
+verify_jwt = false

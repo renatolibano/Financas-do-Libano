@@ -316,6 +316,90 @@ export function tableLine(text, maxCols = 63) {
   return cols;
 }
 
+// ---- =rand() / =lorem() (wordcraft: cmd/text.rs sample_text) -------------------
+// Fórmula exata no parágrafo, cursor no fim, Enter expande. Contagens fora de 1..200 ou
+// inválidas usam o padrão (5 parágrafos x 3 frases), como no wordcraft.
+const SAMPLE_SENTENCES = {
+  rand: [
+    "A blank page leaves room for a new idea.",
+    "The morning light falls across a notebook on the desk.",
+    "Small changes in spacing can give a story a different rhythm.",
+  ],
+  lorem: [
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+    "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+    "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+  ],
+};
+
+// Devolve a lista de parágrafos a inserir, ou null se o texto não for uma fórmula válida.
+export function sampleText(text) {
+  const name = text.startsWith("=rand(") ? "rand" : text.startsWith("=lorem(") ? "lorem" : null;
+  if (!name) return null;
+  let args = text.slice(name.length + 2);
+  if (!args.endsWith(")")) return null;
+  args = args.slice(0, -1);
+  if (/[()]/.test(args)) return null;
+  const count = (a) => {
+    const t = a.trim();
+    if (!/^\+?\d+$/.test(t)) return null;
+    const n = Number(t);
+    return n >= 1 && n <= 200 ? n : null;
+  };
+  let counts;
+  if (args === "") counts = [5, 3];
+  else if (args.includes(",")) {
+    const i = args.indexOf(",");
+    const p = count(args.slice(0, i)), l = count(args.slice(i + 1));
+    counts = p && l ? [p, l] : null;
+  } else {
+    const p = count(args);
+    counts = p ? [p, 3] : null;
+  }
+  const [paragraphs, lines] = counts || [5, 3];
+  const sentences = SAMPLE_SENTENCES[name];
+  const para = Array.from({ length: lines }, (_, i) => sentences[i % sentences.length]).join(" ");
+  return Array.from({ length: paragraphs }, () => para);
+}
+
+// ---- Alt+X: alterna entre caractere e código Unicode (wordcraft: toggle_unicode) ----
+const hexChar = (code) => {
+  if (!code || code.length > 6 || !/^[0-9a-fA-F]+$/.test(code)) return null;
+  const n = parseInt(code, 16);
+  if (n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return null;
+  const c = String.fromCodePoint(n);
+  return codeable(c) ? c : null;
+};
+const codeable = (c) => !/\p{Cc}/u.test(c) && c !== "\uFFFC";
+const codeOf = (c) => c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+
+// `text` = texto do parágrafo, [from, to] = seleção (from === to: cursor).
+// Devolve { from, to, text } (trecho a substituir) ou null.
+export function toggleUnicode(text, from, to) {
+  if (from !== to) {
+    const sel = text.slice(from, to);
+    const code = /^u\+/i.test(sel) ? sel.slice(2) : sel;
+    const c = hexChar(code);
+    if (c) return { from, to, text: c };
+    const cs = Array.from(sel);
+    if (cs.length === 1 && codeable(cs[0])) return { from, to, text: codeOf(cs[0]) };
+    return null;
+  }
+  const before = text.slice(0, to);
+  let n = 0;
+  while (n < 6 && n < before.length && /[0-9a-fA-F]/.test(before[before.length - 1 - n])) n++;
+  for (let len = n; len >= 1; len--) { // do mais longo ao mais curto; o primeiro que nomeia um caractere vence
+    const at = before.length - len;
+    const c = hexChar(before.slice(at));
+    if (!c) continue;
+    const prefixed = /u\+$/i.test(before.slice(0, at));
+    return { from: prefixed ? at - 2 : at, to, text: c };
+  }
+  const last = Array.from(before).pop();
+  if (last && codeable(last)) return { from: to - last.length, to, text: codeOf(last) };
+  return null;
+}
+
 // ============================================================================
 // Camada DOM (contentEditable)
 // ============================================================================
@@ -404,6 +488,55 @@ export function createAutocorrect({ getBody, getPrefs, getLang, isTracking, befo
 
   const enabled = () => { const p = getPrefs(); return p.enabled && !isTracking(); };
 
+  // =rand()/=lorem() + Enter: independe das opções de AutoCorreção (como no wordcraft).
+  // Com "Controlar Alterações" ligado a fórmula não é expandida.
+  const trySample = (e) => {
+    if (isTracking()) return false;
+    const ctx = context();
+    if (!ctx) return false;
+    const { body, block, off, lineStart, full } = ctx;
+    if (off !== full.length) return false;
+    const start = block === body ? lineStart : 0;
+    const paras = sampleText(full.slice(start));
+    if (!paras) return false;
+    e.preventDefault();
+    busy = true;
+    try {
+      beforeApply?.();
+      if (selectOffsets(body, block, start, off)) {
+        paras.forEach((t) => { document.execCommand("insertText", false, t); document.execCommand("insertParagraph"); });
+      }
+    } finally { busy = false; }
+    afterApply?.();
+    return true;
+  };
+
+  const doToggleUnicode = () => {
+    if (isTracking()) return false;
+    const body = getBody();
+    const sel = window.getSelection();
+    if (!body || !sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    if (!body.contains(range.startContainer) || !body.contains(range.endContainer)) return false;
+    const startEl = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+    if (!startEl || startEl.closest(SKIP_SEL)) return false;
+    const blockEl = startEl.closest(BLOCK_SEL);
+    const block = blockEl && body.contains(blockEl) ? blockEl : body;
+    if (!block.contains(range.endContainer)) return false;
+    const { segs, text } = segmentsOf(block);
+    const r0 = range.cloneRange(); r0.collapse(true);
+    const r1 = range.cloneRange(); r1.collapse(false);
+    const res = toggleUnicode(text, caretOffsetIn(block, segs, r0), caretOffsetIn(block, segs, r1));
+    if (!res) return false;
+    busy = true;
+    try {
+      beforeApply?.();
+      replaceOffsets(body, block, res.from, res.to, res.text);
+    } finally { busy = false; }
+    afterApply?.();
+    return true;
+  };
+
   const applyList = (ctx, trig) => {
     const { body, block, off, lineStart } = ctx;
     if (block.closest("li") || /^H[1-6]$/.test(block.tagName) || (block === body && lineStart > 0)) return false;
@@ -467,6 +600,7 @@ export function createAutocorrect({ getBody, getPrefs, getLang, isTracking, befo
   };
 
   return {
+    toggleUnicode: doToggleUnicode,
     // onBeforeInput: aspas inteligentes.
     onBeforeInput(e) {
       if (busy || !enabled() || !getPrefs().smartQuotes) return;
@@ -493,7 +627,9 @@ export function createAutocorrect({ getBody, getPrefs, getLang, isTracking, befo
     },
     // onKeyDown: Enter encerra a palavra e aplica linhas de borda / tabela "+---+".
     onKeyDown(e) {
-      if (busy || e.isComposing || e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || !enabled()) return;
+      if (busy || e.isComposing || e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (trySample(e)) return;
+      if (!enabled()) return;
       const prefs = getPrefs();
       const ctx = context();
       if (!ctx) return;

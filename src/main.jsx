@@ -78,6 +78,7 @@ import {
 import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
+import WordRuler from "./components/WordRuler";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
 import { CITE_STYLES, citeInText, bibEntryText, orderSources } from "./lib/wordCitations";
 import { buildEquationHtml, mathAutocorrect, parseEquation, toLinear, toLatex } from "./lib/wordMath";
@@ -19202,7 +19203,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
     dictating, dictationSupported, toggleDictation,
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
-    tabStops, tabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
+    tabStops, tabType, setTabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
     insertTOC, insertFootnote, insertBookmark, listBookmarks, goToBookmark, insertVideoEmbed, insertEquation,
     insertCaption, insertTableOfFigures, refreshAllTablesOfFigures, nextFootnote, showFootnotes, insertContentControl,
     phoneticGuide, charBorder, encloseChars, underlineStyle, insertEndnote, showEndnotes,
@@ -19556,109 +19557,6 @@ function WordDrawDialog({ onClose, onInsert, defaultTool = "pen", defaultColor =
 // Inicial/Inserir/Layout/Exibir), igual à ordem e aos grupos do Word de
 // verdade, pra quem já usa (ou vai aprender por tutorial) achar tudo no
 // mesmo lugar.
-
-// Régua horizontal do editor "Word" — margens e recuos de parágrafo
-// arrastáveis, e paradas de tabulação (clique na régua pra criar, arraste
-// pra mover, arraste pra baixo pra apagar), igual ao Word de verdade.
-function WordRuler({
-  pageWidthCm, widthClass, marginLeft, marginRight, onMarginDrag,
-  paraIndent, onIndentLeft, onIndentRight, onIndentFirstLine,
-  tabStops, tabType, onCycleTabType, onAddTab, onMoveTab, onCommitTabOrder, onRemoveTab,
-}) {
-  const trackRef = useRef(null);
-  const dragRef = useRef(null);
-
-  const cmFromClientX = (clientX) => {
-    const rect = trackRef.current?.getBoundingClientRect();
-    if (!rect || !rect.width) return 0;
-    return ((clientX - rect.left) / rect.width) * pageWidthCm;
-  };
-
-  const startDrag = (e, kind, extra) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragRef.current = { kind, startY: e.clientY, deleted: false, ...(extra || {}) };
-    const move = (ev) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const absCm = cmFromClientX(ev.clientX);
-      const cmFromMargin = absCm - marginLeft;
-      if (d.kind === "marginLeft") onMarginDrag("left", Math.max(0, absCm));
-      else if (d.kind === "marginRight") onMarginDrag("right", Math.max(0, pageWidthCm - absCm));
-      else if (d.kind === "indentLeft") onIndentLeft(Math.max(0, cmFromMargin));
-      else if (d.kind === "indentFirstLine") onIndentFirstLine(cmFromMargin - paraIndent.left);
-      else if (d.kind === "indentRight") {
-        const textWidth = pageWidthCm - marginLeft - marginRight;
-        onIndentRight(Math.max(0, textWidth - cmFromMargin));
-      } else if (d.kind === "tab") {
-        const dy = ev.clientY - d.startY;
-        d.deleted = dy > 26;
-        if (!d.deleted) onMoveTab(d.id, Math.max(0, cmFromMargin));
-      }
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      const d = dragRef.current;
-      dragRef.current = null;
-      if (d && d.kind === "tab") {
-        if (d.deleted) onRemoveTab(d.id); else onCommitTabOrder();
-      }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-
-  const handleTrackClick = (e) => {
-    if (e.target !== trackRef.current) return;
-    const cm = cmFromClientX(e.clientX) - marginLeft;
-    if (cm < 0) return;
-    onAddTab(cm);
-  };
-
-  const toPct = (cmFromMargin) => {
-    const abs = marginLeft + cmFromMargin;
-    return Math.max(0, Math.min(100, (abs / pageWidthCm) * 100));
-  };
-
-  const textWidthCm = Math.max(0, pageWidthCm - marginLeft - marginRight);
-  const ticks = [];
-  for (let h = Math.ceil(-marginLeft * 2); h <= Math.floor((pageWidthCm - marginLeft) * 2); h++) ticks.push(h / 2);
-
-  return (
-    <div className="wordRulerBar">
-      <button
-        type="button"
-        className="wordRulerCorner"
-        data-tip="Tipo de tabulação"
-        data-tipdesc="Clique para alternar entre esquerda, centralizada, direita e decimal, depois clique na régua para inserir uma parada."
-        onMouseDown={e => e.preventDefault()}
-        onClick={onCycleTabType}
-      >
-        <span className={"wordRulerTabGlyph wordRulerTabGlyph-" + tabType}/>
-      </button>
-      <div className={widthClass + " wordRulerTrack"} ref={trackRef} onClick={handleTrackClick}>
-        <div className="wordRulerWhite" style={{ left: toPct(0) + "%", width: (textWidthCm / pageWidthCm) * 100 + "%" }}/>
-        {ticks.map((n) => {
-          const isMajor = Number.isInteger(n);
-          return (
-            <div key={n} className={"wordRulerTick" + (isMajor ? " wordRulerTickMajor" : "")} style={{ left: toPct(n) + "%" }}>
-              {isMajor && n !== 0 && <span className="wordRulerNum">{Math.round(n)}</span>}
-            </div>
-          );
-        })}
-        <div className="wordRulerHandle wordRulerHandle-left" data-tip="Margem esquerda" data-tipdesc="Arraste para ajustar a margem esquerda da página." style={{ left: toPct(0) + "%" }} onPointerDown={e => startDrag(e, "marginLeft")}/>
-        <div className="wordRulerHandle wordRulerHandle-right" data-tip="Margem direita" data-tipdesc="Arraste para ajustar a margem direita da página." style={{ left: toPct(textWidthCm) + "%" }} onPointerDown={e => startDrag(e, "marginRight")}/>
-        {tabStops.map(t => (
-          <div key={t.id} className={"wordRulerTab wordRulerTab-" + t.type} data-tip="Parada de tabulação" data-tipdesc="Arraste para reposicionar, ou arraste para baixo para remover." style={{ left: toPct(t.pos) + "%" }} onPointerDown={e => startDrag(e, "tab", { id: t.id })}/>
-        ))}
-        <div className="wordRulerIndent wordRulerIndent-firstline" data-tip="Recuo da primeira linha" style={{ left: toPct(paraIndent.left + paraIndent.firstLine) + "%" }} onPointerDown={e => startDrag(e, "indentFirstLine")}/>
-        <div className="wordRulerIndent wordRulerIndent-left" data-tip="Recuo à esquerda" style={{ left: toPct(paraIndent.left) + "%" }} onPointerDown={e => startDrag(e, "indentLeft")}/>
-        <div className="wordRulerIndent wordRulerIndent-right" data-tip="Recuo à direita" style={{ left: toPct(textWidthCm - paraIndent.right) + "%" }} onPointerDown={e => startDrag(e, "indentRight")}/>
-      </div>
-    </div>
-  );
-}
 
 // ---- extras do Word: gravador de macros, modal genérico e conteúdos prontos ----
 let wordMacroRec = null; // quando não é null, o hook empurra cada comando executado
@@ -20131,6 +20029,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (e.altKey && !mod && (e.key === "=" || e.code === "Equal")) { e.preventDefault(); insertEquationInline(); return; }
+    if (e.altKey && !mod && !e.shiftKey && e.code === "KeyX" && !/Mac/i.test(navigator.platform)) { e.preventDefault(); autocorrect.current.toggleUnicode(); return; }
     if (runFieldKey(e)) return;
     autocorrect.current.onKeyDown(e);
     if (e.defaultPrevented) return;
@@ -21248,9 +21147,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   // seguir o preset "Estreita/Normal/Larga", igual ao Word real quando você
   // arrasta em vez de escolher no menu Margens).
   const setCustomMargin = (side, cm) => {
-    const textMin = 2; // largura mínima da área de texto, em cm
+    const textMin = 2.54; // largura mínima da área de texto (1 pol, como no wordcraft), em cm
     const other = side === "left" ? effMarginRight : effMarginLeft;
-    const clamped = Math.max(0.2, Math.min(cm, pageWidthCm - other - textMin));
+    const clamped = Math.max(0, Math.min(cm, pageWidthCm - other - textMin));
     const rounded = Math.round(clamped * 100) / 100;
     if (side === "left") { setMarginLeftCm(rounded); scheduleSave({ margin_left: rounded }); }
     else { setMarginRightCm(rounded); scheduleSave({ margin_right: rounded }); }
@@ -21974,6 +21873,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
     const shift = e.shiftKey;
     if (e.altKey) {
       if (shift) return false;
+      const mac = /Mac/i.test(navigator.platform);
+      const sym = (mac ? {} : { c: "\u00A9", r: "\u00AE", t: "\u2122", ".": "\u2026" })[kl] || (k === "-" ? "\u2014" : null);
+      if (sym) return run(() => fmt.exec("insertText", sym));
       if (k === "1") return run(() => fmt.applyHeading("H1"));
       if (k === "2") return run(() => fmt.applyHeading("H2"));
       if (k === "3") return run(() => fmt.applyHeading("H3"));
@@ -21983,6 +21885,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
       return false;
     }
     if (shift) {
+      if (k === " ") return run(() => fmt.exec("insertText", "\u00A0"));
+      if (k === "_" || e.code === "Minus") return run(() => fmt.exec("insertText", "\u2011"));
       if (kl === "m") return run(() => fmt.exec("outdent"));
       if (kl === "n") return run(() => fmt.applyHeading("P"));
       if (k === ">" || k === ".") return run(() => fmt.growShrinkFont(1));
@@ -21996,6 +21900,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
       return false;
     }
     if (k === "Enter") return run(fmt.insertPageBreak);
+    if (k === "-") return run(() => fmt.exec("insertText", "\u00AD"));
     if (k === "=") return run(() => fmt.exec("subscript"));
     if (k === "]") return run(() => stepSizePt(1));
     if (k === "[") return run(() => stepSizePt(-1));
@@ -23552,10 +23457,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
             </div>
           )}
           <div className="wordPageWrap" style={{ zoom: zoom / 100 }}>
-            {showRuler && viewMode === "print" && (
+            {showRuler && viewMode === "print" && !readMode && !focusMode && (
               <WordRuler
                 pageWidthCm={pageWidthCm}
-                widthClass={"wordRuler" + (orientation === "paisagem" ? " wordRuler-paisagem" : "") + (pageSize === "carta" ? " wordRuler-carta" : "")}
+                zoom={zoom}
                 marginLeft={effMarginLeft}
                 marginRight={effMarginRight}
                 onMarginDrag={setCustomMargin}
@@ -23565,7 +23470,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 onIndentFirstLine={fmt.setFirstLineIndent}
                 tabStops={fmt.tabStops}
                 tabType={fmt.tabType}
-                onCycleTabType={fmt.cycleTabType}
+                onSetTabType={fmt.setTabType}
                 onAddTab={fmt.addTabStopAt}
                 onMoveTab={fmt.moveTabStop}
                 onCommitTabOrder={fmt.commitTabStopOrder}

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Bold, Italic, Underline, Strikethrough, Code, RemoveFormatting, Link2, Palette, PaintBucket,
   List, ListOrdered, Sparkles, SendHorizontal, Loader2, Undo2, Check, X,
@@ -28,8 +28,26 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
   const rangeRef = useRef(null);
   const marksRef = useRef(null);
   const reqRef = useRef(0);
+  const lastRangeRef = useRef(null); // última seleção válida (o toque no celular pode limpá-la)
 
   const bar = fmt.linkBar;
+
+  useEffect(() => {
+    if (!bar) return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) lastRangeRef.current = sel.getRangeAt(0).cloneRange();
+  }, [bar]);
+
+  // Se o clique no botão desfez a seleção, restaura a última
+  const restoreSelection = () => {
+    const sel = window.getSelection();
+    const r = lastRangeRef.current;
+    if (sel && sel.isCollapsed && r && bodyRef.current?.contains(r.commonAncestorContainer)) {
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+  };
+  const exec = (cmd) => { restoreSelection(); fmt.exec(cmd); };
 
   const finish = () => {
     setAi(null);
@@ -40,6 +58,7 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
   };
 
   const startAi = async (action, instruction) => {
+    restoreSelection();
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
     const text = sel.toString().trim();
@@ -105,6 +124,7 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
   };
 
   const toggleCode = () => {
+    restoreSelection();
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
     const range = sel.getRangeAt(0);
@@ -145,6 +165,7 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
           className="noteSelMenu"
           style={{ position: "fixed", width: MENU_W, ...style }}
           onMouseDown={(e) => { if (e.target.tagName !== "INPUT") e.preventDefault(); }}
+          onClick={(e) => e.stopPropagation()}
         >
           <div className="noteSelRow">
             <div className="emojiWrap">
@@ -155,14 +176,14 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
                 </div>
               )}
             </div>
-            <button title="Negrito" onClick={() => fmt.exec("bold")}><Bold size={15}/></button>
-            <button title="Itálico" onClick={() => fmt.exec("italic")}><Italic size={15}/></button>
-            <button title="Sublinhado" onClick={() => fmt.exec("underline")}><Underline size={15}/></button>
-            <button title="Tachado" onClick={() => fmt.exec("strikeThrough")}><Strikethrough size={15}/></button>
-            <button title="Limpar formatação" onClick={() => fmt.exec("removeFormat")}><RemoveFormatting size={15}/></button>
+            <button title="Negrito" onClick={() => exec("bold")}><Bold size={15}/></button>
+            <button title="Itálico" onClick={() => exec("italic")}><Italic size={15}/></button>
+            <button title="Sublinhado" onClick={() => exec("underline")}><Underline size={15}/></button>
+            <button title="Tachado" onClick={() => exec("strikeThrough")}><Strikethrough size={15}/></button>
+            <button title="Limpar formatação" onClick={() => exec("removeFormat")}><RemoveFormatting size={15}/></button>
           </div>
           <div className="noteSelRow">
-            <button title="Transformar em link" onClick={fmt.openLinkPopover}><Link2 size={15}/></button>
+            <button title="Transformar em link" onClick={() => { restoreSelection(); fmt.openLinkPopover(); }}><Link2 size={15}/></button>
             <div className="emojiWrap">
               <button title="Marca-texto" onClick={() => { fmt.setHiliteOpen(o => !o); fmt.setColorOpen(false); }}><PaintBucket size={15}/></button>
               {fmt.hiliteOpen && (
@@ -174,8 +195,8 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
               )}
             </div>
             <button title="Código" onClick={toggleCode}><Code size={15}/></button>
-            <button title="Lista com marcadores" onClick={() => fmt.exec("insertUnorderedList")}><List size={15}/></button>
-            <button title="Lista numerada" onClick={() => fmt.exec("insertOrderedList")}><ListOrdered size={15}/></button>
+            <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={15}/></button>
+            <button title="Lista numerada" onClick={() => exec("insertOrderedList")}><ListOrdered size={15}/></button>
           </div>
           <div className="noteSelSep"/>
           <div className="noteSelLabel"><Sparkles size={12}/> Habilidades de IA</div>
@@ -196,7 +217,7 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
       )}
 
       {ai && (
-        <div className={"noteAiBar" + (ai.status === "explain" ? " noteAiBarTall" : "")}>
+        <div className={"noteAiBar" + (ai.status === "explain" ? " noteAiBarTall" : "")} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
           {ai.status === "loading" && (<>
             <Loader2 size={16} className="noteAiSpin"/>
             <span className="noteAiMsg">Trabalhando...</span>

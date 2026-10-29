@@ -1749,39 +1749,30 @@ h1{font-size:23px}
 .wordNavPaneSearch{display:flex;align-items:center;gap:6px;padding:8px 9px;color:var(--text-3)}
 .wordNavPaneSearch input{flex:1;background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:7px;padding:6px 8px;color:var(--text-1);font-size:12.5px}
 .wordPageWrap{display:flex;flex-direction:column;align-items:center}
-.wordRulerBar{display:flex;align-items:stretch;flex:0 0 auto;margin-bottom:2px;user-select:none}
-.wordRulerCorner{width:22px;height:22px;flex:0 0 auto;margin-right:1px;border:none;border-radius:2px 0 0 2px;background:#c9c2ab;box-shadow:0 2px 6px #0004;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
-.wordRulerCorner:hover{background:#d6cfb6}
-.wordRulerTrack{position:relative;height:22px;border-radius:0 2px 2px 0;background:#b7ae95;box-shadow:0 2px 6px #0004;flex:0 0 auto;cursor:text;overflow:visible}
-.wordRuler-paisagem{width:1123px}
-.wordRuler-carta{width:816px}
-.wordRuler-carta.wordRuler-paisagem{width:1056px}
-.wordRulerWhite{position:absolute;top:0;bottom:0;background:#f3efe2;pointer-events:none}
-.wordRulerTick{position:absolute;bottom:0;width:1px;height:5px;background:#8a8267;pointer-events:none;transform:translateX(-50%)}
-.wordRulerTickMajor{height:9px;background:#5b5540}
-.wordRulerNum{position:absolute;bottom:9px;left:0;transform:translateX(-50%);font-size:8.5px;line-height:1;color:#5b5540;pointer-events:none;white-space:nowrap}
-.wordRulerHandle{position:absolute;top:0;bottom:0;width:10px;transform:translateX(-50%);cursor:ew-resize;z-index:3}
-.wordRulerHandle::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:transparent;transform:translateX(-50%)}
-.wordRulerHandle:hover::after{background:#2f6fed}
-.wordRulerIndent{position:absolute;width:0;height:0;transform:translateX(-50%);cursor:ew-resize;z-index:4}
-.wordRulerIndent-firstline{top:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #4a4530}
-.wordRulerIndent-firstline:hover{border-top-color:#2f6fed}
-.wordRulerIndent-left,.wordRulerIndent-right{bottom:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:7px solid #4a4530}
-.wordRulerIndent-left:hover,.wordRulerIndent-right:hover{border-bottom-color:#2f6fed}
-.wordRulerTab{position:absolute;bottom:2px;width:9px;height:9px;transform:translateX(-50%);cursor:grab;z-index:4}
-.wordRulerTab-left{border-left:2px solid #2f6fed;border-bottom:2px solid #2f6fed}
-.wordRulerTab-right{border-right:2px solid #2f6fed;border-bottom:2px solid #2f6fed}
-.wordRulerTab-center{border-bottom:2px solid #2f6fed}
-.wordRulerTab-center::after{content:"";position:absolute;left:50%;top:0;bottom:2px;width:2px;background:#2f6fed;transform:translateX(-50%)}
-.wordRulerTab-decimal{border-bottom:2px solid #2f6fed}
-.wordRulerTab-decimal::after{content:"";position:absolute;right:-1px;bottom:-1px;width:2px;height:2px;border-radius:50%;background:#2f6fed}
-.wordRulerTabGlyph{position:relative;display:block;width:10px;height:10px}
-.wordRulerTabGlyph-left{border-left:2px solid #4a4530;border-bottom:2px solid #4a4530}
-.wordRulerTabGlyph-right{border-right:2px solid #4a4530;border-bottom:2px solid #4a4530}
-.wordRulerTabGlyph-center{border-bottom:2px solid #4a4530}
-.wordRulerTabGlyph-center::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;background:#4a4530;transform:translateX(-50%)}
-.wordRulerTabGlyph-decimal{border-bottom:2px solid #4a4530}
-.wordRulerTabGlyph-decimal::after{content:"";position:absolute;right:-1px;bottom:-1px;width:2px;height:2px;border-radius:50%;background:#4a4530}
+/* Régua do editor "Word" (port do wordcraft). Fica presa no topo da área da página, com a largura
+   exata da página (align-self:stretch); a faixa tem 22px e a barra 15px (4 em cima, 3 embaixo). */
+.wordRulerBar{--wr-margin:#b7ae95;--wr-text:#f3efe2;--wr-tick:#5b5540;--wr-line:#4a4530;--wr-ink:#2b2718;--wr-hover:#2f6fed;position:sticky;top:0;z-index:30;align-self:stretch;flex:0 0 auto;height:22px;margin:-26px 0 6px;background:#54575c;user-select:none;-webkit-user-select:none}
+.wordRulerCorner{position:absolute;left:-22px;top:0;width:22px;height:22px;padding:0;border:none;background:#54575c;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.wordRulerCorner svg{display:block}
+.wordRulerCorner .wrBox{fill:var(--wr-text);stroke:var(--wr-line);stroke-width:1}
+.wordRulerCorner:hover .wrBox{fill:var(--wr-margin)}
+.wordRulerTrack{position:absolute;left:0;right:0;top:4px;height:15px;overflow:visible}
+.wordRulerSvg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.wordRulerSvg .wrMargin{fill:var(--wr-margin)}
+.wordRulerSvg .wrText{fill:var(--wr-text)}
+.wordRulerSvg .wrTick{stroke:var(--wr-tick);stroke-width:1;fill:none}
+.wordRulerSvg .wrNum{fill:var(--wr-tick);font-size:9.5px;font-family:Calibri,Arial,sans-serif}
+.wordRulerSvg .wrIndent{fill:var(--wr-text);stroke:var(--wr-line);stroke-width:1;stroke-linejoin:miter}
+.wrInk{stroke:var(--wr-ink);stroke-width:1.5;stroke-linecap:butt}
+.wrInkFill{fill:var(--wr-ink)}
+.wordRulerZone{position:absolute;touch-action:none;z-index:1}
+.wordRulerZone-margin{cursor:ew-resize}
+.wordRulerZone-add{cursor:default}
+.wordRulerZone-tab{cursor:grab}
+.wordRulerZone-indent{cursor:ew-resize}
+.wordRulerZone-tab:hover{background:#2f6fed22}
+.wordRulerGuide{position:fixed;z-index:2500;width:0;border-left:1px dashed #4a4530;pointer-events:none}
+.wordRulerDragTip{position:fixed;z-index:2600;padding:3px 7px;border-radius:4px;background:#1f2125;color:#fff;font-size:11.5px;line-height:1.3;white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px #0006}
 
 .wordPage{position:relative;background:#fff;color:#1a1a1a;box-shadow:0 6px 30px #0007;width:794px;min-height:1123px;display:flex;flex-direction:column;box-sizing:border-box}
 .wordPage-carta{width:816px;min-height:1056px}
@@ -1961,7 +1952,6 @@ h1{font-size:23px}
   .wordRibbonGroupLabel{display:none}
   .wordRibbonGroup{min-width:auto;padding:0 5px}
   .wordPage,.wordPage-carta,.wordPage-paisagem,.wordPage-carta.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.414)}
-  .wordRuler,.wordRuler-paisagem,.wordRuler-carta,.wordRuler-carta.wordRuler-paisagem{width:calc(100vw - 40px)}
   .wordMargin-estreita .wordRichBody{padding:24px}
   .wordMargin-normal .wordRichBody{padding:32px}
   .wordMargin-larga .wordRichBody{padding:44px}
