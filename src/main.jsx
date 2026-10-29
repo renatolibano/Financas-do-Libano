@@ -49,6 +49,7 @@ import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
 import { findExcerptRanges } from "./lib/excerptHighlight";
+import { runNoteAi } from "./lib/noteAi";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
@@ -3716,9 +3717,15 @@ function NoteLinkFloatingUI({ fmt, ai }) {
   );
 }
 
+function isMobileReaderView() {
+  return typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(max-width:760px)").matches;
+}
+
 function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
-  const [pageNum, setPageNum] = useState(book.current_page || 1);
+  const [readPage, setReadPage] = useState(book.current_page || 1); // onde parei de verdade
+  const [previewPage, setPreviewPage] = useState(null); // página só em visualização (ex.: ao ir para uma citação)
+  const pageNum = previewPage ?? readPage; // página exibida
   const [numPages, setNumPages] = useState(book.total_pages || 0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -3753,6 +3760,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     return { added, pages: [...readPagesRef.current].sort((a, b) => a - b) };
   };
   const [textTick, setTextTick] = useState(0); // +1 a cada camada de texto renderizada
+  const [excerptRects, setExcerptRects] = useState([]); // retângulos das citações grifadas na página exibida
+  const [aiCard, setAiCard] = useState(null); // {text, status: "loading"|"done"|"error", result}
+  const aiTokenRef = useRef(0);
+  // Barras (cabeçalho, ferramentas, navegação) escondidas: no celular começam
+  // escondidas e aparecem ao tocar na tela; no computador o botão "Só o livro"
+  // alterna e a escolha fica salva no aparelho.
+  const [uiHidden, setUiHidden] = useState(() => isMobileReaderView() ? true : !!loadLocal("bookReaderUiHidden", false));
+  const [containerW, setContainerW] = useState(0);
   const [editingExcerpt, setEditingExcerpt] = useState(null); // {id, text}
   const setRfKey = (k, v) => setRf(p => ({ ...p, [k]: v }));
 
@@ -3899,6 +3914,23 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     return () => { active = false; };
   }, [pdf, pageNum, reflow]);
 
+  // Reajusta a página à largura quando a área de leitura muda bastante (ex.: ao
+  // ocultar/mostrar as barras ou abrir um painel).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let last = el.clientWidth, timer = 0;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const w = el.clientWidth;
+        if (Math.abs(w - last) >= 24) { last = w; setContainerW(w); }
+      }, 150);
+    });
+    ro.observe(el);
+    return () => { clearTimeout(timer); ro.disconnect(); };
+  }, []);
+
   useEffect(() => {
     if (!pdf || reflow) return;
     let active = true;
@@ -3959,26 +3991,53 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, pageNum, fitWidth, zoom, reflow]);
+  }, [pdf, pageNum, fitWidth, zoom, reflow, containerW]);
 
-  // Citações salvas aparecem marcadas na página (CSS Custom Highlight API,
-  // sem alterar o DOM do PDF).
+  // Citações salvas ficam sempre grifadas (mesmo vermelho da seleção), em
+  // qualquer aparelho: retângulos desenhados sobre o texto, recalculados
+  // quando o layout muda (não depende do CSS Custom Highlight API).
   useEffect(() => {
-    if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight === "undefined") return;
+    const host = reflow ? reflowRef.current : pageWrapRef.current;
     const root = reflow ? reflowRef.current : textLayerRef.current;
     const texts = favoriteExcerpts.filter(h => h.page === pageNum).map(h => h.text);
-    const ranges = findExcerptRanges(root, texts);
-    if (ranges.length) CSS.highlights.set("book-excerpt", new Highlight(...ranges));
-    else CSS.highlights.delete("book-excerpt");
-    return () => { CSS.highlights.delete("book-excerpt"); };
-  }, [favoriteExcerpts, pageNum, reflow, reflowParas, textTick]);
+    if (!host || !root || !texts.length) { setExcerptRects([]); return; }
+    let raf = 0;
+    const compute = () => {
+      const box = host.getBoundingClientRect();
+      const rects = [];
+      findExcerptRanges(root, texts).forEach(r => {
+        for (const c of r.getClientRects()) {
+          if (c.width < 1 || c.height < 1) continue;
+          rects.push({ left: c.left - box.left, top: c.top - box.top, width: c.width, height: c.height });
+        }
+      });
+      setExcerptRects(rects);
+    };
+    compute();
+    const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(compute); };
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+    ro?.observe(host);
+    window.addEventListener("resize", schedule);
+    return () => { cancelAnimationFrame(raf); ro?.disconnect(); window.removeEventListener("resize", schedule); };
+  }, [favoriteExcerpts, pageNum, reflow, reflowParas, textTick, rf, loading]);
+
 
   const goTo = (n) => {
     const clamped = Math.max(1, Math.min(numPages || 1, n));
-    setPageNum(clamped);
+    setPreviewPage(null);
+    setReadPage(clamped);
     if (!readPagesRef.current.has(clamped)) { readPagesRef.current.add(clamped); newReadRef.current++; }
     onProgress(book.id, clamped, takeNewRead);
   };
+
+  // Modo visualização: mostra uma página sem mudar onde parei (nem o progresso).
+  const openPreview = (n) => {
+    const clamped = Math.max(1, Math.min(numPages || 1, n));
+    setPreviewPage(clamped === readPage ? null : clamped);
+  };
+  const navTo = (n) => (previewPage != null ? openPreview(n) : goTo(n));
+  const exitPreview = () => setPreviewPage(null);
+  const commitPreview = () => { if (previewPage != null) goTo(previewPage); };
 
   const zoomIn = () => { setFitWidth(false); setZoom(z => Math.min(3, +(z + 0.15).toFixed(2))); };
   const zoomOut = () => { setFitWidth(false); setZoom(z => Math.max(0.3, +(z - 0.15).toFixed(2))); };
@@ -4023,7 +4082,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const handleJump = (e) => {
     e.preventDefault();
     const n = parseInt(jumpValue, 10);
-    if (!isNaN(n)) goTo(n);
+    if (!isNaN(n)) navTo(n);
     setJumpValue("");
   };
 
@@ -4324,8 +4383,8 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     const handler = (e) => {
       if (panel==="notas") return; // não interfere na digitação das notas
       if (["INPUT","TEXTAREA"].includes(e.target.tagName)) return;
-      if (e.key === "ArrowRight") goTo(pageNum + 1);
-      if (e.key === "ArrowLeft") goTo(pageNum - 1);
+      if (e.key === "ArrowRight") navTo(pageNum + 1);
+      if (e.key === "ArrowLeft") navTo(pageNum - 1);
       if (e.key === "Escape") handleClose();
     };
     window.addEventListener("keydown", handler);
@@ -4333,13 +4392,50 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageNum, numPages, panel]);
 
+  const askAi = async () => {
+    const text = selection?.text || window.getSelection()?.toString().trim();
+    if (!text) return;
+    const token = ++aiTokenRef.current;
+    clearSelection();
+    setAiCard({ text, status: "loading", result: "" });
+    const title = String(book.title || "").slice(0, 80);
+    const { result, error } = await runNoteAi({
+      action: "custom",
+      text,
+      instruction: `Esta frase vem do livro "${title}". Explique o sentido dela de forma simples e direta, em 1 a 3 frases, começando com "O sentido:". Em "result" vai só essa explicação.`,
+    });
+    if (aiTokenRef.current !== token) return;
+    setAiCard(error ? { text, status: "error", result: error } : { text, status: "done", result });
+  };
+  const closeAi = () => { aiTokenRef.current++; setAiCard(null); };
+
+  const toggleUiHidden = () => {
+    const next = !uiHidden;
+    setUiHidden(next);
+    if (!isMobileReaderView()) saveLocal("bookReaderUiHidden", next);
+  };
+  // No celular, tocar na página mostra/esconde as barras.
+  const handleBodyTap = (e) => {
+    if (!isMobileReaderView() || highlightMode) return;
+    if (e.target.closest?.(".pdfSelectionToolbar,.pdfSelectionBox,.pdfSelectionHandle,svg")) return;
+    if (window.getSelection()?.toString().trim()) return;
+    if (imgDragRef.current) return;
+    setUiHidden(h => !h);
+  };
+
+  const excerptLayer = excerptRects.length > 0 ? (
+    <div className="bookExcerptLayer" aria-hidden="true">
+      {excerptRects.map((r, i) => <i key={i} style={{ left: r.left, top: r.top, width: r.width, height: r.height }}/>)}
+    </div>
+  ) : null;
+
   const isFav = favoritePages.includes(pageNum);
   const isImp = importantPages.includes(pageNum);
 
   return (
     <div className="readerBack" onClick={handleClose}>
-      <div ref={modalRef} className={`readerModal${panel ? " readerModalWide" : ""}${fullscreen ? " readerModalFull" : ""}`} onClick={(e)=>e.stopPropagation()}>
-        <div className="readerHead">
+      <div ref={modalRef} className={`readerModal bookReaderModal${uiHidden ? " bookReaderFocus" : ""}${panel ? " readerModalWide" : ""}${fullscreen ? " readerModalFull" : ""}`} onClick={(e)=>e.stopPropagation()}>
+        <div className="readerHead" style={uiHidden?{display:"none"}:undefined}>
           <b>{book.title}</b>
           <div className="readerHeadActions">
             <button className={`ghost${panel==="busca" ? " active" : ""}`} onClick={()=>togglePanel("busca")}>
@@ -4366,7 +4462,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
           </div>
         </div>
 
-        <div className="pdfToolbar">
+        <div className="pdfToolbar" style={uiHidden?{display:"none"}:undefined}>
           <div className="pdfToolbarGroup">
             <button title={highlightMode?"Desativar marca-texto":"Marca-texto — desenhar sobre a página"} className={highlightMode?"active":""} disabled={reflow} onClick={()=>{ toggleHighlightMode(); setHlColorOpen(false); }}>
               <Highlighter size={16}/> <span>Marca-texto</span>
@@ -4454,12 +4550,30 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button title={isFav?"Remover dos favoritos":"Favoritar esta página"} className={isFav?"active":""} onClick={toggleFavorite}><Star size={16} fill={isFav?"currentColor":"none"}/></button>
             <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
+            <button title="Esconder as barras — só o livro" onClick={toggleUiHidden}><EyeOff size={16}/> <span>Só o livro</span></button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
         </div>
 
         <div className="readerMain">
-          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef}>
+          {uiHidden && <button className="bookUiShow" title="Mostrar as barras" onClick={toggleUiHidden}><Eye size={16}/></button>}
+          {previewPage != null && (
+            <div className="bookPreviewBar">
+              <span>Visualizando a página {previewPage}</span>
+              <button onClick={exitPreview}><ArrowLeft size={13}/> Voltar à pág. {readPage}</button>
+              <button className="primary" onClick={commitPreview}><Check size={13}/> Ir para esta página</button>
+            </div>
+          )}
+          {aiCard && (
+            <div className="bookAiCard">
+              <div className="bookAiCardHead"><b><Sparkles size={13}/> IA</b><button title="Fechar" onClick={closeAi}><X size={14}/></button></div>
+              <blockquote>{aiCard.text.length>160 ? aiCard.text.slice(0,160)+"…" : aiCard.text}</blockquote>
+              {aiCard.status==="loading"
+                ? <p className="bookAiCardMsg">Pensando...</p>
+                : <p className={aiCard.status==="error" ? "bookAiCardMsg err" : "bookAiCardBody"}>{aiCard.result}</p>}
+            </div>
+          )}
+          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef} onClick={handleBodyTap}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && reflow && (
@@ -4469,12 +4583,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                 {reflowParas === null && <p>Carregando texto...</p>}
                 {reflowParas && reflowParas.length === 0 && <p>Esta página não tem texto selecionável (PDF escaneado?). Volte ao PDF original.</p>}
                 {reflowParas && reflowParas.map((t, i) => <p key={i}>{t}</p>)}
+                {excerptLayer}
               </div>
             )}
             {!loading && !err && (
               <div ref={pageWrapRef} className="pdfPageWrap" style={reflow?{display:"none"}:undefined} onPointerMove={handleImgPointerMove} onPointerUp={handleImgPointerUp} onPointerLeave={handleImgPointerUp}>
-                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode) goTo(pageNum+1); }}/>
-                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp}/>
+                <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode && !isMobileReaderView()) navTo(pageNum+1); }}/>
+                {!reflow && excerptLayer}
+                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp} onTouchEnd={()=>setTimeout(handleTextMouseUp, 0)}/>
                 {basePageSize.width>0 && (
                   <svg
                     ref={drawSvgRef}
@@ -4513,13 +4629,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
               </div>
             )}
             {selection && (
-              <div className="pdfSelectionToolbar" style={{top:selection.top, left:selection.left}} onMouseDown={e=>e.preventDefault()}>
+              <div className="pdfSelectionToolbar" style={{top:selection.top, left:Math.max(140, Math.min(selection.left, window.innerWidth-140))}} onMouseDown={e=>e.preventDefault()}>
                 {editingExcerpt ? (<>
                   <button onClick={()=>appendToEditing(false)}><Plus size={13}/> Anexar à citação</button>
                   <button onClick={()=>appendToEditing(true)}><Pencil size={13}/> Substituir texto</button>
                 </>) : (
                   <button onClick={addFavoriteExcerpt}><Star size={13}/> Adicionar citação</button>
                 )}
+                <button onClick={askAi}><Sparkles size={13}/> Perguntar à IA</button>
               </div>
             )}
           </div>
@@ -4578,11 +4695,11 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                       </div>
                     ) : (
                       <div key={h.id} className="pdfExcerptItem">
-                        <button className="pdfExcerptText" onClick={()=>{goTo(h.page); setPanel(null);}}>
+                        <button className="pdfExcerptText" onClick={()=>{openPreview(h.page); setPanel(null);}}>
                           <b>Página {h.page}</b>
                           <small>{h.text.length>120 ? h.text.slice(0,120)+"…" : h.text}</small>
                         </button>
-                        <button className="pdfExcerptDelete" title="Editar citação" onClick={()=>{ goTo(h.page); setEditingExcerpt({ id: h.id, text: h.text, page: h.page }); }}><Pencil size={13}/></button>
+                        <button className="pdfExcerptDelete" title="Editar citação" onClick={()=>{ openPreview(h.page); setEditingExcerpt({ id: h.id, text: h.text, page: h.page }); }}><Pencil size={13}/></button>
                         <button className="pdfExcerptDelete" title="Remover citação" onClick={()=>removeFavoriteExcerpt(h.id)}><Trash2 size={13}/></button>
                       </div>
                     ))}
@@ -4645,10 +4762,10 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             </div>
           )}
         </div>
-        <div className="readerNav">
-          <button className="ghost" onClick={()=>goTo(pageNum-1)} disabled={pageNum<=1}>‹ Anterior</button>
+        <div className="readerNav" style={uiHidden?{display:"none"}:undefined}>
+          <button className="ghost" onClick={()=>navTo(pageNum-1)} disabled={pageNum<=1}>‹ Anterior</button>
           <span>{numPages ? `Página ${pageNum} de ${numPages}` : "..."}</span>
-          <button className="ghost" onClick={()=>goTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
+          <button className="ghost" onClick={()=>navTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
         </div>
       </div>
     </div>
