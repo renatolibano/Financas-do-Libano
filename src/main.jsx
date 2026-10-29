@@ -79,6 +79,7 @@ import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks"
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import WordRuler from "./components/WordRuler";
+import { compileFind, findAll, parseReplace, expandReplace, expandRegexReplace, replaceNeedsClipboard, DEFAULT_FIND_OPTS } from "./lib/wordFindPattern";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
 import { CITE_STYLES, citeInText, bibEntryText, orderSources } from "./lib/wordCitations";
 import { buildEquationHtml, mathAutocorrect, parseEquation, toLinear, toLatex } from "./lib/wordMath";
@@ -18206,93 +18207,170 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     try { rec.start(); setDictating(true); } catch { setDictating(false); }
   };
 
-  // ---- localizar / substituir ----
+  // ---- localizar / substituir (lib/wordFindPattern.js, port de find_pattern.rs do WordCraft) ----
+  // Aceita caracteres especiais (^p ^t ^# ^$ ^? ^w …), curingas, regex e as opções do Word. A busca lê o
+  // texto do corpo inteiro (atravessa <b>, <span> e parágrafos); os achados são Ranges destacados com
+  // a CSS Custom Highlight API (sem inserir <mark> no documento).
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [replaceValue, setReplaceValue] = useState("");
   const [findMatches, setFindMatches] = useState([]);
   const [findIndex, setFindIndex] = useState(0);
+  const [findOpts, setFindOpts] = useState(DEFAULT_FIND_OPTS);
+  const [findError, setFindError] = useState("");
+  const [findMore, setFindMore] = useState(false);
+  const findOptsRef = useRef(DEFAULT_FIND_OPTS);
+  const findHooks = useRef({ before: null, busy: false }); // before: checkpoint de undo (definido pelo editor)
+  const findInputRef = useRef(null);
+  const replaceInputRef = useRef(null);
+  const lastFindField = useRef("find");
+
+  const hasHighlightApi = () => typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight !== "undefined";
 
   const clearFindMarks = () => {
+    if (hasHighlightApi()) { CSS.highlights.delete("word-find"); CSS.highlights.delete("word-find-active"); }
     const el = bodyRef.current;
     if (!el) return;
-    el.querySelectorAll("mark.word-find-hit").forEach(m => {
-      const parent = m.parentNode;
+    // <mark> de versões antigas da busca que tenham ficado salvos no documento
+    el.querySelectorAll("mark.word-find-hit").forEach(mk => {
+      const parent = mk.parentNode;
       if (!parent) return;
-      while (m.firstChild) parent.insertBefore(m.firstChild, m);
-      parent.removeChild(m);
+      while (mk.firstChild) parent.insertBefore(mk.firstChild, mk);
+      parent.removeChild(mk);
       parent.normalize();
     });
   };
 
   const resetFindHighlights = () => { clearFindMarks(); setFindMatches([]); setFindIndex(0); };
 
-  const goToMatch = (marks, i) => {
-    marks.forEach(m => m.classList.remove("word-find-hit-active"));
-    const m = marks[i];
-    if (!m) return;
-    m.classList.add("word-find-hit-active");
-    m.scrollIntoView({ block: "center", behavior: "smooth" });
+  // Cada achado se comporta como o antigo <mark> (textContent, parentElement, scrollIntoView).
+  const makeFindItem = ({ range, m }) => ({
+    range, m,
+    get textContent() { return range.toString(); },
+    get parentElement() { const n = range.startContainer; return n.nodeType === 1 ? n : n.parentElement; },
+    scrollIntoView(o) { this.parentElement?.scrollIntoView(o); },
+  });
+
+  const goToMatch = (items, i) => {
+    const it = items[i];
+    if (hasHighlightApi()) {
+      CSS.highlights.set("word-find", new Highlight(...items.map(x => x.range)));
+      if (it) CSS.highlights.set("word-find-active", new Highlight(it.range)); else CSS.highlights.delete("word-find-active");
+    } else if (it) {
+      const sel = window.getSelection();
+      if (sel) { sel.removeAllRanges(); sel.addRange(it.range); }
+    }
+    if (!it) return;
+    it.scrollIntoView({ block: "center", behavior: "smooth" });
     setFindIndex(i);
   };
 
-  const runFind = (query) => {
+  const runFind = (query, opts = findOptsRef.current, at = 0) => {
     clearFindMarks();
     const el = bodyRef.current;
-    if (!el || !query.trim()) { setFindMatches([]); return; }
-    const q = query.toLowerCase();
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const textNodes = [];
-    let node;
-    while ((node = walker.nextNode())) textNodes.push(node);
-    const marks = [];
-    textNodes.forEach(tn => {
-      const text = tn.textContent;
-      const lower = text.toLowerCase();
-      const positions = [];
-      let idx = 0;
-      while ((idx = lower.indexOf(q, idx)) !== -1) { positions.push(idx); idx += q.length; }
-      if (!positions.length) return;
-      const frag = document.createDocumentFragment();
-      let last = 0;
-      positions.forEach(pos => {
-        if (pos > last) frag.appendChild(document.createTextNode(text.slice(last, pos)));
-        const mark = document.createElement("mark");
-        mark.className = "word-find-hit";
-        mark.textContent = text.slice(pos, pos + q.length);
-        frag.appendChild(mark);
-        marks.push(mark);
-        last = pos + q.length;
-      });
-      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-      tn.parentNode.replaceChild(frag, tn);
-    });
-    setFindMatches(marks);
-    if (marks.length) goToMatch(marks, 0); else setFindIndex(0);
+    if (!el || !query) { setFindMatches([]); setFindError(""); setFindIndex(0); return; }
+    const compiled = compileFind(query, opts);
+    if (compiled.error) { setFindError(compiled.error); setFindMatches([]); setFindIndex(0); return; }
+    setFindError("");
+    const items = findAll(el, compiled).map(makeFindItem);
+    setFindMatches(items);
+    if (items.length) goToMatch(items, Math.min(at, items.length - 1)); else setFindIndex(0);
+  };
+
+  const updateFindOpts = (patch) => {
+    const next = { ...findOptsRef.current, ...patch };
+    if (patch.regex) next.wildcards = false;
+    if (patch.wildcards) next.regex = false;
+    findOptsRef.current = next;
+    setFindOpts(next);
+    runFind(findQuery, next);
   };
 
   const findNext = () => { if (findMatches.length) goToMatch(findMatches, (findIndex + 1) % findMatches.length); };
   const findPrev = () => { if (findMatches.length) goToMatch(findMatches, (findIndex - 1 + findMatches.length) % findMatches.length); };
 
-  const replaceCurrent = () => {
-    const m = findMatches[findIndex];
-    if (!m) return;
-    m.textContent = replaceValue;
+  // Coloca `text` no lugar do trecho `range`. Dentro de um único nó de texto e sem quebras, troca os
+  // caracteres no lugar (rápido, mantém a formatação); senão o navegador faz a troca como se fosse
+  // digitada (junta ou separa parágrafos, herda a formatação).
+  const applyReplacement = (range, text) => {
+    const sc = range.startContainer;
+    if (sc === range.endContainer && sc.nodeType === 3 && !/[\r\n]/.test(text)) {
+      sc.replaceData(range.startOffset, range.endOffset - range.startOffset, text);
+      return;
+    }
+    const el = bodyRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    let replaced = false;
+    text.split(/([\r\n])/).forEach(tok => {
+      if (tok === "\r" || tok === "\n") {
+        if (!replaced && !sel.isCollapsed) document.execCommand("delete");
+        document.execCommand(tok === "\r" ? "insertParagraph" : "insertLineBreak");
+        replaced = true;
+      } else if (tok) {
+        document.execCommand("insertText", false, tok);
+        replaced = true;
+      }
+    });
+    if (!replaced && !sel.isCollapsed) document.execCommand("delete");
+  };
+
+  // Texto de "Substituir por" para cada achado ($1/$& com regex, \1 com curingas, ^& e ^c).
+  const prepareReplace = async () => {
+    const opts = findOptsRef.current;
+    const pieces = parseReplace(replaceValue, opts);
+    const clip = replaceNeedsClipboard(pieces) ? await (navigator.clipboard?.readText?.() ?? Promise.resolve("")).catch(() => "") : "";
+    return (mt) => (opts.regex ? expandRegexReplace(replaceValue, mt) : expandReplace(pieces, mt, clip));
+  };
+
+  const doReplace = (items, expand) => {
+    findHooks.current.before?.();
+    findHooks.current.busy = true;
+    try {
+      for (let i = items.length - 1; i >= 0; i--) { // do fim para o começo: os de trás não se deslocam
+        const it = items[i];
+        if (it.range.startContainer.isConnected) applyReplacement(it.range, expand(it.m));
+      }
+    } finally { findHooks.current.busy = false; }
+  };
+
+  const replaceCurrent = async () => {
+    const it = findMatches[findIndex];
+    if (!it) return;
+    const expand = await prepareReplace();
+    const at = findIndex;
+    doReplace([it], expand);
     clearFindMarks();
     setFindMatches([]);
     onChange();
-    setTimeout(() => runFind(findQuery), 0);
+    setTimeout(() => runFind(findQuery, findOptsRef.current, at), 0);
   };
 
-  const replaceAll = () => {
+  const replaceAll = async () => {
     if (!findMatches.length) return;
-    findMatches.forEach(m => { m.textContent = replaceValue; });
+    const expand = await prepareReplace();
+    doReplace(findMatches, expand);
     clearFindMarks();
     setFindMatches([]);
     onChange();
   };
 
-  const closeFind = () => { resetFindHighlights(); setFindOpen(false); setFindQuery(""); setReplaceValue(""); };
+  const closeFind = () => { resetFindHighlights(); setFindOpen(false); setFindQuery(""); setReplaceValue(""); setFindError(""); };
+
+  // Insere um código (ex.: "^p") no campo (Localizar ou Substituir por) que estava em foco.
+  const insertFindCode = (code) => {
+    const field = lastFindField.current;
+    const input = field === "replace" ? replaceInputRef.current : findInputRef.current;
+    if (!input) return;
+    const s = input.selectionStart ?? input.value.length;
+    const e = input.selectionEnd ?? s;
+    const v = input.value.slice(0, s) + code + input.value.slice(e);
+    if (field === "replace") setReplaceValue(v); else { setFindQuery(v); runFind(v); }
+    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(s + code.length, s + code.length); });
+  };
 
   // ---- link (mesmos nomes de campo de useNoteFormatting, de propósito) ----
   const updateLinkBar = () => {
@@ -19195,6 +19273,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertImageFile, applyLineHeight,
     findOpen, setFindOpen, findQuery, setFindQuery, replaceValue, setReplaceValue,
     findMatches, findIndex, runFind, findNext, findPrev, replaceCurrent, replaceAll, closeFind, resetFindHighlights,
+    findOpts, updateFindOpts, findError, findMore, setFindMore, findHooks, findInputRef, replaceInputRef, lastFindField, insertFindCode,
     linkBar, linkPopover, setLinkPopover, openLinkPopover, confirmLink, removeLink, closeLinkPopover, updateLinkBar, handleBodyClick,
     painting, pickPaintFormat, applyPaintFormat, growShrinkFont,
     caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber, togglePrimeiraPaginaDiferente,
@@ -19906,6 +19985,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   };
 
   const handleBodyInput = () => {
+    if (fmt.findHooks.current.busy) return; // substituindo vários achados: o onChange roda uma vez no fim
     if (fmt.findMatches.length) fmt.resetFindHighlights();
     fmt.recalcTabsInBlock?.(fmt.currentBlock?.());
     const html = bodyRef.current?.innerHTML || "";
@@ -21122,6 +21202,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const pageWidthCm = currentPageDimsCm().w;
 
   const fmt = useWordFormatting(bodyRef, handleBodyInput, pageRef, pageWidthCm);
+  fmt.findHooks.current.before = commitHistoryCheckpoint; // "Substituir" vira um passo de Ctrl+Z
 
   // Margens dos presets em cm — bem próximas dos px antigos (48/76/110px a
   // 96dpi), só pra régua e o arrasto terem um número em cm pra partir
@@ -23427,16 +23508,64 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
         )}
         <div className={"wordPageArea" + (designMode ? " wordDesignMode" : "") + (sideToSide ? " wordSideToSide" : "") + (darkPage ? " wordDarkPage" : "") + (immersive ? " wordImmersive" : "") + (lineNumbers ? " wordLineNumbers" : "") + (hyphenation ? " wordHyphens" : "") + (highlightFields ? " wordHighlightFields" : "")} ref={pageAreaRef} onClick={() => { fmt.closeAllPopovers(); setRbMenu(null); }}>
           {fmt.findOpen && (
-            <div className="wordFindBar" onMouseDown={fmt.keepFocus} onClick={e => e.stopPropagation()}>
+            <div className="wordFindBar" onMouseDown={e => { if (!e.target.closest("input,select")) e.preventDefault(); }} onClick={e => e.stopPropagation()}>
               <Search size={13}/>
-              <input placeholder="Localizar" value={fmt.findQuery} onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }}/>
+              <input
+                ref={fmt.findInputRef} autoFocus placeholder="Localizar" value={fmt.findQuery}
+                onFocus={() => { fmt.lastFindField.current = "find"; }}
+                onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) fmt.findPrev(); else fmt.findNext(); } }}
+              />
               <span className="wordFindCount">{fmt.findMatches.length ? `${fmt.findIndex + 1}/${fmt.findMatches.length}` : "0/0"}</span>
               <button data-tip="Anterior" data-tipdesc="Vai para a ocorrência anterior do termo buscado." onClick={fmt.findPrev}><ChevronDown size={13} style={{ transform: "rotate(180deg)" }}/></button>
               <button data-tip="Próximo" data-tipdesc="Vai para a próxima ocorrência do termo buscado." onClick={fmt.findNext}><ChevronDown size={13}/></button>
-              <input placeholder="Substituir por" value={fmt.replaceValue} onChange={e => fmt.setReplaceValue(e.target.value)}/>
+              <input
+                ref={fmt.replaceInputRef} placeholder="Substituir por" value={fmt.replaceValue}
+                onFocus={() => { fmt.lastFindField.current = "replace"; }}
+                onChange={e => fmt.setReplaceValue(e.target.value)}
+              />
               <button className="ghost" onClick={fmt.replaceCurrent}>Substituir</button>
               <button className="ghost" onClick={fmt.replaceAll}>Substituir tudo</button>
+              <button className={fmt.findMore ? "on" : ""} data-tip="Mais opções" data-tipdesc="Diferenciar maiúsculas, palavra inteira, curingas, expressão regular e caracteres especiais (^p, ^t…)." onClick={() => fmt.setFindMore(v => !v)}><SlidersHorizontal size={13}/></button>
               <button onClick={fmt.closeFind}><X size={13}/></button>
+              {fmt.findMore && (
+                <div className="wordFindOpts">
+                  {[
+                    ["matchCase", "Aa", "Diferenciar maiúsculas de minúsculas"],
+                    ["wholeWord", "Palavra inteira", "Localizar apenas palavras inteiras"],
+                    ["prefix", "Prefixo", "Localizar palavras que começam com o texto"],
+                    ["suffix", "Sufixo", "Localizar palavras que terminam com o texto"],
+                    ["ignorePunct", "Ignorar pontuação", "Ignorar os sinais de pontuação ao localizar"],
+                    ["ignoreSpace", "Ignorar espaços", "Ignorar os espaços ao localizar"],
+                    ["wildcards", "Curingas", "Usar curingas: ? * [a-z] [!x] {n,m} @ < > ( ) e \\1 em Substituir por"],
+                    ["regex", "Regex", "Tratar o texto como expressão regular ($1 e $& em Substituir por)"],
+                  ].map(([k, label, tip]) => (
+                    <button key={k} className={fmt.findOpts[k] ? "on" : ""} data-tip={label} data-tipdesc={tip} onClick={() => fmt.updateFindOpts({ [k]: !fmt.findOpts[k] })}>{label}</button>
+                  ))}
+                  <select
+                    value="" data-tip="Especial" data-tipdesc="Insere um caractere especial no campo em foco (Localizar ou Substituir por)."
+                    onChange={e => { if (e.target.value) fmt.insertFindCode(e.target.value); }}
+                  >
+                    <option value="">Especial ▾</option>
+                    <option value="^p">Marca de parágrafo (^p)</option>
+                    <option value="^l">Quebra de linha manual (^l)</option>
+                    <option value="^t">Tabulação (^t)</option>
+                    <option value="^?">Qualquer caractere (^?)</option>
+                    <option value="^#">Qualquer dígito (^#)</option>
+                    <option value="^$">Qualquer letra (^$)</option>
+                    <option value="^w">Espaço em branco (^w)</option>
+                    <option value="^+">Travessão — (^+)</option>
+                    <option value="^=">Meia-risca – (^=)</option>
+                    <option value="^s">Espaço sem quebra (^s)</option>
+                    <option value="^~">Hífen não separável (^~)</option>
+                    <option value="^-">Hífen opcional (^-)</option>
+                    <option value="^^">Acento circunflexo (^^)</option>
+                    <option value="^&">Texto localizado (^&amp;) — em Substituir por</option>
+                    <option value="^c">Área de Transferência (^c) — em Substituir por</option>
+                  </select>
+                </div>
+              )}
+              {fmt.findError && <div className="wordFindErr">{fmt.findError}</div>}
             </div>
           )}
           {focusMode && (

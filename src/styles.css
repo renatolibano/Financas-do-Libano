@@ -1733,6 +1733,12 @@ h1{font-size:23px}
 .wordFindBar>button{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--text-2);flex:0 0 auto}
 .wordFindBar>button:hover{background:var(--bg-surface-3);color:var(--text-1)}
 .wordFindBar>button.ghost{width:auto;padding:0 8px;font-size:11.5px}
+.wordFindBar>button.on{background:var(--bg-surface-3);color:var(--text-1)}
+.wordFindOpts{display:flex;flex-wrap:wrap;gap:4px;flex-basis:100%;padding-top:2px}
+.wordFindOpts button,.wordFindOpts select{background:var(--bg-surface-3);border:1px solid var(--border-soft);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text-2)}
+.wordFindOpts button:hover,.wordFindOpts select:hover{color:var(--text-1)}
+.wordFindOpts button.on{border-color:var(--text-3);color:var(--text-1);box-shadow:inset 0 0 0 1px var(--text-3)}
+.wordFindErr{flex-basis:100%;font-size:11px;color:#e5736d}
 
 .wordPageArea{position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
 .wordPageAreaRow{display:flex;overflow:hidden;min-height:0}
@@ -1817,6 +1823,8 @@ h1{font-size:23px}
 .wordRichBody .word-section-break span{color:#3766c9;font-weight:700}
 .wordRichBody mark.word-find-hit{background:#ffe066;color:inherit}
 .wordRichBody mark.word-find-hit-active{background:#ff9d3d}
+::highlight(word-find){background:#ffe066;color:inherit}
+::highlight(word-find-active){background:#ff9d3d;color:inherit}
 
 .wordStatusBar{display:flex;align-items:center;gap:14px;padding:7px 16px;border-top:1px solid var(--border-soft);background:var(--bg-reader-toolbar);font-size:11px;color:var(--text-3)}
 .wordStatusBadge{display:flex;align-items:center;gap:4px;color:var(--accent);font-weight:700}
