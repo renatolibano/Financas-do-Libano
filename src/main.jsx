@@ -50,6 +50,8 @@ import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
 import { findExcerptRanges } from "./lib/excerptHighlight";
 import { runNoteAi } from "./lib/noteAi";
+import { AudiobookHost } from "./Audiobooks";
+import { useAudioStats } from "./lib/audiobooks";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
@@ -267,6 +269,7 @@ const HOME_PAGE_OPTIONS = [
   { group: "Lembretes", pages: [{key:"Lembretes Comuns", label:"Lembretes comuns"},"Aniversários"] },
   { group: "Geral", pages: ["Calendário","Notas","Cozinha","Gráfico"] },
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
+  { group: "Audiolivros", pages: [{key:"Audiolivros", label:"Dashboard dos audiolivros"},{key:"Audiolivros Ouvindo", label:"Ouvindo agora"},{key:"Audiolivros Ouvidos", label:"Audiolivros que já ouvi"},{key:"Audiolivros Quero Ouvir", label:"Audiolivros que quero ouvir"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF","Word"] },
   { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos","Baixador",{key:"Teste de PC", label:"Meu PC roda?"}] },
 ];
@@ -640,6 +643,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: livrosVisitado});
   const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true, enabled: livrosVisitado});
   const readingStats = useReadingStats(session);
+  // Audiolivros: cadastro/posição sincronizam; os arquivos de áudio ficam só no aparelho.
+  const audiolivrosVisitado = ["Audiolivros","Audiolivros Ouvindo","Audiolivros Ouvidos","Audiolivros Quero Ouvir"].some(k => visitedPages.has(k));
+  const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado});
+  const audioStats = useAudioStats(session, audiolivrosVisitado);
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
   const wordDocs = useEntity("word_documents", initialWordDocuments, session, "desc", {orderable:true, listSelect: "id,title,preview,page_size,orientation,margins,sort_order,updated_at,created_at", enabled: wordVisitado});
@@ -1168,6 +1175,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Livros Lidos", label:"Livros que já li", icon:BookCheck },
       { key:"Livros Para Ler", label:"Livros que quero ler", icon:BookMarked },
     ]},
+    { type:"group", key:"audiolivros", label:"Audiolivros", icon:Headphones, children:[
+      { key:"Audiolivros", label:"Dashboard dos audiolivros", icon:LayoutDashboard },
+      { key:"Audiolivros Ouvindo", label:"Ouvindo agora", icon:Play },
+      { key:"Audiolivros Ouvidos", label:"Audiolivros que já ouvi", icon:CheckCircle2 },
+      { key:"Audiolivros Quero Ouvir", label:"Audiolivros que quero ouvir", icon:Clock3 },
+    ]},
     { type:"group", key:"estudos", label:"Área de Estudos", icon:GraduationCap, children:[
       { key:"Metas de Estudo", label:"Metas", icon:Target },
       { key:"Flashcards", icon:Layers },
@@ -1294,6 +1307,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
       {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats}/>}
+      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} generatedCovers={generatedCovers}/>
       {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
@@ -12025,7 +12039,15 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
                     {st.done ? <><Check size={16}/> Exercício concluído · desfazer</> : "Concluir exercício"}
                   </button>
                   <div className="workoutPlayerActions">
-                    {(it.metric || it.combo?.some(p => p.metric)) && <button type="button" className="ghost" onClick={() => setLoadItemId(it.id)}><Weight size={14}/> Carga</button>}
+                    {(it.metric || it.combo?.some(p => p.metric)) && (() => {
+                      const kind = it.combo?.length ? "carga" : it.metric;
+                      if (kind === "tempo" && Number(it.amount) > 0) return <WorkoutTimerButton seconds={Number(it.amount)}/>;
+                      return (
+                        <button type="button" className="ghost" onClick={() => setLoadItemId(it.id)}>
+                          {kind === "quantidade" ? <><Repeat size={14}/> Repetição</> : kind === "tempo" ? <><Timer size={14}/> Tempo</> : <><Weight size={14}/> Carga</>}
+                        </button>
+                      );
+                    })()}
                     <button type="button" className="ghost" onClick={() => onEditItem(it)}><Pencil size={14}/> Editar</button>
                   </div>
                 </div>
@@ -12042,6 +12064,49 @@ function WorkoutPlayer({ day, title, items, progress, setProgress, openId, setOp
       {zoomItem && <WorkoutGifLightbox item={zoomItem} onClose={() => setZoomItem(null)}/>}
       {loadItem && <WorkoutLoadModal item={loadItem} history={loadHistory} onSave={onSaveLoad} onClose={() => setLoadItemId(null)}/>}
     </div>
+  );
+}
+
+// Cronômetro regressivo para exercícios por tempo: toque para iniciar/pausar, avisa ao zerar.
+function WorkoutTimerButton({ seconds }) {
+  const [left, setLeft] = useState(seconds);
+  const [running, setRunning] = useState(false);
+  useEffect(() => { setLeft(seconds); setRunning(false); }, [seconds]);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setLeft(l => Math.max(0, l - 1)), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+  useEffect(() => {
+    if (!running || left > 0) return;
+    setRunning(false);
+    try { navigator.vibrate?.([300, 150, 300]); } catch (e) {}
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 880;
+      osc.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { osc.stop(); ctx.close(); }, 600);
+    } catch (e) {}
+  }, [left, running]);
+  const mm = String(Math.floor(left / 60)).padStart(2, "0");
+  const ss = String(left % 60).padStart(2, "0");
+  const finished = left === 0;
+  const onClick = () => {
+    if (finished) { setLeft(seconds); setRunning(true); }
+    else setRunning(r => !r);
+  };
+  return (
+    <>
+      <button type="button" className={"ghost" + (running ? " active" : "")} onClick={onClick}>
+        {running ? <Pause size={14}/> : <Play size={14}/>} {finished ? "Reiniciar" : `${mm}:${ss}`}
+      </button>
+      {left !== seconds && !running && !finished && (
+        <button type="button" className="ghost" title="Zerar" onClick={() => setLeft(seconds)}><RotateCcw size={14}/></button>
+      )}
+    </>
   );
 }
 

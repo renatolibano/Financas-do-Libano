@@ -1228,3 +1228,51 @@ create policy "update_own_recipe_images" on storage.objects for update
   using (bucket_id = 'recipe_images' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "delete_own_recipe_images" on storage.objects for delete
   using (bucket_id = 'recipe_images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: aba Audiolivros (estante, player e dashboard)
+-- Os arquivos de áudio ficam só no aparelho (IndexedDB); aqui vai apenas o
+-- cadastro, a posição de onde parou e os marcadores, pra sincronizar.
+create table if not exists audiobooks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  author text,
+  status text not null default 'quero_ouvir' check (status in ('ouvindo','ouvido','quero_ouvir')),
+  tracks jsonb not null default '[]',
+  total_seconds int not null default 0,
+  current_track int not null default 0,
+  current_pos int not null default 0,
+  last_played_at timestamptz,
+  bookmarks jsonb not null default '[]',
+  cover_thumb text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+create table if not exists audio_stats (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  month text not null, -- formato "AAAA-MM"
+  seconds int not null default 0,
+  completed int not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, month)
+);
+alter table audiobooks enable row level security;
+alter table audio_stats enable row level security;
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['audiobooks','audio_stats']
+  loop
+    execute format('drop policy if exists "select_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "insert_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "update_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "delete_own_%1$s" on %1$s', t);
+    execute format('create policy "select_own_%1$s" on %1$s for select using (auth.uid() = user_id)', t);
+    execute format('create policy "insert_own_%1$s" on %1$s for insert with check (auth.uid() = user_id)', t);
+    execute format('create policy "update_own_%1$s" on %1$s for update using (auth.uid() = user_id)', t);
+    execute format('create policy "delete_own_%1$s" on %1$s for delete using (auth.uid() = user_id)', t);
+  end loop;
+end $$;
