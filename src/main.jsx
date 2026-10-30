@@ -3837,6 +3837,9 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   }, [drawingsIdbKey]);
 
   const canvasRef = useRef(null);
+  const zoomRef = useRef(1);
+  zoomRef.current = zoom;
+  const pinchAnchorRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
@@ -3954,19 +3957,30 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
       const baseViewport = page.getViewport({ scale: 1 });
       setBasePageSize({ width: baseViewport.width, height: baseViewport.height });
       const scale = fitWidth
-        ? Math.min(2.2, Math.max(0.3, (containerWidth - 24) / baseViewport.width))
+        ? Math.min(2.2, Math.max(0.3, (containerWidth - (isMobileReaderView() ? 0 : 24)) / baseViewport.width))
         : zoom;
       if (fitWidth) setZoom(scale);
       const viewport = page.getViewport({ scale });
       const canvas = canvasRef.current;
       if (!canvas || !active) return;
       // Renderiza na resolução real da tela (DPR) e só então reduz via CSS,
-      // pra não ficar borrado em telas retina/celular.
-      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      // pra não ficar borrado em telas retina/celular. Limita a área do canvas
+      // (~16M px) pra não falhar em silêncio no iOS quando o zoom é alto.
+      const dpr = Math.min(3, window.devicePixelRatio || 1, Math.sqrt(16e6 / Math.max(1, viewport.width * viewport.height)));
       canvas.width = Math.floor(viewport.width * dpr);
       canvas.height = Math.floor(viewport.height * dpr);
       canvas.style.width = Math.floor(viewport.width) + "px";
       canvas.style.height = Math.floor(viewport.height) + "px";
+      const pa = pinchAnchorRef.current;
+      if (pa) {
+        pinchAnchorRef.current = null;
+        const el = containerRef.current, w = pageWrapRef.current;
+        if (el && w) {
+          const wr = w.getBoundingClientRect(), er = el.getBoundingClientRect();
+          el.scrollLeft = (wr.left - er.left + el.scrollLeft) + pa.fx * viewport.width - pa.cx;
+          el.scrollTop = (wr.top - er.top + el.scrollTop) + pa.fy * viewport.height - pa.cy;
+        }
+      }
       const ctx = canvas.getContext("2d");
       const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
       // Cancela qualquer renderização anterior ainda em andamento nesse mesmo
@@ -4091,6 +4105,61 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     };
     el.addEventListener("wheel", handleWheelZoom, { passive: false });
     return () => el.removeEventListener("wheel", handleWheelZoom);
+  }, []);
+
+  // Zoom com pinça (dois dedos) no celular: escala a página via CSS durante o
+  // gesto e, ao soltar, re-renderiza o PDF no zoom final mantendo o ponto
+  // central da pinça na tela.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let active = false, startDist = 0, ratio = 1, cx = 0, cy = 0, fx = 0, fy = 0;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const reset = () => {
+      const w = pageWrapRef.current;
+      if (w) { w.style.transform = ""; w.style.transformOrigin = ""; }
+    };
+    const onStart = (e) => {
+      const w = pageWrapRef.current;
+      if (e.touches.length !== 2 || !w || w.style.display === "none") return;
+      const er = el.getBoundingClientRect(), wr = w.getBoundingClientRect();
+      cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - er.left;
+      cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - er.top;
+      fx = (cx + er.left - wr.left) / (wr.width || 1);
+      fy = (cy + er.top - wr.top) / (wr.height || 1);
+      startDist = dist(e.touches) || 1;
+      ratio = 1;
+      active = true;
+      w.style.transformOrigin = `${fx * 100}% ${fy * 100}%`;
+    };
+    const onMove = (e) => {
+      if (!active) return;
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      const z0 = zoomRef.current;
+      ratio = Math.min(3 / z0, Math.max(0.3 / z0, dist(e.touches) / startDist));
+      const w = pageWrapRef.current;
+      if (w) w.style.transform = `scale(${ratio})`;
+    };
+    const onEnd = (e) => {
+      if (!active || e.touches.length >= 2) return;
+      active = false;
+      reset();
+      if (Math.abs(ratio - 1) < 0.02) return;
+      pinchAnchorRef.current = { fx, fy, cx, cy };
+      setFitWidth(false);
+      setZoom(Math.min(3, Math.max(0.3, +(zoomRef.current * ratio).toFixed(2))));
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
   }, []);
 
   const handleJump = (e) => {
@@ -4587,7 +4656,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                 : <p className={aiCard.status==="error" ? "bookAiCardMsg err" : "bookAiCardBody"}>{aiCard.result}</p>}
             </div>
           )}
-          <div className={`readerBody${nightMode?" readerBodyNight":""}`} ref={containerRef} onClick={handleBodyTap}>
+          <div className={`readerBody${nightMode?" readerBodyNight":""}${!reflow?" readerBodyFit":""}`} ref={containerRef} onClick={handleBodyTap}>
             {loading && <p className="readerHint">Abrindo PDF...</p>}
             {err && <p className="readerHint">{err}</p>}
             {!loading && !err && reflow && (

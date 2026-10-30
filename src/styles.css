@@ -2571,6 +2571,12 @@ h1{font-size:23px}
 .reflowPage{position:relative;isolation:isolate}
 .reflowPage .bookExcerptLayer{z-index:-1}
 @media (max-width:760px){.bookUiShow{display:none}}
+@media (max-width:760px){
+.readerModalFull{width:100%!important;height:100%!important}
+.bookReaderModal .readerBodyFit{padding:0;touch-action:pan-x pan-y;overscroll-behavior:contain}
+.bookReaderModal .readerBodyFit>.pdfPageWrap{align-self:center}
+.bookReaderModal .readerBodyFit .readerCanvas{border-radius:0;box-shadow:none}
+}
 
 /* ---------- Audiolivros ---------- */
 .abGenCover{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;color:#fff;text-align:center}
