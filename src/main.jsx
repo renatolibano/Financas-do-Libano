@@ -51,6 +51,9 @@ import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
 import { findExcerptRanges } from "./lib/excerptHighlight";
 import { runNoteAi } from "./lib/noteAi";
 import { AudiobookHost } from "./Audiobooks";
+import StravaRuns from "./Strava";
+import { hasPendingStravaCallback } from "./lib/strava";
+import { Footprints } from "lucide-react";
 import { useAudioStats } from "./lib/audiobooks";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
@@ -11050,7 +11053,8 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
   const [playerOpen, setPlayerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
-  const [view, setView] = useState("week"); // "week" | "library"
+  // Se o Strava acabou de redirecionar de volta com o código de autorização, já abre em "runs".
+  const [view, setView] = useState(() => (hasPendingStravaCallback() ? "runs" : "week")); // "week" | "library" | "runs"
   const [playerOpenId, setPlayerOpenId] = useState(null);
   const [sessions, setSessions] = usePersistentState("libano-workout-session", {});
   const [evo, setEvo] = useState(null); // null | { items, title, finished }
@@ -11230,6 +11234,10 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} onClose={() => setEvo(null)}/>;
   }
 
+  if (view === "runs") {
+    return <StravaRuns onBack={() => setView("week")} />;
+  }
+
   if (view === "library") {
     return <WorkoutLibrary
       foldersEntity={foldersEntity}
@@ -11306,6 +11314,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
               </div>
             </>}
           </div>
+          <button className="ghost" onClick={() => setView("runs")}><Footprints size={15}/> Corridas</button>
           <button className="ghost" onClick={() => setView("library")}><Folder size={15}/> Biblioteca</button>
           <button className="ghost" onClick={() => setImportOpen(true)}><ClipboardPaste size={15}/> Colar treino</button>
           <button className="add" onClick={() => setItemModal("new")}><Plus size={16}/> Adicionar treino</button>

@@ -2676,3 +2676,100 @@ h1{font-size:23px}
 .abHeroInfo span{color:var(--text-2);font-size:12px}
 .abHeroPlay{width:54px;height:54px;flex:0 0 auto;display:grid;place-items:center;border-radius:50%;background:var(--accent);color:var(--accent-text-on);box-shadow:0 8px 22px var(--accent-ring)}
 .abRowPlay{width:34px;height:34px;flex:0 0 auto;display:grid;place-items:center;border-radius:50%;background:var(--accent);color:var(--accent-text-on)}
+
+/* ---------- Treino › Corridas (Strava) ---------- */
+.stvTitle{display:flex;align-items:center;gap:10px}
+.stvBack{display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px}
+.stvCard{border:1px solid var(--border);background:var(--bg-surface);border-radius:16px;padding:18px;margin-bottom:16px}
+.stvCenter{display:flex;flex-direction:column;align-items:center;gap:10px;padding:48px 20px;color:var(--text-2)}
+.stvConnect{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:44px 22px}
+.stvConnect h3{margin:0;font-size:20px}
+.stvConnect p{margin:0;max-width:460px;color:var(--text-2);line-height:1.5}
+.stvConnectIcon{width:68px;height:68px;border-radius:20px;background:#fc4c02;display:grid;place-items:center;box-shadow:0 10px 30px #fc4c0255}
+.stvConnectBtn{background:#fc4c02;color:#fff;border:0;border-radius:12px;padding:12px 24px;font-weight:700;font-size:15px;cursor:pointer}
+.stvConnectBtn:hover{filter:brightness(1.08)}
+.stvErr{display:flex;align-items:center;gap:8px;border:1px solid var(--border-danger);background:var(--bg-danger-soft);color:var(--text-1);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:14px}
+.stvMuted{color:var(--text-2);font-size:13px;margin:4px 0 0}
+.stvSpin{animation:stvSpin 1s linear infinite}
+@keyframes stvSpin{to{transform:rotate(360deg)}}
+.stvRanges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.stvRanges button{border:1px solid var(--border);background:var(--bg-surface);color:var(--text-2);border-radius:999px;padding:6px 14px;font-size:13px;cursor:pointer}
+.stvRanges button.active{background:#fc4c02;border-color:#fc4c02;color:#fff;font-weight:700}
+.stvKpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.stvKpi{border:1px solid var(--border);background:var(--bg-surface);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.stvKpiHead{display:flex;align-items:center;gap:6px;color:var(--text-2);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.stvKpi strong{font-size:24px;line-height:1.1;color:var(--text-1)}
+.stvKpiSub{font-size:12px;color:var(--text-3);display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-height:16px}
+.stvDelta{display:inline-flex;align-items:center;gap:3px;font-weight:700;font-size:12px;color:var(--text-2)}
+.stvDelta.good,.stvGoodTxt{color:#3ec46d}
+.stvDelta.bad,.stvBadTxt{color:#f0614f}
+.stvH{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-size:16px}
+.stvSub{margin:18px 0 8px;font-size:13px;color:var(--text-2);font-weight:600}
+.stvInsights{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.stvInsights li{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:var(--bg-surface-2);font-size:14px;line-height:1.45}
+.stvInsights li svg{flex:none;margin-top:2px}
+.stvInsights li.good{border-left:3px solid #3ec46d}.stvInsights li.good svg{color:#3ec46d}
+.stvInsights li.ok{border-left:3px solid var(--text-3)}
+.stvInsights li.warn{border-left:3px solid #f0b429}.stvInsights li.warn svg{color:#f0b429}
+.stvInsights li.bad{border-left:3px solid #f0614f}.stvInsights li.bad svg{color:#f0614f}
+.stvGrid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.stvGrid2 .stvCard{margin-bottom:16px}
+.stvChart{width:100%;height:auto;display:block;margin-top:10px}
+.stvGrid{stroke:var(--border-soft);stroke-width:1}
+.stvAxis{fill:var(--text-3);font-size:11px}
+.stvAvgLine{stroke:var(--text-2);stroke-width:1.5;stroke-dasharray:2 4}
+.stvGoalLine{stroke:#3ec46d;stroke-width:1.5;stroke-dasharray:6 4}
+.stvTrend{fill:none;stroke:#fc4c02;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.stvReg{stroke:var(--text-2);stroke-width:1.5;stroke-dasharray:5 4}
+.stvChartNote{margin-top:6px}
+.stvGoal{display:flex;align-items:center;gap:16px;margin-top:10px}
+.stvRingBg{fill:none;stroke:var(--bg-surface-3);stroke-width:9}
+.stvRingFg{fill:none;stroke:#fc4c02;stroke-width:9;stroke-linecap:round;transition:stroke-dashoffset .6s}
+.stvRingBig{fill:var(--text-1);font-size:20px;font-weight:700}
+.stvRingSmall{fill:var(--text-2);font-size:11px}
+.stvGoalInfo small{color:var(--text-3);letter-spacing:.06em;font-size:11px}
+.stvGoalInfo p{margin:6px 0 0;color:var(--text-2);font-size:14px}
+.stvGoalBtn{display:flex;align-items:center;gap:6px;background:none;border:0;color:var(--text-1);font-size:20px;font-weight:700;padding:0;margin-top:2px;cursor:pointer}
+.stvGoalBtn em{font-style:normal;font-size:12px;font-weight:400;color:var(--text-3)}
+.stvGoalEdit{display:flex;align-items:center;gap:6px;margin-top:4px}
+.stvGoalEdit input{width:64px;padding:6px 8px;font-size:16px}
+.stvHeat{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}
+.stvHeatDays{display:flex;flex-direction:column;gap:3px;font-size:10px;color:var(--text-3)}
+.stvHeatDays span{height:14px;line-height:14px}
+.stvHeatGrid{display:flex;gap:3px}
+.stvHeatCol{display:flex;flex-direction:column;gap:3px}
+.stvHeatCell{width:14px;height:14px;border-radius:4px;background:var(--bg-surface-3);display:block}
+.stvHeatCell.future{opacity:.25}
+.stvWeekdays{display:flex;gap:8px;align-items:flex-end;height:150px;margin-top:16px}
+.stvWd{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%}
+.stvWdBar{flex:1;width:100%;display:flex;align-items:flex-end;background:var(--bg-surface-2);border-radius:8px;overflow:hidden}
+.stvWdBar i{display:block;width:100%;background:#fc4c02;border-radius:8px 8px 0 0;min-height:2px}
+.stvWd span{font-size:12px;color:var(--text-2)}
+.stvRecs{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}
+.stvRec{background:var(--bg-surface-2);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:2px}
+.stvRec small{color:var(--text-2);font-size:12px}
+.stvRec b{font-size:20px}
+.stvRec span{color:var(--text-3);font-size:12px}
+.stvRec.dim{opacity:.55}
+.stvRuns{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.stvRun{border:1px solid var(--border-soft);border-radius:12px;background:var(--bg-surface-2);overflow:hidden}
+.stvRunMain{width:100%;display:flex;align-items:center;gap:12px;background:none;border:0;padding:10px 12px;color:var(--text-1);text-align:left;cursor:pointer}
+.stvRunInfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.stvRunInfo b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px}
+.stvRunInfo small,.stvRunNums small{color:var(--text-2);font-size:12px}
+.stvRunNums{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:14px}
+.stvChev{color:var(--text-3);transition:transform .2s;flex:none}
+.stvRun.open .stvChev{transform:rotate(180deg)}
+.stvRoute{flex:none;border-radius:10px;background:var(--bg-surface-3)}
+.stvRouteEmpty{flex:none;border-radius:10px;background:var(--bg-surface-3);display:grid;place-items:center;color:var(--text-3)}
+.stvRunDetail{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:4px 12px 14px}
+.stvRunStats{flex:1;min-width:200px;display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px}
+.stvRunStats div{display:flex;flex-direction:column;gap:2px}
+.stvRunStats small{color:var(--text-2);font-size:12px}
+.stvRunStats b{font-size:16px}
+.stvMore{margin-top:12px;width:100%}
+@media (max-width:760px){
+.stvCard{padding:14px;border-radius:14px}
+.stvKpi strong{font-size:21px}
+.stvGoal{gap:12px}
+}

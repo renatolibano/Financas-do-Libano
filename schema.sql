@@ -1297,3 +1297,46 @@ create policy "update_own_audiobook_files" on storage.objects for update
   using (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "delete_own_audiobook_files" on storage.objects for delete
   using (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Atualização: integração com o Strava (aba Treino › Corridas)
+-- strava_connections guarda os tokens OAuth e fica SEM policies de propósito: só a
+-- Edge Function "strava" (service role) lê/escreve; o navegador nunca vê os tokens.
+create table if not exists strava_connections (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  athlete_id bigint,
+  athlete_name text,
+  access_token text not null,
+  refresh_token text not null,
+  expires_at bigint not null,
+  scope text,
+  last_synced_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table strava_connections enable row level security;
+
+-- strava_runs: corridas importadas. O navegador só lê; a Edge Function grava.
+create table if not exists strava_runs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  strava_id bigint not null,
+  name text,
+  sport_type text,
+  start_date timestamptz,
+  start_date_local timestamptz,
+  distance double precision not null default 0,
+  moving_time integer not null default 0,
+  elapsed_time integer not null default 0,
+  elevation double precision not null default 0,
+  avg_speed double precision,
+  max_speed double precision,
+  avg_hr double precision,
+  max_hr double precision,
+  avg_cadence double precision,
+  polyline text,
+  created_at timestamptz not null default now(),
+  unique (user_id, strava_id)
+);
+create index if not exists strava_runs_user_date_idx on strava_runs (user_id, start_date_local desc);
+alter table strava_runs enable row level security;
+drop policy if exists "select_own_strava_runs" on strava_runs;
+create policy "select_own_strava_runs" on strava_runs for select using (auth.uid() = user_id);
