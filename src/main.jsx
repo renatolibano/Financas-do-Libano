@@ -1307,7 +1307,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
       {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats}/>}
-      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} generatedCovers={generatedCovers}/>
+      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} generatedCovers={generatedCovers} session={session}/>
       {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}

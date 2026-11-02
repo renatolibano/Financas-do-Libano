@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Headphones, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw, Plus, X, MoreVertical, Trash2, Pencil,
-  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search,
+  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud,
 } from "lucide-react";
 import { usePersistentState } from "./lib/storage";
 import {
   getLocalTrackIds, getTrackBlob, saveTrackBlob, deleteLocalFiles, saveLocalPos, loadLocalPos,
   readAudioDuration, fmtClock, fmtHuman, imageToCoverThumb,
+  uploadTrackToCloud, downloadTrackFromCloud, deleteCloudTracks,
 } from "./lib/audiobooks";
 
 export const AUDIO_PAGE_STATUS = {
@@ -117,7 +118,7 @@ function AudiobookForm({ mode, book, defaultStatus, busy, onClose, onSubmit }) {
             </div>
             <input ref={fileRef} type="file" multiple hidden accept="audio/*,.m4b,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac" onChange={e => { pickFiles(e.target.files); e.target.value = ""; }}/>
             <input ref={dirRef} type="file" hidden webkitdirectory="" directory="" multiple onChange={e => { pickFiles(e.target.files); e.target.value = ""; }}/>
-            <small>{files.length ? `${files.length} arquivo(s) · ${totalMB.toFixed(1)} MB — cada arquivo vira um capítulo, em ordem de nome.` : "Pode ser um arquivo só (m4b/mp3) ou vários capítulos. Ficam guardados neste aparelho."}</small>
+            <small>{files.length ? `${files.length} arquivo(s) · ${totalMB.toFixed(1)} MB — cada arquivo vira um capítulo, em ordem de nome.` : "Pode ser um arquivo só (m4b/mp3) ou vários capítulos. Ficam guardados neste aparelho e, com login, também na nuvem para ouvir em outros aparelhos."}</small>
           </div>
         )}
         <label>Título<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Nome do audiolivro"/></label>
@@ -144,8 +145,11 @@ function AudiobookForm({ mode, book, defaultStatus, busy, onClose, onSubmit }) {
   );
 }
 
-export function AudiobookHost({ page, setPage, entity, stats, generatedCovers }) {
+export function AudiobookHost({ page, setPage, entity, stats, generatedCovers, session }) {
   const { data, add, update, remove, cloud } = entity;
+  const userId = session?.user?.id || null;
+  const userIdRef = useRef(userId); userIdRef.current = userId;
+  const cloudOn = !!(cloud && userId);
   const audioRef = useRef(null);
   const urlRef = useRef(null);
   const attachInputRef = useRef(null);
@@ -232,7 +236,17 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
     const a = audioRef.current;
     if (!t || !a) return;
     setLoadingFile(true);
-    const blob = await getTrackBlob(b.id, t.id);
+    let blob = await getTrackBlob(b.id, t.id);
+    if (!blob && t.cloud && userIdRef.current) {
+      setBusy(`Baixando "${t.name}" da nuvem…`);
+      try {
+        const dl = await downloadTrackFromCloud(userIdRef.current, b.id, t.id);
+        await saveTrackBlob(b.id, t.id, dl);
+        blob = dl;
+        refreshLocal();
+      } catch (e) { console.error(e); }
+      finally { setBusy(null); }
+    }
     if (loadTokenRef.current !== token) return;
     setLoadingFile(false);
     if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
@@ -244,7 +258,7 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
     a.defaultPlaybackRate = rateRef.current;
     a.playbackRate = rateRef.current;
     a.load();
-  }, []);
+  }, [refreshLocal]);
 
   const openBook = useCallback(async (b, opts = {}) => {
     if (!b) return;
@@ -430,6 +444,7 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
     const id = crypto.randomUUID();
     requestPersist();
     const tracks = [];
+    let cloudFail = false;
     try {
       for (let i = 0; i < files.length; i++) {
         setBusy(`Guardando arquivo ${i + 1} de ${files.length}…`);
@@ -437,7 +452,13 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
         const d = await readAudioDuration(f);
         const ok = await saveTrackBlob(id, String(i), f);
         if (!ok) throw new Error("Sem espaço livre no aparelho para guardar este áudio.");
-        tracks.push({ id: String(i), name: cleanName(f.name), file: f.name, dur: Math.round(d), size: f.size });
+        const tr = { id: String(i), name: cleanName(f.name), file: f.name, dur: Math.round(d), size: f.size };
+        if (cloudOn && !cloudFail) {
+          setBusy(`Enviando arquivo ${i + 1} de ${files.length} para a nuvem…`);
+          try { await uploadTrackToCloud(userId, id, tr.id, f); tr.cloud = true; }
+          catch (e) { console.error(e); cloudFail = true; }
+        }
+        tracks.push(tr);
       }
       const cover_thumb = coverFile ? await imageToCoverThumb(coverFile).catch(() => null) : null;
       setBusy("Salvando cadastro…");
@@ -449,10 +470,12 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
       const inserted = await add(row);
       if (cloud && !inserted) throw new Error("Não foi possível salvar o cadastro.");
       await refreshLocal();
+      if (cloudFail) alert("O audiolivro foi salvo neste aparelho, mas não foi possível enviar os arquivos para a nuvem (talvez o arquivo seja maior que o limite do Storage). Ele só tocará aqui.");
       return true;
     } catch (e) {
       console.error(e);
       await deleteLocalFiles(id);
+      await deleteCloudTracks(userId, id, tracks.filter(t => t.cloud).map(t => t.id)).catch(() => {});
       alert(e.message || "Não foi possível adicionar o audiolivro.");
       return false;
     } finally { setBusy(null); }
@@ -504,9 +527,31 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
     if (curId === b.id && status === "ouvindo" && b.status === "ouvido") loadTrack({ ...b, ...patch }, 0, 0, false);
   };
 
+  // Envia para a nuvem os capítulos que ainda só existem neste aparelho.
+  const uploadToCloud = async (b) => {
+    if (!cloudOn) { alert("Faça login para enviar para a nuvem."); return; }
+    const tracks = [...(b.tracks || [])];
+    try {
+      for (let i = 0; i < tracks.length; i++) {
+        if (tracks[i].cloud) continue;
+        setBusy(`Enviando arquivo ${i + 1} de ${tracks.length} para a nuvem…`);
+        const blob = await getTrackBlob(b.id, tracks[i].id);
+        if (!blob) throw new Error("Os arquivos precisam estar neste aparelho para enviar.");
+        await uploadTrackToCloud(userId, b.id, tracks[i].id, blob);
+        tracks[i] = { ...tracks[i], cloud: true };
+      }
+      await update(b.id, { tracks });
+    } catch (e) {
+      console.error(e);
+      if (tracks.some((t, i) => t.cloud && !(b.tracks[i] || {}).cloud)) await update(b.id, { tracks });
+      alert(e.message || "Não foi possível enviar para a nuvem.");
+    } finally { setBusy(null); }
+  };
+
   const deleteBook = async (b) => {
-    if (!window.confirm(`Excluir "${b.title}"? Os arquivos também serão removidos deste aparelho.`)) return;
+    if (!window.confirm(`Excluir "${b.title}"? Os arquivos também serão removidos deste aparelho e da nuvem.`)) return;
     if (curId === b.id) closePlayer();
+    await deleteCloudTracks(userId, b.id, (b.tracks || []).filter(t => t.cloud).map(t => t.id)).catch(() => {});
     await deleteLocalFiles(b.id);
     await remove(b.id);
     refreshLocal();
@@ -521,7 +566,7 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers })
   const live = curBook ? (curBook.tracks || []).slice(0, trackIdx).reduce((n, t) => n + (t.dur || 0), 0) + pos : null;
   const ctl = {
     data, curId, playing, live, localIds, hasFiles, generatedCovers, stats, setPage,
-    openBook, togglePlay, changeStatus, deleteBook, removeLocal, pickFilesFor,
+    openBook, togglePlay, changeStatus, deleteBook, removeLocal, pickFilesFor, uploadToCloud, cloudOn,
     openForm: (f) => setForm(f),
   };
 
@@ -721,7 +766,7 @@ function AudiobookShelf({ ctl, status }) {
               <div className="bookCoverWrap" onClick={() => ctl.openBook(b, { expand: true })}>
                 <AbCover book={b} generated={generatedCovers}/>
                 <div className={"abCoverPlay" + (isCur && playing ? " on" : "")}>{isCur && playing ? <Pause size={22}/> : <Play size={22}/>}</div>
-                {!files && localIds[b.id] !== undefined && <span className="abNoFile" title="Os arquivos não estão neste aparelho"><HardDrive size={11}/> sem arquivo</span>}
+                {!files && localIds[b.id] !== undefined && !(b.tracks || []).every(t => t.cloud) && <span className="abNoFile" title="Os arquivos não estão neste aparelho"><HardDrive size={11}/> sem arquivo</span>}
               </div>
               <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setMenuId(id => id === b.id ? null : b.id); }}><MoreVertical size={16}/></button>
               {menuId === b.id && (
@@ -730,7 +775,8 @@ function AudiobookShelf({ ctl, status }) {
                   {b.status !== "ouvido" && <button onClick={() => { setMenuId(null); ctl.changeStatus(b, "ouvido"); }}>Marcar como ouvido</button>}
                   {b.status !== "quero_ouvir" && <button onClick={() => { setMenuId(null); ctl.changeStatus(b, "quero_ouvir"); }}>Mover para "quero ouvir"</button>}
                   <button onClick={() => { setMenuId(null); ctl.openForm({ mode: "edit", book: b }); }}><Pencil size={13}/> Editar</button>
-                  {!files && <button onClick={() => { setMenuId(null); ctl.pickFilesFor(b); }}><HardDrive size={13}/> Anexar arquivos neste aparelho</button>}
+                  {ctl.cloudOn && files && (b.tracks || []).some(t => !t.cloud) && <button onClick={() => { setMenuId(null); ctl.uploadToCloud(b); }}><Cloud size={13}/> Enviar para a nuvem</button>}
+                  {!files && !(b.tracks || []).every(t => t.cloud) && <button onClick={() => { setMenuId(null); ctl.pickFilesFor(b); }}><HardDrive size={13}/> Anexar arquivos neste aparelho</button>}
                   {(localIds[b.id] || 0) > 0 && <button onClick={() => { setMenuId(null); ctl.removeLocal(b); }}><HardDrive size={13}/> Liberar espaço (remover arquivos)</button>}
                   <button className="danger" onClick={() => { setMenuId(null); ctl.deleteBook(b); }}><Trash2 size={13}/> Excluir</button>
                 </div>

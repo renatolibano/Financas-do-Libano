@@ -1276,3 +1276,24 @@ begin
     execute format('create policy "delete_own_%1$s" on %1$s for delete using (auth.uid() = user_id)', t);
   end loop;
 end $$;
+
+-- Atualização: arquivos de audiolivros na nuvem (para ouvir em outros aparelhos)
+-- Bucket privado; cada aparelho baixa um capítulo só quando for tocá-lo e guarda
+-- uma cópia local (IndexedDB), então o egress é feito uma única vez por capítulo.
+insert into storage.buckets (id, name, public)
+values ('audiobooks', 'audiobooks', false)
+on conflict (id) do nothing;
+
+drop policy if exists "select_own_audiobook_files" on storage.objects;
+drop policy if exists "insert_own_audiobook_files" on storage.objects;
+drop policy if exists "update_own_audiobook_files" on storage.objects;
+drop policy if exists "delete_own_audiobook_files" on storage.objects;
+
+create policy "select_own_audiobook_files" on storage.objects for select
+  using (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "insert_own_audiobook_files" on storage.objects for insert
+  with check (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "update_own_audiobook_files" on storage.objects for update
+  using (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "delete_own_audiobook_files" on storage.objects for delete
+  using (bucket_id = 'audiobooks' and (storage.foldername(name))[1] = auth.uid()::text);

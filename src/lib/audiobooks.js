@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 import { useEntity } from "./useEntity";
+import { supabase } from "./supabaseClient";
 import { idbGet, idbSet, idbDelete } from "./idbStorage";
 import { loadLocal, saveLocal } from "./storage";
 import { currentMonthKey } from "./readingStats";
@@ -10,6 +11,31 @@ import { currentMonthKey } from "./readingStats";
 const trackKey = (bookId, trackId) => `audiobook_blob:${bookId}:${trackId}`;
 const filesKey = (bookId) => `audiobook_files:${bookId}`;
 const posKey = (bookId) => `audiobook-pos:${bookId}`;
+
+// Cópia na nuvem (bucket privado "audiobooks"): permite ouvir em outro aparelho.
+// Cada aparelho baixa um capítulo só quando for tocá-lo e guarda no IndexedDB,
+// então o egress acontece uma única vez por aparelho/capítulo.
+const BUCKET = "audiobooks";
+const cloudPath = (userId, bookId, trackId) => `${userId}/${bookId}/${trackId}`;
+
+export async function uploadTrackToCloud(userId, bookId, trackId, blob) {
+  const { error } = await supabase.storage.from(BUCKET).upload(cloudPath(userId, bookId, trackId), blob, {
+    contentType: blob.type || "audio/mpeg",
+    upsert: true,
+  });
+  if (error) throw error;
+}
+
+export async function downloadTrackFromCloud(userId, bookId, trackId) {
+  const { data, error } = await supabase.storage.from(BUCKET).download(cloudPath(userId, bookId, trackId));
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteCloudTracks(userId, bookId, trackIds) {
+  if (!userId || !trackIds?.length) return;
+  await supabase.storage.from(BUCKET).remove(trackIds.map(id => cloudPath(userId, bookId, id)));
+}
 
 export const getLocalTrackIds = (bookId) => idbGet(filesKey(bookId), []);
 export const getTrackBlob = (bookId, trackId) => idbGet(trackKey(bookId, trackId), null);
