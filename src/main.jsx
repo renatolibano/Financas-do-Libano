@@ -48,7 +48,7 @@ import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
-import { findExcerptRanges } from "./lib/excerptHighlight";
+import { findExcerptRanges, excerptLineRects } from "./lib/excerptHighlight";
 import { runNoteAi } from "./lib/noteAi";
 import { AudiobookHost } from "./Audiobooks";
 import StravaRuns from "./Strava";
@@ -4062,8 +4062,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
       const box = host.getBoundingClientRect();
       const rects = [];
       findExcerptRanges(root, texts).forEach(r => {
-        for (const c of r.getClientRects()) {
-          if (c.width < 1 || c.height < 1) continue;
+        for (const c of excerptLineRects(r)) {
           rects.push({ left: c.left - box.left, top: c.top - box.top, width: c.width, height: c.height });
         }
       });
@@ -13371,7 +13370,9 @@ function Downloader() {
   const [test, setTest] = useState(null); // null | "loading" | { ok, text }
   const savedJob = useRef(null);
 
-  const base = String(cfg?.url || "").trim().replace(/\/+$/, "");
+  // Sem "http(s)://" o navegador trataria o endereço como caminho do próprio app — completa com https://.
+  const rawBase = String(cfg?.url || "").trim().replace(/\/+$/, "");
+  const base = rawBase && !/^https?:\/\//i.test(rawBase) ? "https://" + rawBase : rawBase;
   const configured = !!base;
   const busy = !!job && !["done", "error"].includes(job.status);
 
@@ -13440,6 +13441,7 @@ function Downloader() {
     setTest("loading");
     try {
       const h = await api("/health");
+      if (!h) throw new Error("Esse endereço não respondeu como o servidor do Baixador. Confira o endereço (https://...).");
       setTest({ ok: true, text: `Conectado! yt-dlp ${h.yt_dlp}` });
     } catch (e) { setTest({ ok: false, text: e.message }); }
   };
