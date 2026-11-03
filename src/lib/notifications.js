@@ -114,3 +114,101 @@ export function markFlashcardListStudied(listsEntity, studyGoalsEntity, listId, 
   const updatedLists = listsEntity.data.map(l => l.id === listId ? { ...l, completed: true } : l);
   syncLinkedFlashcardGoalsProgress(studyGoalsEntity, updatedLists, listId, listTitle);
 }
+
+// ---------------------------------------------------------------------------
+// Metas diárias (modo "diaria" em study_goals): "ler N páginas por dia" de um livro ou
+// "ouvir N minutos por dia" de um audiolivro. O progresso do dia fica na própria meta
+// (daily_done + daily_date) e zera sozinho quando a data muda.
+
+const isoToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+export const DAILY_UNIT_LABEL = { paginas: "páginas", minutos: "minutos" };
+
+// Quanto da meta já foi feito hoje.
+export function dailyGoalToday(g) {
+  return g.daily_date === isoToday() ? Number(g.daily_done) || 0 : 0;
+}
+
+// Service worker pronto (ou null se não houver / demorar) — "ready" nunca resolve sem registro.
+async function getSwRegistration() {
+  if (!navigator.serviceWorker) return null;
+  try {
+    return await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(() => r(null), 1500))]);
+  } catch (e) { return null; }
+}
+
+// Fecha a notificação persistente de uma meta diária (se estiver aparecendo).
+export async function closeDailyGoalNotification(goalId) {
+  try {
+    const reg = await getSwRegistration();
+    const list = await reg?.getNotifications({ tag: "daily-goal-" + goalId });
+    list?.forEach(n => n.close());
+  } catch (err) { /* sem service worker: nada a fechar */ }
+}
+
+// Soma progresso (páginas lidas / minutos ouvidos) nas metas diárias ligadas a esse item
+// (source: "livro" | "audiolivro") e avisa quando a meta do dia é batida.
+export function bumpDailyGoals(studyGoalsEntity, source, itemId, amount) {
+  if (!studyGoalsEntity || !(amount > 0)) return;
+  const { data, update } = studyGoalsEntity;
+  const today = isoToday();
+  data.forEach(g => {
+    if (g.mode !== "diaria" || g.link_source !== source || g.link_pdf_id !== itemId || g.status !== "andamento") return;
+    if (g.start_date && g.start_date > today) return;
+    const target = Number(g.daily_target) || 0;
+    if (!target) return;
+    const before = dailyGoalToday(g);
+    const done = Math.round((before + amount) * 100) / 100;
+    update(g.id, { daily_done: done, daily_date: today });
+    if (before < target && done >= target) {
+      closeDailyGoalNotification(g.id);
+      toast(`Meta diária concluída — ${g.title} 🎉`);
+    }
+  });
+}
+
+// Mantém a notificação das metas diárias pendentes: a partir do horário escolhido (daily_notify_time),
+// mostra uma notificação persistente ("ainda falta ...") e a repete de hora em hora se tiver sido
+// dispensada; ela some sozinha assim que a meta do dia é cumprida. Roda a cada minuto e ao voltar pro app.
+// Observação: depende do app estar aberto/em segundo plano — sem servidor de push, o navegador não
+// acorda um app totalmente fechado.
+export async function syncDailyGoalNotifications(goals, { enabled, userId } = {}) {
+  const today = isoToday();
+  const now = new Date();
+  const nowHM = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+  const storageKey = "libano-daily-goal-notified-" + today;
+  let last = {};
+  try { last = JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch (e) { /* ignora */ }
+  const reg = await getSwRegistration();
+
+  for (const g of goals) {
+    if (g.mode !== "diaria" || (userId && g.user_id && g.user_id !== userId)) continue;
+    const target = Number(g.daily_target) || 0;
+    const done = dailyGoalToday(g);
+    const active = g.status === "andamento" && target > 0 && (!g.start_date || g.start_date <= today);
+    if (!active || done >= target) { closeDailyGoalNotification(g.id); continue; }
+    if (!enabled || nowHM < (g.daily_notify_time || "20:00")) continue;
+    if (Date.now() - (last[g.id] || 0) < 60 * 60 * 1000) continue;
+    const tag = "daily-goal-" + g.id;
+    try {
+      if (reg && (await reg.getNotifications({ tag })).length) continue; // ainda na bandeja
+    } catch (e) { /* ignora */ }
+    const left = Math.round((target - done) * 10) / 10;
+    const unit = DAILY_UNIT_LABEL[g.daily_unit] || "";
+    const title = "Meta diária pendente";
+    const body = `${g.title} — faltam ${left} ${unit} hoje.`;
+    last[g.id] = Date.now();
+    try { localStorage.setItem(storageKey, JSON.stringify(last)); } catch (e) { /* ignora */ }
+    playNotifSound();
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        const opts = { body, tag, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png", requireInteraction: true, data: { url: "/" } };
+        if (reg) await reg.showNotification(title, opts);
+        else new Notification(title, opts);
+      }
+    } catch (err) { console.log("[meta diária] não foi possível exibir a notificação", err); }
+  }
+}

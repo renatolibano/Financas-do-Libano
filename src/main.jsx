@@ -18,7 +18,7 @@ import {
   ShoppingCart, ExternalLink, PictureInPicture2, Landmark, FilePlus2, Hand, Crosshair, Lasso, ArrowLeft,
   CalendarDays, PartyPopper, XCircle, CalendarPlus, Flame, Users,
   Tags, Palette, ArchiveRestore, Archive, PaintBucket, AlignLeft, AlignRight, AlignJustify,
-  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, ImageOff, Lock, AlertTriangle,
+  ImageIcon, Copy, ClipboardPaste, Sparkle, Library, ListTree, ImageOff, Lock, LockOpen, AlertTriangle,
   Megaphone, Volume2, PieChart, LineChart, AreaChart, Radar, ScatterChart, Grid3x3,
   Mic, Headphones, Quote, Cpu, MemoryStick, HardDrive, MonitorCheck,
   Strikethrough, Subscript, Superscript, Indent, IndentIncrease, IndentDecrease,
@@ -87,6 +87,7 @@ import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from ".
 import WordRuler from "./components/WordRuler";
 import { compileFind, findAll, parseReplace, expandReplace, expandRegexReplace, replaceNeedsClipboard, DEFAULT_FIND_OPTS } from "./lib/wordFindPattern";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
+import { encryptText, decryptText } from "./lib/noteCrypto";
 import { CITE_STYLES, citeInText, bibEntryText, orderSources } from "./lib/wordCitations";
 import { buildEquationHtml, mathAutocorrect, parseEquation, toLinear, toLatex } from "./lib/wordMath";
 import { FILTER_OPS, opHasValue, selectRecords, mergeRuleOutcome, ruleLabel, RULE_TYPES, MAX_RULES, MAX_SORT_KEYS } from "./lib/wordMerge";
@@ -96,6 +97,7 @@ import { FIELD_GROUPS, fieldHtml, documentContext, evaluateField, updateFields, 
 import {
   playNotifSound, requestNotificationPermission, fireBrowserNotification, toast,
   syncLinkedGoalsProgress, syncLinkedFlashcardGoalsProgress, markFlashcardListStudied,
+  bumpDailyGoals, dailyGoalToday, syncDailyGoalNotifications, DAILY_UNIT_LABEL,
 } from "./lib/notifications";
 import { ReminderCard, ToastHost, notifIcon, NOTIF_KIND_DEFS, NotificationsBell, HandwritingPad } from "./components/shared";
 import { LanguagePicker } from "./components/languagePicker";
@@ -620,7 +622,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Listagem enxuta (sem "content", que é o HTML inteiro da nota — só
   // importa quando ela é aberta). Ver useEntity/fetchFull, que completa a
   // linha inteira nesse momento, igual já acontece com livros/PDFs.
-  const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true, listSelect: "id,title,tags,preview,sort_order,updated_at,deleted_at,created_at"});
+  const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true, listSelect: "id,title,tags,preview,locked,sort_order,updated_at,deleted_at,created_at"});
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
   // Livros e PDFs de estudo carregam cover_thumb (capa em JPEG base64) pra
@@ -648,7 +650,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const readingStats = useReadingStats(session);
   // Audiolivros: cadastro/posição sincronizam; os arquivos de áudio ficam só no aparelho.
   const audiolivrosVisitado = ["Audiolivros","Audiolivros Ouvindo","Audiolivros Ouvidos","Audiolivros Quero Ouvir"].some(k => visitedPages.has(k));
-  const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado});
+  const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado || visitedPages.has("Metas de Estudo")});
   const audioStats = useAudioStats(session, audiolivrosVisitado);
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
@@ -1008,6 +1010,17 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     return ()=>clearInterval(interval);
   },[reminders.data,notifSettings]);
 
+  // Metas diárias pendentes (ler N páginas / ouvir N minutos por dia): mantém a notificação
+  // até a meta do dia ser cumprida. Verifica a cada minuto e ao voltar pro app.
+  useEffect(()=>{
+    const check = ()=>{ syncDailyGoalNotifications(studyGoals.data, { enabled: notifSettings.enabled && notifSettings.kinds["Meta"]!==false, userId: session?.user?.id }); };
+    check();
+    const interval = setInterval(check, 60000);
+    const onVis = ()=>{ if(document.visibilityState==="visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return ()=>{ clearInterval(interval); document.removeEventListener("visibilitychange", onVis); };
+  },[studyGoals.data,notifSettings,session]);
+
   const [aiInsight,setAiInsight] = useState(null);
   const [aiLoading,setAiLoading] = useState(false);
   const [aiError,setAiError] = useState(null);
@@ -1309,12 +1322,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Aniversários" && <Birthdays entity={reminders}/>}
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
-      {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats}/>}
-      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} generatedCovers={generatedCovers} session={session}/>
+      {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats} session={session}/>}
+      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} studyGoals={studyGoals} generatedCovers={generatedCovers} session={session}/>
       {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
-      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
+      {page==="Metas de Estudo" && <StudyGoals entity={studyGoals} studyPdfsList={studyPdfs.data} booksList={books.data} audiobooksList={audiobooks.data} flashcardListsList={studyFlashcardLists.data} session={session}/>}
       {page==="Flashcards" && <StudyFlashcards entity={studyFlashcards} listsEntity={studyFlashcardLists} foldersEntity={studyFlashcardFolders} studyGoals={studyGoals} session={session} openItemId={flashcardsOpenTrigger} onConsumeOpenItem={()=>setFlashcardsOpenTrigger(null)} onOpenChange={setActiveFlashcardsUrlId} closeSignal={flashcardsCloseSignal}/>}
       {page==="Nivelamento" && <Nivelamento/>}
       {page==="Leitor de PDF" && <StudyPdfShelf entity={studyPdfs} session={session} flashcards={studyFlashcards} groupsEntity={studyPdfGroups} studyGoals={studyGoals} openItemId={readerOpenTrigger} onConsumeOpenItem={()=>setReaderOpenTrigger(null)} onOpenChange={setActiveReaderUrlId} closeSignal={readerCloseSignal}/>}
@@ -1776,7 +1789,7 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
         {reminders.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
       </div>
     </div>
-    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row rowClickable" key={n.id} onClick={()=>openNote(n.id)}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{stripHtml(n.content)?.slice(0,40)||"Nota vazia"}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
+    <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row rowClickable" key={n.id} onClick={()=>openNote(n.id)}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{n.locked ? "🔒 Nota protegida" : (stripHtml(n.content)?.slice(0,40)||"Nota vazia")}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
     <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
    </section>
    </div>
@@ -3738,6 +3751,15 @@ function isMobileReaderView() {
   return typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(max-width:760px)").matches;
 }
 
+// No celular, bloqueia o menu nativo do navegador (Copiar/Compartilhar...) ao selecionar
+// texto, deixando só a barra do app. onlyWithSelection: em campos editáveis, só bloqueia
+// quando há texto selecionado (assim o "Colar" nativo do cursor continua disponível).
+function blockNativeSelectionMenu(e, onlyWithSelection = false) {
+  if (!window.matchMedia?.("(pointer:coarse)").matches) return;
+  if (onlyWithSelection) { const s = window.getSelection(); if (!s || s.isCollapsed) return; }
+  e.preventDefault();
+}
+
 function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange, onImportantChange, onFavoriteExcerptsChange, onDrawingsChange }) {
   const [pdf, setPdf] = useState(null);
   const [readPage, setReadPage] = useState(book.current_page || 1); // onde parei de verdade
@@ -3761,7 +3783,10 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
 
   // --- Modo leitura (estilo Kindle): reflow do texto da página com fonte,
   // espaçamento, margem e tema ajustáveis. Preferências ficam no aparelho.
-  const [reflow, setReflow] = usePersistentState("bookReflowOn", false);
+  // No celular o Modo leitura já abre ligado a cada livro (o PDF original é difícil de ler);
+  // no computador continua valendo a última escolha salva.
+  const [reflow, setReflow] = useState(() => isMobileReaderView() ? true : !!loadLocal("bookReflowOn", false));
+  useEffect(() => { if (!isMobileReaderView()) saveLocal("bookReflowOn", reflow); }, [reflow]);
   const [rf, setRf] = usePersistentState("bookReflowPrefs", { size: 20, lh: 1.7, width: 640, font: "serif", align: "justify", theme: "sepia" });
   const [rfOpen, setRfOpen] = useState(false);
   const [reflowParas, setReflowParas] = useState(null); // null = carregando
@@ -4665,7 +4690,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             {!loading && !err && reflow && (
               <div ref={reflowRef} className={`reflowPage reflowFont-${rf.font} reflowTheme-${rf.theme}`}
                 style={{maxWidth: rf.width, fontSize: rf.size, lineHeight: rf.lh, textAlign: rf.align}}
-                onMouseUp={handleReflowSelect} onTouchEnd={handleReflowSelect}>
+                onMouseUp={handleReflowSelect} onTouchEnd={handleReflowSelect} onContextMenu={blockNativeSelectionMenu}>
                 {reflowParas === null && <p>Carregando texto...</p>}
                 {reflowParas && reflowParas.length === 0 && <p>Esta página não tem texto selecionável (PDF escaneado?). Volte ao PDF original.</p>}
                 {reflowParas && reflowParas.map((t, i) => <p key={i}>{t}</p>)}
@@ -4676,7 +4701,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
               <div ref={pageWrapRef} className="pdfPageWrap" style={reflow?{display:"none"}:undefined} onPointerMove={handleImgPointerMove} onPointerUp={handleImgPointerUp} onPointerLeave={handleImgPointerUp}>
                 <canvas ref={canvasRef} className={`readerCanvas${nightMode?" readerCanvasNight":""}`} onClick={()=>{ if(!highlightMode && !isMobileReaderView()) navTo(pageNum+1); }}/>
                 {!reflow && excerptLayer}
-                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp} onTouchEnd={()=>setTimeout(handleTextMouseUp, 0)}/>
+                <div ref={textLayerRef} className="textLayer" onMouseUp={handleTextMouseUp} onTouchEnd={()=>setTimeout(handleTextMouseUp, 0)} onContextMenu={blockNativeSelectionMenu}/>
                 {basePageSize.width>0 && (
                   <svg
                     ref={drawSvgRef}
@@ -4923,7 +4948,10 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
       syncLinkedGoalsProgress(studyGoals, "livro", bookId, b?.title || "", page);
       // Cada página conta uma vez por ciclo de leitura: voltar ou pular pela
       // busca/sumário não soma de novo (o ciclo reinicia em "Ler de novo").
-      if (added > 0) readingStats?.bump({ pages: added });
+      if (added > 0) {
+        readingStats?.bump({ pages: added });
+        bumpDailyGoals(studyGoals, "livro", bookId, added);
+      }
     }, 400);
   };
 
@@ -4933,7 +4961,10 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
 
   const onFavoritesChange = (bookId, favorite_pages) => update(bookId, { favorite_pages });
   const onImportantChange = (bookId, important_pages) => update(bookId, { important_pages });
-  const onFavoriteExcerptsChange = (bookId, favorite_excerpts) => update(bookId, { favorite_excerpts });
+  const onFavoriteExcerptsChange = (bookId, favorite_excerpts) => {
+    removeLocalKey(quotesCacheKey(session?.user?.id)); // Dashboard rebusca as citações
+    update(bookId, { favorite_excerpts });
+  };
   const onDrawingsChange = (bookId, drawings) => update(bookId, { drawings });
 
   // A listagem vem enxuta (sem notes/drawings — ver listSelect em useEntity).
@@ -5176,7 +5207,41 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
   );
 }
 
-function LibraryDashboard({ entity, setPage, readingStats }) {
+const QUOTES_TTL_MS = 15 * 60 * 1000;
+const quotesCacheKey = (uid) => `cache:book_quotes:${uid}`;
+
+// Citações de todos os livros (aba Marcadores do leitor), em ordem aleatória a cada vez que o
+// Dashboard abre. A listagem de livros é enxuta (sem favorite_excerpts), então na nuvem busca só
+// id/título/citações, com cache local (invalidado quando uma citação muda — ver BookShelf).
+function useBookQuotes(entity, session) {
+  const cloud = cloudConfigured && !!session;
+  const userId = session?.user?.id;
+  const [rows, setRows] = useState(() => cloud ? (loadLocal(quotesCacheKey(userId), null)?.data || null) : null);
+  useEffect(() => {
+    if (!cloud) return;
+    const cached = loadLocal(quotesCacheKey(userId), null);
+    if (cached && Date.now() - cached.ts < QUOTES_TTL_MS) { setRows(cached.data); return; }
+    let active = true;
+    supabase.from("books").select("id,title,favorite_excerpts").then(({ data, error }) => {
+      if (error) { console.error(error); if (active) setRows(r => r || []); return; }
+      const slim = (data || []).filter(b => Array.isArray(b.favorite_excerpts) && b.favorite_excerpts.length);
+      saveLocal(quotesCacheKey(userId), { data: slim, ts: Date.now() });
+      if (active) setRows(slim);
+    });
+    return () => { active = false; };
+  }, [cloud, userId]);
+  const source = cloud ? rows : entity.data;
+  const quotes = useMemo(() => {
+    if (!source) return null;
+    const list = [];
+    source.forEach(b => (b.favorite_excerpts || []).forEach(h => { if (h?.text) list.push({ id: b.id + ":" + h.id, text: h.text, title: b.title }); }));
+    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+    return list;
+  }, [source]);
+  return quotes;
+}
+
+function LibraryDashboard({ entity, setPage, readingStats, session }) {
   const generatedCovers = React.useContext(GeneratedCoversContext);
   const { data } = entity;
   const total = data.length;
@@ -5188,6 +5253,7 @@ function LibraryDashboard({ entity, setPage, readingStats }) {
   const mins = Math.round((stats.seconds % 3600) / 60);
   const timeLabel = hours > 0 ? `${hours}h ${mins}min` : (mins > 0 ? `${mins}min` : "—");
   const monthLabel = new Date(currentMonthKey() + "-02").toLocaleDateString("pt-BR", { month: "long" });
+  const quotes = useBookQuotes(entity, session);
 
   return (
     <div className="content">
@@ -5249,6 +5315,20 @@ function LibraryDashboard({ entity, setPage, readingStats }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      <div className="studyGoalsListHead"><h3>Citações</h3></div>
+      {quotes === null && <p className="emptyHint">Carregando citações...</p>}
+      {quotes && quotes.length === 0 && <p className="emptyHint">Nenhuma citação ainda — selecione um trecho no livro e toque em "Adicionar citação".</p>}
+      {quotes && quotes.length > 0 && (
+        <div className="libraryQuotesList">
+          {quotes.map(q => (
+            <figure className="libraryQuote" key={q.id}>
+              <blockquote>“{q.text}”</blockquote>
+              <figcaption>— {q.title}</figcaption>
+            </figure>
+          ))}
         </div>
       )}
     </div>
@@ -16335,6 +16415,10 @@ function studyGoalDaysProgress(g){
   return {current, target, scheduled:false};
 }
 function studyGoalPct(g){
+  if(g.mode==="diaria"){
+    const t = Number(g.daily_target)||0;
+    return t ? Math.min(100, Math.round(dailyGoalToday(g)/t*100)) : 0;
+  }
   if(g.mode==="dias"){
     const {current, target} = studyGoalDaysProgress(g);
     return target ? Math.min(100, Math.round(current/target*100)) : 0;
@@ -16355,6 +16439,7 @@ function studyGoalBadge(g){
   if(g.status==="concluida") return {label:"Concluída", color:"#3ecf6a"};
   if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
   if(g.start_date && g.start_date > todayISO()) return {label:"Agendada", color:"#3ea0ff"};
+  if(g.mode==="diaria") return dailyGoalToday(g) >= (Number(g.daily_target)||0) ? {label:"Hoje: feita", color:"#3ecf6a"} : {label:"Pendente hoje", color: colorHex(g.color)};
   return {label:"Em andamento", color: colorHex(g.color)};
 }
 
@@ -16620,7 +16705,7 @@ function Nivelamento(){
   </div>;
 }
 
-function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=[], session}){
+function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], flashcardListsList=[], session}){
   const {data,add,remove,update} = entity;
   const [filter,setFilter] = useState("todas");
   const [openMenuId,setOpenMenuId] = useState(null);
@@ -16749,7 +16834,9 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
             <div className="studyGoalFoot">
               <div className="studyGoalFootInfoStack">
                 <span className="studyGoalFootInfo">
-                  {g.mode==="dias"
+                  {g.mode==="diaria"
+                    ? <><Flame size={13}/> Hoje: {Math.round(dailyGoalToday(g)*10)/10} / {g.daily_target||0} {DAILY_UNIT_LABEL[g.daily_unit]||""}{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
+                    : g.mode==="dias"
                     ? (daysInfo.scheduled
                         ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
                         : <><Flame size={13}/> Dia {daysInfo.current} de {daysInfo.target}{g.status==="falhou" ? " · congelado na falha" : ""}</>)
@@ -16759,7 +16846,12 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
                           ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
                           : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : ""))}
                 </span>
-                {g.link_source && g.link_source!=="none" && (
+                {g.mode==="diaria" && g.link_pdf_id && (
+                  <span className="studyGoalFootInfo studyGoalFootLink">
+                    {g.link_source==="audiolivro" ? <Headphones size={13}/> : <BookOpen size={13}/>} {(g.link_source==="audiolivro" ? audiobooksList : booksList).find(x=>x.id===g.link_pdf_id)?.title || "Item removido"} · meta diária (atualiza sozinha)
+                  </span>
+                )}
+                {g.mode!=="diaria" && g.link_source && g.link_source!=="none" && (
                   <span className="studyGoalFootInfo studyGoalFootLink">
                     {g.link_source==="flashcards"
                       ? <><Layers size={13}/> Vinculada aos flashcards · {(g.link_list_ids||[]).length} lista(s) (atualiza sozinha)</>
@@ -16787,7 +16879,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
       {filtered.length===0 && <p className="emptyHint">{data.length===0 ? "Crie sua primeira meta de estudo." : "Nenhuma meta nesse filtro."}</p>}
     </div>
 
-    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} flashcardListsList={flashcardListsList}
+    {modal && <StudyGoalModal goal={modal==="new"?null:modal} studyPdfsList={studyPdfsList} booksList={booksList} audiobooksList={audiobooksList} flashcardListsList={flashcardListsList}
       canShare={canShare} partners={partners}
       onClose={()=>setModal(null)} onSave={(payload)=>{
       if(modal==="new") add(payload); else update(modal.id, payload);
@@ -16815,7 +16907,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], flashcardListsList=
   </div>;
 }
 
-function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsList=[], canShare=false, partners=[], onClose, onSave}){
+function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[], flashcardListsList=[], canShare=false, partners=[], onClose, onSave}){
   const [title,setTitle] = useState(goal?.title||"");
   const [description,setDescription] = useState(goal?.description||"");
   const [icon,setIcon] = useState(goal?.icon||"target");
@@ -16834,6 +16926,9 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
   const [linkPageEnd,setLinkPageEnd] = useState(goal?.link_page_end ?? "");
   const [linkListIds,setLinkListIds] = useState(goal?.link_list_ids || []);
   const [shared,setShared] = useState(goal?.shared || false);
+  const [dailySource,setDailySource] = useState(goal?.mode==="diaria" && goal?.link_source==="audiolivro" ? "audiolivro" : "livro");
+  const [dailyTarget,setDailyTarget] = useState(goal?.daily_target || "");
+  const [notifyTime,setNotifyTime] = useState(goal?.daily_notify_time || "20:00");
 
   const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
   const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
@@ -16863,7 +16958,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       icon, color, mode, status,
       ...(canShare ? {shared} : {}),
       percent: mode==="percent" ? Math.min(100,Math.max(0,Number(percent)||0)) : 0,
-      due_date: mode==="dias" ? null : (dueDate || null),
+      due_date: (mode==="dias" || mode==="diaria") ? null : (dueDate || null),
       start_date: startDate || null,
       failed_at: status==="falhou" ? (goal?.failed_at || todayISO()) : null,
       link_source: "none",
@@ -16900,6 +16995,18 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       payload.unit = mode==="count" ? unit.trim() : (mode==="dias" ? "dias" : "");
     }
 
+    if (mode==="diaria") {
+      if (!linkPdfId || !(Number(dailyTarget)>0)) return;
+      payload.target_value = 0; payload.current_value = 0; payload.unit = "";
+      payload.link_source = dailySource;
+      payload.link_pdf_id = linkPdfId;
+      payload.daily_unit = dailySource==="audiolivro" ? "minutos" : "paginas";
+      payload.daily_target = Number(dailyTarget);
+      payload.daily_notify_time = notifyTime || "20:00";
+      if (!goal || goal.link_pdf_id !== linkPdfId) { payload.daily_done = 0; payload.daily_date = null; } // item novo: zera o dia
+      requestNotificationPermission();
+    }
+
     onSave(payload);
   };
 
@@ -16933,6 +17040,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
           <button type="button" className={mode==="percent"?"active":""} onClick={()=>setMode("percent")}>Percentual</button>
           <button type="button" className={mode==="count"?"active":""} onClick={()=>setMode("count")}>Quantidade</button>
           <button type="button" className={mode==="dias"?"active":""} onClick={()=>setMode("dias")}>Por dias</button>
+          <button type="button" className={mode==="diaria"?"active":""} onClick={()=>{setMode("diaria"); setLinkPdfId("");}}>Diária</button>
         </div>
       </label>
 
@@ -16941,6 +17049,26 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], flashcardListsLis
       {mode==="dias" && <>
         <label>Meta (em dias)<input type="number" min="1" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="Ex.: 7"/></label>
         <p className="fieldHint"><Flame size={13}/> A cada dia corrido a partir da data de início, o progresso avança sozinho, sem precisar marcar nada. Se em algum dia você não conseguir manter a meta, marque-a como Falha na lista — o contador congela nesse dia.</p>
+      </>}
+
+      {mode==="diaria" && <>
+        <label>Tipo
+          <div className="modeToggle">
+            <button type="button" className={dailySource==="livro"?"active":""} onClick={()=>{setDailySource("livro"); setLinkPdfId("");}}>Livro (páginas)</button>
+            <button type="button" className={dailySource==="audiolivro"?"active":""} onClick={()=>{setDailySource("audiolivro"); setLinkPdfId("");}}>Audiolivro (minutos)</button>
+          </div>
+        </label>
+        <label>{dailySource==="audiolivro" ? "Audiolivro" : "Livro"}
+          <select value={linkPdfId} onChange={e=>setLinkPdfId(e.target.value)} required>
+            <option value="">Selecione...</option>
+            {(dailySource==="audiolivro" ? audiobooksList : booksList).map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
+          </select>
+        </label>
+        <div className="fieldRow">
+          <label>{dailySource==="audiolivro" ? "Minutos por dia" : "Páginas por dia"}<input type="number" min="1" step="any" value={dailyTarget} onChange={e=>setDailyTarget(e.target.value)} placeholder={dailySource==="audiolivro" ? "Ex.: 30" : "Ex.: 10"} required/></label>
+          <label>Avisar a partir de<input type="time" value={notifyTime} onChange={e=>setNotifyTime(e.target.value)} required/></label>
+        </div>
+        <p className="fieldHint"><Flame size={13}/> O progresso do dia soma sozinho conforme você {dailySource==="audiolivro" ? "ouve" : "lê"}. Se a meta do dia não estiver cumprida, o app avisa a partir desse horário e repete de hora em hora; a notificação some quando você completa. O contador zera todo dia.</p>
       </>}
 
       {mode==="count" && <>
@@ -17025,6 +17153,7 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
   const [openMenuId, setOpenMenuId] = useState(null);
   const [activeNote, setActiveNote] = useState(null);
   const [openingNoteId, setOpeningNoteId] = useState(null);
+  const [pwModal, setPwModal] = useState(null); // {mode: "set"|"unlock"|"remove", note}
   // Avisa o App qual nota está de fato aberta agora, só pra manter a URL
   // certa (ex.: /notas/456) — não afeta a lógica de edição em si.
   useEffect(() => {
@@ -17075,6 +17204,7 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
   // jeito que já acontece com livros/PDFs de estudo.
   const openNote = async (note) => {
     if (!note) return;
+    if (note.locked) { setOpenMenuId(null); setPwModal({ mode: "unlock", note }); return; }
     setOpeningNoteId(note.id);
     try {
       const full = await fetchFull(note.id);
@@ -17148,6 +17278,30 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     if (failed.length) alert("Não foi possível importar:\n" + failed.join("\n"));
   };
 
+  // Senha por nota (ver lib/noteCrypto.js): o conteúdo vai criptografado pro banco e o
+  // "preview" fica vazio, então nada legível sai da nota sem a senha. Devolve uma mensagem
+  // de erro (string) pro modal mostrar, ou null quando deu certo.
+  const handlePwSubmit = async (password) => {
+    const { mode, note } = pwModal;
+    try {
+      const full = cloud ? (await fetchFull(note.id)) || note : note;
+      if (mode === "set") {
+        const content = await encryptText(password, full.content || "");
+        await update(note.id, { locked: true, content, preview: "" });
+      } else {
+        let plain;
+        try { plain = await decryptText(password, full.content || ""); } catch { return "Senha incorreta."; }
+        if (mode === "unlock") setActiveNote({ ...full, content: plain, _pw: password });
+        else await update(note.id, { locked: false, content: plain, preview: stripHtml(plain).trim().slice(0, 200) });
+      }
+      setPwModal(null);
+      return null;
+    } catch (e) {
+      console.error(e);
+      return "Não foi possível concluir: " + (e.message || e);
+    }
+  };
+
   const handleTrash = async (note) => {
     setOpenMenuId(null);
     await update(note.id, { deleted_at: new Date().toISOString() });
@@ -17201,11 +17355,12 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     if (downloadingAll) return;
     setDownloadingAll(true);
     try {
-      if (!cloud) { downloadAllNotesPdf(activeNotes); return; }
+      if (!cloud) { downloadAllNotesPdf(activeNotes.filter(n => !n.locked)); return; }
       const { data: rows, error } = await supabase
         .from("notes")
         .select("*")
         .is("deleted_at", null)
+        .eq("locked", false)
         .order("sort_order", { ascending: true, nullsFirst: false })
         .order("created_at", { ascending: true });
       if (error) throw error;
@@ -17233,7 +17388,7 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     return pool.filter(n => {
       if (tagFilter && view !== "lixeira" && !(n.tags || []).includes(tagFilter)) return false;
       if (!q) return true;
-      const bodyText = n.content != null ? stripHtml(n.content) : (n.preview || "");
+      const bodyText = n.locked ? "" : (n.content != null ? stripHtml(n.content) : (n.preview || ""));
       const hay = (n.title + " " + bodyText + " " + (n.tags || []).join(" ")).toLowerCase();
       return hay.includes(q);
     });
@@ -17298,9 +17453,11 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
             onDrop={(e)=>{ e.preventDefault(); e.stopPropagation(); handleDrop(note.id); }}
             onDragEnd={()=>setDragId(null)}
           >
-            <div className="noteCoverWrap" onClick={() => view==="notas" ? openNote(note) : null}>
+            <div className={"noteCoverWrap"+(note.locked ? " noteCoverLocked" : "")} onClick={() => view==="notas" ? openNote(note) : null}>
               <b className="noteTitle">{note.title}</b>
-              <p className="notePreview">{openingNoteId===note.id ? "Abrindo..." : preview(note)}</p>
+              {note.locked
+                ? <><p className="notePreview noteBlurred" aria-hidden="true">{NOTE_LOCKED_FILLER}</p><div className="noteLockOverlay"><Lock size={28}/></div></>
+                : <p className="notePreview">{openingNoteId===note.id ? "Abrindo..." : preview(note)}</p>}
               <div className="noteTileFoot">
                 {(note.tags||[]).length > 0 && <span className="noteTileTags">{(note.tags||[]).slice(0,3).map(t=>`#${t}`).join(" ")}</span>}
                 <small className="noteTileTime">{view==="lixeira" ? `excluída ${timeAgo(note.deleted_at)}` : (note.updated_at ? `editado ${timeAgo(note.updated_at)}` : "")}</small>
@@ -17312,7 +17469,10 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
             {openMenuId === note.id && view==="notas" && (
               <div className="bookMenu" onClick={e => e.stopPropagation()}>
                 <button onClick={() => { setOpenMenuId(null); openNote(note); }}><StickyNote size={14}/> Abrir</button>
-                <button onClick={() => downloadOneNotePdf(note)}><Download size={14}/> Baixar PDF</button>
+                {!note.locked && <button onClick={() => downloadOneNotePdf(note)}><Download size={14}/> Baixar PDF</button>}
+                {note.locked
+                  ? <button onClick={() => { setOpenMenuId(null); setPwModal({ mode: "remove", note }); }}><LockOpen size={14}/> Remover senha</button>
+                  : <button onClick={() => { setOpenMenuId(null); setPwModal({ mode: "set", note }); }}><Lock size={14}/> Proteger com senha</button>}
                 <button className="danger" onClick={() => handleTrash(note)}><Trash2 size={14}/> Mover para lixeira</button>
               </div>
             )}
@@ -17335,19 +17495,66 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
         <NoteEditor
           note={activeNote}
           onClose={() => setActiveNote(null)}
-          onSave={(patch) => {
+          onSave={async (patch) => {
             const fullPatch = { ...patch, updated_at: new Date().toISOString() };
             // Mantém o "preview" (coluna leve da listagem) em dia sempre que
             // o corpo da nota muda — é o que evita ter que baixar o content
             // inteiro de novo só pra mostrar o resuminho na estante.
             if (patch.content !== undefined) {
-              const text = stripHtml(patch.content).trim();
-              fullPatch.preview = !text ? "" : text.slice(0, 200);
+              if (activeNote.locked && activeNote._pw) {
+                // Nota com senha: grava sempre criptografado e sem preview legível.
+                fullPatch.content = await encryptText(activeNote._pw, patch.content);
+                fullPatch.preview = "";
+              } else {
+                const text = stripHtml(patch.content).trim();
+                fullPatch.preview = !text ? "" : text.slice(0, 200);
+              }
             }
             update(activeNote.id, fullPatch);
           }}
         />
       )}
+      {pwModal && <NotePasswordModal mode={pwModal.mode} noteTitle={pwModal.note.title} onClose={() => setPwModal(null)} onSubmit={handlePwSubmit}/>}
+    </div>
+  );
+}
+
+// Texto "de enchimento" só pra dar forma ao borrão da miniatura de uma nota com senha —
+// nunca é o conteúdo real (que nem chega à listagem).
+const NOTE_LOCKED_FILLER = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ut enim ad minim veniam quis nostrud exercitation";
+
+function NotePasswordModal({ mode, noteTitle, onClose, onSubmit }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const setting = mode === "set";
+  const heading = setting ? "Proteger nota com senha" : (mode === "remove" ? "Remover senha da nota" : "Nota protegida");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (busy || !pw) return;
+    if (setting && pw.length < 4) { setErr("Use pelo menos 4 caracteres."); return; }
+    if (setting && pw !== pw2) { setErr("As senhas não conferem."); return; }
+    setBusy(true); setErr(null);
+    const msg = await onSubmit(pw);
+    if (msg) { setErr(msg); setBusy(false); setPw(""); }
+  };
+
+  return (
+    <div className="modalBack" onClick={onClose}>
+      <form className="modal" onClick={e => e.stopPropagation()} onSubmit={submit}>
+        <div className="modalHead"><h2>{heading}</h2><button type="button" onClick={onClose}><X/></button></div>
+        <p className="authSub">
+          {setting
+            ? <>O conteúdo de “{noteTitle}” passa a ficar criptografado e só abre com esta senha. <b>Se você esquecer a senha, não há como recuperar o texto.</b></>
+            : (mode === "remove" ? <>Digite a senha para deixar “{noteTitle}” sem proteção.</> : <>Digite a senha para abrir “{noteTitle}”.</>)}
+        </p>
+        <label>Senha<input type="password" value={pw} onChange={e => setPw(e.target.value)} autoFocus autoComplete={setting ? "new-password" : "current-password"}/></label>
+        {setting && <label>Confirmar senha<input type="password" value={pw2} onChange={e => setPw2(e.target.value)} autoComplete="new-password"/></label>}
+        {err && <p className="aiErrorMsg">{err}</p>}
+        <button className="primary" type="submit" disabled={busy || !pw}>{busy ? "Aguarde..." : (setting ? "Proteger" : (mode === "remove" ? "Remover senha" : "Abrir"))}</button>
+      </form>
     </div>
   );
 }
@@ -17446,6 +17653,7 @@ function NoteEditor({ note, onClose, onSave }) {
             onPaste={fmt.handlePaste}
             onMouseUp={readOnly ? undefined : fmt.updateLinkBar}
             onKeyUp={readOnly ? undefined : fmt.updateLinkBar}
+            onContextMenu={(e) => blockNativeSelectionMenu(e, !readOnly)}
             data-placeholder="Escreva o que quiser..."
           />
           <NoteLinkFloatingUI fmt={fmt} ai={readOnly ? null : { bodyRef, onChange: handleBodyInput }}/>

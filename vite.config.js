@@ -48,6 +48,8 @@ export default defineConfig({
         // .wasm incluído pra os decodificadores de imagem do pdf.js (ver
         // src/lib/pdf.js) também funcionarem offline, depois da 1ª visita.
         globPatterns: ["**/*.{js,mjs,css,html,png,svg,ico,wasm}"],
+        // Clique em notificação (metas diárias) abre o app — ver public/sw-notify.js
+        importScripts: ["/sw-notify.js"],
         // O app cresceu e o bundle principal passou do limite padrão de
         // pré-cache do Workbox (2 MiB), o que quebra o build. Aumentando
         // esse teto pra caber o app inteiro — o ideal a longo prazo é

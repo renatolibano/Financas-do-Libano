@@ -4,6 +4,7 @@ import {
   BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud,
 } from "lucide-react";
 import { usePersistentState } from "./lib/storage";
+import { bumpDailyGoals } from "./lib/notifications";
 import {
   getLocalTrackIds, getTrackBlob, saveTrackBlob, deleteLocalFiles, saveLocalPos, loadLocalPos,
   readAudioDuration, fmtClock, fmtHuman, imageToCoverThumb,
@@ -145,7 +146,7 @@ function AudiobookForm({ mode, book, defaultStatus, busy, onClose, onSubmit }) {
   );
 }
 
-export function AudiobookHost({ page, setPage, entity, stats, generatedCovers, session }) {
+export function AudiobookHost({ page, setPage, entity, stats, studyGoals, generatedCovers, session }) {
   const { data, add, update, remove, cloud } = entity;
   const userId = session?.user?.id || null;
   const userIdRef = useRef(userId); userIdRef.current = userId;
@@ -175,6 +176,7 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers, s
   const dataRef = useRef(data); dataRef.current = data;
   const updateRef = useRef(update); updateRef.current = update;
   const statsRef = useRef(stats); statsRef.current = stats;
+  const goalsRef = useRef(studyGoals); goalsRef.current = studyGoals;
   const curBook = useMemo(() => data.find(b => b.id === curId) || null, [data, curId]);
   const bookRef = useRef(null); bookRef.current = curBook;
   const trackIdxRef = useRef(0);
@@ -210,7 +212,13 @@ export function AudiobookHost({ page, setPage, entity, stats, generatedCovers, s
   }, []);
   const flushStats = useCallback((minSec) => {
     const s = listenedRef.current;
-    if (s >= minSec) { listenedRef.current = 0; statsRef.current?.bump({ seconds: Math.round(s) }); }
+    if (s >= minSec) {
+      listenedRef.current = 0;
+      statsRef.current?.bump({ seconds: Math.round(s) });
+      // Metas diárias de audiolivro (em minutos)
+      const b = bookRef.current;
+      if (b) bumpDailyGoals(goalsRef.current, "audiolivro", b.id, s / 60);
+    }
   }, []);
 
   useEffect(() => {

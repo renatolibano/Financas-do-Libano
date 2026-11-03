@@ -1340,3 +1340,23 @@ create index if not exists strava_runs_user_date_idx on strava_runs (user_id, st
 alter table strava_runs enable row level security;
 drop policy if exists "select_own_strava_runs" on strava_runs;
 create policy "select_own_strava_runs" on strava_runs for select using (auth.uid() = user_id);
+
+-- Atualização: senha por nota. O conteúdo de uma nota protegida é guardado
+-- criptografado no próprio app (AES-GCM, ver src/lib/noteCrypto.js) e o
+-- "preview" fica vazio — "locked" só diz se a nota precisa de senha pra abrir.
+alter table notes add column if not exists locked boolean not null default false;
+
+-- Atualização: Metas diárias (ex.: "ler 10 páginas por dia" de um livro ou
+-- "ouvir 30 minutos por dia" de um audiolivro). link_pdf_id guarda o id do
+-- livro/audiolivro; daily_done/daily_date guardam o progresso do dia (zera
+-- quando a data muda); daily_notify_time é o horário (HH:MM) em que o app
+-- começa a avisar que a meta do dia ainda não foi cumprida.
+alter table study_goals drop constraint if exists study_goals_mode_check;
+alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias','diaria'));
+alter table study_goals drop constraint if exists study_goals_link_source_check;
+alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards','audiolivro'));
+alter table study_goals add column if not exists daily_unit text check (daily_unit in ('paginas','minutos'));
+alter table study_goals add column if not exists daily_target numeric not null default 0;
+alter table study_goals add column if not exists daily_done numeric not null default 0;
+alter table study_goals add column if not exists daily_date date;
+alter table study_goals add column if not exists daily_notify_time text;
