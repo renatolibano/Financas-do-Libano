@@ -54,7 +54,7 @@ import { AudiobookHost } from "./Audiobooks";
 import StravaRuns from "./Strava";
 import { hasPendingStravaCallback } from "./lib/strava";
 import { Footprints } from "lucide-react";
-import { useAudioStats } from "./lib/audiobooks";
+import { useAudioStats, imageToCoverThumb } from "./lib/audiobooks";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
 import { buildWorkoutShareText, WEEKDAY_FULL } from "./lib/workoutShare";
@@ -645,7 +645,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // aparelhos (cada um decide se quer economizar). Precisa vir antes das
   // entidades books/studyPdfs abaixo, que usam esse valor no listSelect.
   const [generatedCovers, setGeneratedCovers] = usePersistentState("libano-generated-covers", false);
-  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,status,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: livrosVisitado});
+  const books = useEntity("books", initialBooks, session, "asc", {orderable:true, listSelect: "id,title,author,status,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: livrosVisitado});
   const bookGroups = useEntity("book_groups", [], session, "asc", {orderable:true, enabled: livrosVisitado});
   const readingStats = useReadingStats(session);
   // Audiolivros: cadastro/posição sincronizam; os arquivos de áudio ficam só no aparelho.
@@ -2591,7 +2591,51 @@ function BookCoverThumb({ book, onCoverGenerated }) {
   return <div className="bookCoverImg">{src ? <img src={src} alt={book.title}/> : <div className="bookCoverPlaceholder"><BookOpen size={28}/></div>}</div>;
 }
 
-function BookTile({ book, status, groups=[], menuOpen, opening, onToggleMenu, onOpen, onMarkReading, onMarkRead, onMoveToWantToRead, onMoveToGroup, onDelete, onCoverGenerated, dragProps }) {
+// Editar livro (igual ao "Editar audiolivro"): título, autor, estante e capa.
+function BookEditModal({ book, onClose, onSave }) {
+  const [title, setTitle] = useState(book.title || "");
+  const [author, setAuthor] = useState(book.author || "");
+  const [status, setStatus] = useState(book.status || "quero_ler");
+  const [coverFile, setCoverFile] = useState(null);
+  const [resetCover, setResetCover] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const coverRef = useRef(null);
+  const save = async () => {
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    await onSave({ title: title.trim(), author: author.trim(), status, coverFile, resetCover });
+    setBusy(false);
+  };
+  return (
+    <div className="modalBack" onClick={busy ? undefined : onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modalHead"><h2>Editar livro</h2><button type="button" onClick={onClose} disabled={busy}><X/></button></div>
+        <label>Título<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Nome do livro"/></label>
+        <label>Autor<input value={author} onChange={e => setAuthor(e.target.value)} placeholder="Opcional"/></label>
+        <label>Estante
+          <select value={status} onChange={e => setStatus(e.target.value)}>
+            <option value="quero_ler">Quero ler</option>
+            <option value="lendo">Lendo</option>
+            <option value="lido">Lido</option>
+          </select>
+        </label>
+        <div className="abCoverPick">
+          <button type="button" className="ghost" onClick={() => coverRef.current?.click()}><ImagePlus size={14}/> {coverFile ? "Trocar capa" : "Escolher outra capa"}</button>
+          {(coverFile || (book.cover_thumb && !resetCover)) && <button type="button" className="ghost" onClick={() => { setCoverFile(null); setResetCover(true); }}>Voltar à capa do PDF</button>}
+          <input ref={coverRef} type="file" accept="image/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) { setCoverFile(f); setResetCover(false); } }}/>
+          {coverFile && <small>{coverFile.name}</small>}
+          {resetCover && !coverFile && <small>A capa volta a ser a primeira página do PDF.</small>}
+        </div>
+        <div className="modalActions">
+          <button type="button" className="ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button type="button" className="add" disabled={!title.trim() || busy} onClick={save}><Check size={16}/> {busy ? "Salvando..." : "Salvar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookTile({ book, status, groups=[], menuOpen, opening, onToggleMenu, onOpen, onMarkReading, onMarkRead, onMoveToWantToRead, onMoveToGroup, onEdit, onDelete, onCoverGenerated, dragProps }) {
   const progress = book.total_pages ? Math.min(100, Math.round((book.current_page / book.total_pages) * 100)) : 0;
   const favCount = book.favorite_pages?.length || 0;
   const impCount = book.important_pages?.length || 0;
@@ -2603,6 +2647,7 @@ function BookTile({ book, status, groups=[], menuOpen, opening, onToggleMenu, on
       </div>
       <button className="bookMenuBtn" onClick={(e)=>{e.stopPropagation(); onToggleMenu();}}><MoreVertical size={16}/></button>
       {menuOpen && <div className="bookMenu" onClick={(e)=>e.stopPropagation()}>
+        {onEdit && <button onClick={onEdit}><Pencil size={13}/> Editar</button>}
         {status!=="lendo" && <button onClick={onMarkReading}>{status==="lido" ? "Ler de novo (marcar lendo)" : "Começar a ler"}</button>}
         {status!=="lido" && <button onClick={onMarkRead}>Marcar como lido</button>}
         {status!=="quero_ler" && <button onClick={onMoveToWantToRead}>Mover para "quero ler"</button>}
@@ -5098,6 +5143,7 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
   // leitor já tivesse aberto com os campos ainda vazios, a chegada tardia
   // dos dados completos não atualizaria mais esses estados.
   const [openingBookId, setOpeningBookId] = useState(null);
+  const [editBook, setEditBook] = useState(null);
   const handleOpen = async (book) => {
     setOpeningBookId(book.id);
     const full = await fetchFull(book.id);
@@ -5150,6 +5196,21 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
   const handleMoveToGroup = (book, groupId) => {
     setOpenMenuId(null);
     update(book.id, { group_id: groupId });
+  };
+
+  const handleEditSave = async (v) => {
+    const b = editBook;
+    const patch = { title: v.title, author: v.author || null };
+    if (v.status !== b.status) {
+      patch.status = v.status;
+      // mesmas regras dos botões do menu: reler zera as páginas lidas; "lido" conta no mês
+      if (b.status === "lido") patch.read_pages = [];
+      else if (v.status === "lido") readingStats?.bump({ books_completed: 1 });
+    }
+    if (v.coverFile) patch.cover_thumb = await imageToCoverThumb(v.coverFile).catch(() => b.cover_thumb);
+    else if (v.resetCover) patch.cover_thumb = null; // volta a gerar da 1ª página do PDF
+    await update(b.id, patch);
+    setEditBook(null);
   };
 
   const handleDropOnGroup = (groupId) => {
@@ -5289,6 +5350,7 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
             onMarkRead={()=>{setOpenMenuId(null); update(book.id, {status:"lido"}); if(status!=="lido") readingStats?.bump({books_completed:1});}}
             onMoveToWantToRead={()=>{setOpenMenuId(null); update(book.id, book.status==="lido" ? {status:"quero_ler", read_pages: []} : {status:"quero_ler"});}}
             onMoveToGroup={(groupId)=>handleMoveToGroup(book, groupId)}
+            onEdit={()=>{ setOpenMenuId(null); setEditBook(book); }}
             onDelete={()=>handleDelete(book)}
             onCoverGenerated={(id, cover_thumb)=>update(id, { cover_thumb })}
             dragProps={{
@@ -5302,6 +5364,7 @@ function BookShelf({ entity, status, session, studyGoals, readingStats, groupsEn
           />
         ))}
       </div>
+      {editBook && <BookEditModal book={editBook} onClose={()=>setEditBook(null)} onSave={handleEditSave}/>}
       {!cloud && <p className="emptyHint">O upload de PDFs precisa de sincronização ativa (Supabase) — veja o README.</p>}
       {visibleBooks.length===0 && groups.length===0 && cloud && !currentGroup && <p className="emptyHint">Nenhum livro por aqui ainda.</p>}
       {currentGroup && visibleBooks.length===0 && <p className="emptyHint">Nenhum livro nessa pasta ainda.</p>}
