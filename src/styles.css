@@ -2787,3 +2787,15 @@ h1{font-size:23px}
 .noteLockOverlay{position:absolute;inset:0;z-index:1;display:grid;place-items:center;color:var(--text-1);pointer-events:none}
 .noteLockOverlay svg{filter:drop-shadow(0 2px 6px #0009)}
 .noteCoverLocked .noteTitle{position:relative;z-index:2}
+
+/* Notas dentro do player de audiolivro (embaixo, abaixo dos botões) */
+.abFull .abNotesPane{width:100%;height:auto;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.abFull .abNotesPane .notesPaneBody{flex:none}
+.abFull .abNotesPane .noteRichBody{min-height:200px;max-height:48vh;overflow:auto;padding:12px 14px}
+
+.abQuoteForm{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.abQuoteForm textarea{width:100%;resize:vertical;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:10px;font:inherit;font-size:14px;line-height:1.5}
+.abQuoteActions{display:flex;gap:8px;justify-content:flex-end}
+.abQuotesLabel{display:block;margin:10px 0 4px;color:var(--text-2)}
+.abQuoteRow{align-items:flex-start}
+.abQuoteText{flex:1;font-style:italic;font-size:13px;line-height:1.5;white-space:pre-line;padding:4px 2px}

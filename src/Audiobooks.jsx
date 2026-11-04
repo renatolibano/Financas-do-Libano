@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Headphones, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw, Plus, X, MoreVertical, Trash2, Pencil,
-  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud,
+  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote,
 } from "lucide-react";
 import { usePersistentState } from "./lib/storage";
 import { bumpDailyGoals } from "./lib/notifications";
@@ -146,7 +146,7 @@ function AudiobookForm({ mode, book, defaultStatus, busy, onClose, onSubmit }) {
   );
 }
 
-export function AudiobookHost({ page, setPage, entity, stats, studyGoals, generatedCovers, session }) {
+export function AudiobookHost({ page, setPage, entity, stats, studyGoals, generatedCovers, session, NotesPane }) {
   const { data, add, update, remove, cloud } = entity;
   const userId = session?.user?.id || null;
   const userIdRef = useRef(userId); userIdRef.current = userId;
@@ -347,6 +347,15 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
     const bm = { id: crypto.randomUUID(), track: trackIdxRef.current, pos: Math.floor(a.currentTime || 0), note: note.trim(), createdAt: Date.now() };
     updateRef.current(b.id, { bookmarks: [...(b.bookmarks || []), bm] });
   };
+  // Citações escritas à mão (não dá pra marcar trecho num áudio): ficam no audiolivro e aparecem
+  // no Dashboard dos Audiolivros, igual às citações dos livros.
+  const addQuote = (text) => {
+    const b = bookRef.current, t = String(text || "").trim();
+    if (!b || !t) return;
+    const q = { id: crypto.randomUUID(), text: t, track: trackIdxRef.current, pos: Math.floor(audioRef.current?.currentTime || 0), createdAt: Date.now() };
+    updateRef.current(b.id, { quotes: [...(b.quotes || []), q] });
+  };
+  const removeQuote = (id) => { const b = bookRef.current; if (b) updateRef.current(b.id, { quotes: (b.quotes || []).filter(q => q.id !== id) }); };
   const removeBookmark = (id) => { const b = bookRef.current; if (b) updateRef.current(b.id, { bookmarks: (b.bookmarks || []).filter(m => m.id !== id) }); };
   const jumpBookmark = (m) => {
     if (m.track === trackIdxRef.current) seekTo(m.pos); else goTrack(m.track, m.pos);
@@ -603,9 +612,10 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
         <FullPlayer
           book={curBook} trackIdx={trackIdx} pos={pos} dur={dur} live={live} playing={playing} missing={missing} loading={loadingFile} playErr={playErr}
           rate={rate} setRate={setRate} sleep={sleep} sleepLeft={sleepLeft} panel={panel} setPanel={setPanel} generated={generatedCovers}
+          notesPane={NotesPane ? <NotesPane key={curBook.id} book={curBook} entity={entity} session={session}/> : null}
           onToggle={togglePlay} onSkip={skip} onSeek={seekTo} onPrev={prevChapter} onNext={nextChapter}
           onGoTrack={(i) => goTrack(i, 0)} onSleep={setSleep}
-          onAddMark={addBookmark} onJumpMark={jumpBookmark} onRemoveMark={removeBookmark}
+          onAddMark={addBookmark} onJumpMark={jumpBookmark} onRemoveMark={removeBookmark} onAddQuote={addQuote} onRemoveQuote={removeQuote}
           onAttach={() => pickFilesFor(curBook)} onCollapse={() => setExpanded(false)} onClose={closePlayer}/>
       )}
       {form && <AudiobookForm mode={form.mode} book={form.book} defaultStatus={form.status} busy={!!busy} onClose={() => setForm(null)} onSubmit={submitForm}/>}
@@ -640,9 +650,13 @@ function MiniBar({ book, trackIdx, pos, dur, live, playing, missing, loading, ge
 }
 
 function FullPlayer({
-  book, trackIdx, pos, dur, live, playing, missing, loading, playErr, rate, setRate, sleep, sleepLeft, panel, setPanel, generated,
-  onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAttach, onCollapse, onClose,
+  book, trackIdx, pos, dur, live, playing, missing, loading, playErr, rate, setRate, sleep, sleepLeft, panel, setPanel, generated, notesPane,
+  onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAddQuote, onRemoveQuote, onAttach, onCollapse, onClose,
 }) {
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [quoteText, setQuoteText] = useState("");
+  const quotes = book.quotes || [];
+  const saveQuote = () => { if (!quoteText.trim()) return; onAddQuote(quoteText); setQuoteText(""); setQuoteOpen(false); };
   const pr = bookProgress(book, live);
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
@@ -701,6 +715,7 @@ function FullPlayer({
             </button>
             <button type="button" className={panel === "chapters" ? "active" : ""} onClick={() => toggle("chapters")}><List size={16}/> Capítulos</button>
             <button type="button" className={panel === "marks" ? "active" : ""} onClick={() => toggle("marks")}><Bookmark size={16}/> Marcadores{marks.length ? ` (${marks.length})` : ""}</button>
+            {notesPane && <button type="button" className={panel === "notes" ? "active" : ""} onClick={() => toggle("notes")}><StickyNote size={16}/> Notas</button>}
           </div>
 
           {panel === "speed" && (
@@ -729,6 +744,23 @@ function FullPlayer({
           {panel === "marks" && (
             <div className="abPanel abList">
               <button type="button" className="abAddMark" onClick={onAddMark}><BookmarkPlus size={15}/> Marcar este ponto ({fmtClock(pos)})</button>
+              <button type="button" className="abAddMark" onClick={() => setQuoteOpen(o => !o)}><Quote size={15}/> Adicionar citação</button>
+              {quoteOpen && (
+                <div className="abQuoteForm">
+                  <textarea rows={4} value={quoteText} onChange={e => setQuoteText(e.target.value)} placeholder="Escreva a citação (sem as aspas)..." autoFocus/>
+                  <div className="abQuoteActions">
+                    <button type="button" className="ghost" onClick={() => { setQuoteOpen(false); setQuoteText(""); }}>Cancelar</button>
+                    <button type="button" className="primary" onClick={saveQuote} disabled={!quoteText.trim()}>Salvar citação</button>
+                  </div>
+                </div>
+              )}
+              {quotes.length > 0 && <small className="abQuotesLabel">Citações deste audiolivro ({quotes.length})</small>}
+              {quotes.map(q => (
+                <div key={q.id} className="abMarkRow abQuoteRow">
+                  <span className="abQuoteText">“{q.text}”</span>
+                  <button type="button" className="abMarkDel" title="Remover citação" onClick={() => onRemoveQuote(q.id)}><Trash2 size={13}/></button>
+                </div>
+              ))}
               {marks.length === 0 && <p className="emptyHint">Nenhum marcador ainda.</p>}
               {marks.map(m => (
                 <div key={m.id} className="abMarkRow">
@@ -741,6 +773,7 @@ function FullPlayer({
               ))}
             </div>
           )}
+          {panel === "notes" && notesPane}
         </div>
       </div>
     </div>
@@ -812,6 +845,17 @@ function AudiobookDashboard({ ctl }) {
   const monthLabel = new Date().toLocaleDateString("pt-BR", { month: "long" });
   const last = [...ouvindo].sort((a, b) => (Date.parse(b.last_played_at || 0) || 0) - (Date.parse(a.last_played_at || 0) || 0))[0];
   const lastPr = last ? bookProgress(last, curId === last.id ? live : null) : null;
+
+  // Citações de todos os audiolivros, em ordem aleatória a cada vez que o Dashboard abre
+  // (a ordem só muda se o conjunto de citações mudar, não a cada atualização de progresso).
+  const flatQuotes = data.flatMap(b => (b.quotes || []).map(q => ({ id: b.id + ":" + q.id, text: q.text, title: b.title })));
+  const quotesSig = flatQuotes.map(q => q.id).join("|");
+  const quotes = useMemo(() => {
+    const list = [...flatQuotes];
+    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quotesSig]);
 
   return (
     <div className="content">
@@ -890,6 +934,19 @@ function AudiobookDashboard({ ctl }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      <div className="studyGoalsListHead"><h3>Citações</h3></div>
+      {quotes.length === 0 && <p className="emptyHint">Nenhuma citação ainda — no player, abra Marcadores e toque em "Adicionar citação".</p>}
+      {quotes.length > 0 && (
+        <div className="libraryQuotesList">
+          {quotes.map(q => (
+            <figure className="libraryQuote" key={q.id}>
+              <blockquote>“{q.text}”</blockquote>
+              <figcaption>— {q.title}</figcaption>
+            </figure>
+          ))}
         </div>
       )}
     </div>

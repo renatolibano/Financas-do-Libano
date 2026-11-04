@@ -650,7 +650,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const readingStats = useReadingStats(session);
   // Audiolivros: cadastro/posição sincronizam; os arquivos de áudio ficam só no aparelho.
   const audiolivrosVisitado = ["Audiolivros","Audiolivros Ouvindo","Audiolivros Ouvidos","Audiolivros Quero Ouvir"].some(k => visitedPages.has(k));
-  const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado || visitedPages.has("Metas de Estudo")});
+  const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,quotes,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado || visitedPages.has("Metas de Estudo")});
   const audioStats = useAudioStats(session, audiolivrosVisitado);
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
@@ -1323,7 +1323,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Calendário" && <CalendarPage remindersEntity={reminders} calendarEventsEntity={calendarEvents} studyGoalsEntity={studyGoals}/>}
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
       {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats} session={session}/>}
-      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} studyGoals={studyGoals} generatedCovers={generatedCovers} session={session}/>
+      <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} studyGoals={studyGoals} NotesPane={AudioNotesPane} generatedCovers={generatedCovers} session={session}/>
       {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
@@ -4189,6 +4189,49 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     };
   }, []);
 
+  // Virar página deslizando o dedo pro lado (celular; PDF e modo leitura), como num livro.
+  // Pra não virar sem querer: só vale um dedo, gesto bem horizontal, longo (>= 22% da largura,
+  // mín. 80px) e rápido (< 0,7s), sem texto selecionado, fora do modo de desenho/marca-texto e,
+  // com zoom, só quando a página já está no limite do scroll lateral. Um simples toque não vira.
+  const swipeRef = useRef(null);
+  swipeRef.current = { pageNum, navTo, highlightMode };
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let start = null;
+    const onStart = (e) => {
+      start = null;
+      if (!isMobileReaderView() || e.touches.length !== 1 || swipeRef.current.highlightMode) return;
+      if (e.target.closest?.("button,a,input,textarea,select,.pdfSelectionToolbar,.pdfSelectionBox,.pdfSelectionHandle,.bookAiCard,.bookPreviewBar")) return;
+      if (!window.getSelection()?.isCollapsed) return;
+      const t = e.touches[0];
+      start = { x: t.clientX, y: t.clientY, time: Date.now(), atLeft: el.scrollLeft <= 2, atRight: el.scrollLeft + el.clientWidth >= el.scrollWidth - 2 };
+    };
+    const onMove = (e) => { if (start && e.touches.length > 1) start = null; };
+    const onEnd = (e) => {
+      const s = start; start = null;
+      if (!s || e.touches.length) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - s.x, dy = t.clientY - s.y;
+      if (Math.abs(dx) < Math.max(80, el.clientWidth * 0.22) || Math.abs(dx) < Math.abs(dy) * 2 || Date.now() - s.time > 700) return;
+      if (!window.getSelection()?.isCollapsed) return;
+      const { pageNum: p, navTo: go } = swipeRef.current;
+      if (dx < 0 && s.atRight) go(p + 1);
+      else if (dx > 0 && s.atLeft) go(p - 1);
+    };
+    const onCancel = () => { start = null; };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: true });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onCancel, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onCancel);
+    };
+  }, []);
+
   const handleJump = (e) => {
     e.preventDefault();
     const n = parseInt(jumpValue, 10);
@@ -4878,6 +4921,89 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
           <button className="ghost" onClick={()=>navTo(pageNum+1)} disabled={pageNum>=numPages}>Próxima ›</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Notas do audiolivro (mesmo editor das anotações dos livros), abertas embaixo no player.
+// A listagem de audiolivros é enxuta (sem "notes"), então na nuvem o texto é buscado ao abrir o
+// painel; salva sozinho (600ms depois de digitar, ao sair do campo e ao fechar o painel).
+function AudioNotesPane({ book, entity, session }) {
+  const bodyRef = useRef(null);
+  const rootRef = useRef(null);
+  const contentRef = useRef("");
+  const dirtyRef = useRef(null); // último HTML ainda não salvo
+  const saveTimer = useRef(null);
+  const updateRef = useRef(entity.update); updateRef.current = entity.update;
+  const [status, setStatus] = useState("loading"); // loading | ready | error
+  const bookId = book.id;
+  const cloud = cloudConfigured && !!session;
+
+  useEffect(() => {
+    let active = true;
+    if (!cloud || typeof book.notes === "string") { contentRef.current = book.notes || ""; setStatus("ready"); return; }
+    supabase.from("audiobooks").select("notes").eq("id", bookId).maybeSingle().then(({ data, error }) => {
+      if (!active) return;
+      if (error) { console.error(error); setStatus("error"); return; } // não abre o editor: salvar vazio apagaria as notas
+      contentRef.current = data?.notes || "";
+      setStatus("ready");
+    });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
+
+  useEffect(() => {
+    if (status !== "ready" || !bodyRef.current) return;
+    bodyRef.current.innerHTML = contentRef.current || "";
+    rootRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [status]);
+
+  const flush = () => {
+    clearTimeout(saveTimer.current);
+    const html = dirtyRef.current;
+    if (html == null) return;
+    dirtyRef.current = null;
+    contentRef.current = html;
+    updateRef.current(bookId, { notes: html });
+  };
+  const schedule = () => {
+    if (bodyRef.current) dirtyRef.current = bodyRef.current.innerHTML || "";
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flush, 600);
+  };
+  useEffect(() => () => flush(), []); // fechar o painel/player salva o que faltava
+  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fmt = useNoteFormatting(bodyRef, schedule);
+
+  return (
+    <div className="notesPane abNotesPane" ref={rootRef}>
+      <div className="notesPaneHead"><b>Minhas notas</b><span>sobre "{book.title}"</span></div>
+      {status === "loading" && <p className="emptyHint">Carregando notas...</p>}
+      {status === "error" && <p className="emptyHint">Não foi possível carregar as notas agora. Feche e abra o painel para tentar de novo.</p>}
+      {status === "ready" && <>
+        <div className="noteToolbar" onMouseDown={(e)=>e.preventDefault()}>
+          <NoteFormatButtons fmt={fmt}/>
+        </div>
+        <div className="notesPaneBody" style={{position:"relative"}} onClick={() => { fmt.setEmojiOpen(false); fmt.setColorOpen(false); fmt.setHiliteOpen(false); fmt.closeLinkPopover(); }}>
+          <div
+            ref={bodyRef}
+            className="noteTextarea noteRichBody"
+            contentEditable
+            suppressContentEditableWarning
+            onInput={schedule}
+            onBlur={flush}
+            onClick={fmt.handleBodyClick}
+            onKeyDown={fmt.handleBodyKeyDown}
+            onPaste={fmt.handlePaste}
+            onMouseUp={fmt.updateLinkBar}
+            onKeyUp={fmt.updateLinkBar}
+            onContextMenu={(e) => blockNativeSelectionMenu(e, true)}
+            data-placeholder="Escreva suas notas sobre este audiolivro..."
+          />
+          <NoteLinkFloatingUI fmt={fmt}/>
+        </div>
+      </>}
     </div>
   );
 }

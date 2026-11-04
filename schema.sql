@@ -1360,3 +1360,9 @@ alter table study_goals add column if not exists daily_target numeric not null d
 alter table study_goals add column if not exists daily_done numeric not null default 0;
 alter table study_goals add column if not exists daily_date date;
 alter table study_goals add column if not exists daily_notify_time text;
+
+-- Atualização: notas dentro do player de audiolivros (mesmo editor das anotações dos livros).
+alter table audiobooks add column if not exists notes text;
+
+-- Atualização: citações escritas à mão nos audiolivros (aparecem no Dashboard dos Audiolivros).
+alter table audiobooks add column if not exists quotes jsonb not null default '[]';
