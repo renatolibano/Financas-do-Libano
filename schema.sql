@@ -392,7 +392,7 @@ alter table study_flashcard_lists add column if not exists term_lang text;
 alter table study_flashcard_lists add column if not exists definition_lang text;
 alter table study_goals add column if not exists link_list_ids uuid[];
 alter table study_goals drop constraint if exists study_goals_link_source_check;
-alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards'));
+alter table study_goals add constraint study_goals_link_source_check check (link_source in ('none','estudo','livro','flashcards','audiolivro'));
 
 -- Área de Lazer: Treino — plano semanal (workout_plan_items: cada linha é
 -- uma atividade num dia da semana, ex.: "Corrida" na Segunda, com metas em
@@ -597,7 +597,7 @@ end loop; end $$;
 alter table study_goals add column if not exists start_date date;
 alter table study_goals add column if not exists failed_at date;
 alter table study_goals drop constraint if exists study_goals_mode_check;
-alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias'));
+alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias','diaria'));
 alter table study_goals drop constraint if exists study_goals_status_check;
 alter table study_goals add constraint study_goals_status_check check (status in ('andamento','concluida','pausada','falhou'));
 
