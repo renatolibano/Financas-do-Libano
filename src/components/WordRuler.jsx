@@ -6,7 +6,7 @@ import {
 } from "../lib/wordRulerMath";
 
 // Régua horizontal do editor "Word" — port de wordcraft (crates/ui-egui/src/canvas.rs `rulers` e
-// ruler_tabs.rs). Fica presa no topo da área da página (sticky), com a largura exata da página:
+// ruler_tabs.rs). Fica no topo da página (rola junto com ela), com a largura exata da página:
 //  - barra de margens (escura) e área de texto (clara), graduada em cm; os números só aparecem na
 //    área de texto (as margens têm só ticks) e rarefazem quando o zoom diminui;
 //  - bordas da área de texto arrastam as margens (encaixe de 1/16 pol, sobra ao menos 1 pol de texto);

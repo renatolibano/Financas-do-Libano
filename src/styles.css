@@ -1757,7 +1757,7 @@ h1{font-size:23px}
 .wordPageWrap{display:flex;flex-direction:column;align-items:center}
 /* Régua do editor "Word" (port do wordcraft). Fica presa no topo da área da página, com a largura
    exata da página (align-self:stretch); a faixa tem 22px e a barra 15px (4 em cima, 3 embaixo). */
-.wordRulerBar{--wr-margin:#b7ae95;--wr-text:#f3efe2;--wr-tick:#5b5540;--wr-line:#4a4530;--wr-ink:#2b2718;--wr-hover:#2f6fed;position:sticky;top:0;z-index:30;align-self:stretch;flex:0 0 auto;height:22px;margin:-26px 0 6px;background:#54575c;user-select:none;-webkit-user-select:none}
+.wordRulerBar{--wr-margin:#b7ae95;--wr-text:#f3efe2;--wr-tick:#5b5540;--wr-line:#4a4530;--wr-ink:#2b2718;--wr-hover:#2f6fed;position:relative;z-index:30;align-self:stretch;flex:0 0 auto;height:22px;margin:0 0 6px;background:#54575c;user-select:none;-webkit-user-select:none}
 .wordRulerCorner{position:absolute;left:-22px;top:0;width:22px;height:22px;padding:0;border:none;background:#54575c;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .wordRulerCorner svg{display:block}
 .wordRulerCorner .wrBox{fill:var(--wr-text);stroke:var(--wr-line);stroke-width:1}

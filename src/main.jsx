@@ -18047,6 +18047,7 @@ const WORD_BORDER_PRESETS = [
   { key: "bottom", label: "Borda inferior" },
   { key: "top", label: "Borda superior" },
   { key: "all", label: "Todas as bordas" },
+  { key: "hr", label: "Linha horizontal" },
 ];
 // Símbolos especiais — equivalente simplificado do botão "Símbolo" do
 // Word (Inserir > Símbolos), com foco em matemática/grego já que é comum
@@ -18608,6 +18609,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
       if (kind === "bottom") { block.style.borderBottom = "1px solid #1a1a1a"; block.style.padding = "0 0 4px"; }
       else if (kind === "top") { block.style.borderTop = "1px solid #1a1a1a"; block.style.padding = "4px 0 0"; }
       else if (kind === "all") { block.style.border = "1px solid #1a1a1a"; block.style.padding = "4px 8px"; }
+      else if (kind === "hr") { block.style.borderBottom = "2px solid #1a1a1a"; block.style.padding = "0 0 4px"; }
       onChange();
     }
     setBorderOpen(false);
@@ -18707,18 +18709,19 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     onChange();
   };
 
-  const insertTable = (rows, cols) => {
+  const insertTable = (rows, cols, opts) => {
     const el = bodyRef.current;
     if (!el) return;
     el.focus();
     const table = document.createElement("table");
-    table.className = "word-table";
+    table.className = "word-table" + (opts?.className ? " " + opts.className : "");
     for (let r = 0; r < rows; r++) {
       const tr = document.createElement("tr");
       for (let c = 0; c < cols; c++) {
-        const td = document.createElement("td");
-        td.innerHTML = "<br>";
-        tr.appendChild(td);
+        const cell = document.createElement(opts?.data && r === 0 ? "th" : "td");
+        const txt = opts?.data?.[r]?.[c];
+        if (txt) cell.textContent = txt; else cell.innerHTML = "<br>";
+        tr.appendChild(cell);
       }
       table.appendChild(tr);
     }
@@ -18733,6 +18736,24 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
       el.append(table, after);
     }
     onChange();
+  };
+
+  // Tabelas Rápidas — port de `table.quick` do wordcraft (calendário, lista tabular, matriz).
+  const insertQuickTable = (kind) => {
+    if (kind === "calendar") {
+      const days = ["", "", ...Array.from({ length: 31 }, (_, i) => String(i + 1)), "", "", ""];
+      const data = [["S", "T", "Q", "Q", "S", "S", "D"]];
+      for (let i = 0; i < days.length; i += 7) data.push(days.slice(i, i + 7));
+      insertTable(data.length, 7, { data });
+    } else if (kind === "matrix") {
+      insertTable(4, 4, { className: "word-table-striped", data: [
+        ["", "Coluna A", "Coluna B", "Coluna C"], ["Linha 1", "1", "2", "3"], ["Linha 2", "4", "5", "6"], ["Linha 3", "7", "8", "9"],
+      ] });
+    } else {
+      insertTable(7, 2, { className: "word-table-striped", data: [
+        ["Item", "Necessário"], ["Livros", "1"], ["Revistas", "3"], ["Cadernos", "1"], ["Blocos de papel", "1"], ["Canetas", "3"], ["Lápis", "2"],
+      ] });
+    }
   };
 
   const insertImageFile = async (file) => {
@@ -19584,7 +19605,30 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     exec("insertHTML", `<ruby>${escHtml(sel.toString())}<rt>${escHtml(guide)}</rt></ruby>`);
   };
   const charBorder = () => wrapSel(n => { n.style.border = "1px solid currentColor"; n.style.padding = "0 2px"; });
-  const encloseChars = (shape) => wrapSel(n => { n.style.border = "1px solid currentColor"; n.style.padding = "0 4px"; n.style.borderRadius = shape === "circle" ? "50%" : shape === "round" ? "6px" : "0"; });
+  const encloseChars = (shape) => {
+    if (shape === "none") {
+      const el = bodyRef.current;
+      const sel = window.getSelection();
+      const node = sel?.anchorNode;
+      const box = (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.("span[data-enclose]");
+      if (!el || !box || !el.contains(box)) return;
+      box.replaceWith(...Array.from(box.childNodes));
+      onChange();
+      return;
+    }
+    const svg = { triangle: "<polygon points='50,6 95,94 5,94'/>", diamond: "<polygon points='50,4 96,50 50,96 4,50'/>" }[shape];
+    wrapSel(n => {
+      n.dataset.enclose = shape;
+      if (svg) {
+        n.style.display = "inline-block"; n.style.textAlign = "center"; n.style.lineHeight = "1.1";
+        n.style.padding = shape === "triangle" ? "0.5em 0.6em 0.1em" : "0.35em 0.6em";
+        n.style.backgroundRepeat = "no-repeat"; n.style.backgroundSize = "100% 100%";
+        n.style.backgroundImage = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><g fill='none' stroke='#1a1a1a' stroke-width='3' vector-effect='non-scaling-stroke'>${svg}</g></svg>`)}")`;
+      } else {
+        n.style.border = "1px solid currentColor"; n.style.padding = "0 4px"; n.style.borderRadius = shape === "circle" ? "50%" : shape === "round" ? "6px" : "0";
+      }
+    });
+  };
   const underlineStyle = (style) => wrapSel(n => { n.style.textDecoration = style === "single" ? "underline" : `underline ${style}`; });
 
   const toRoman = (num) => {
@@ -19929,7 +19973,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     shadingOpen, setShadingOpen, borderOpen, setBorderOpen, symbolOpen, setSymbolOpen, pageNumOpen, setPageNumOpen, sectionBreakOpen, setSectionBreakOpen, insertSectionBreak,
     crossRefOpen, setCrossRefOpen, listCrossRefTargets, insertCrossReference,
     applyTextColor, applyHilite, applyFont, applyFontSize, applyHeading, clearFormatting, selectAll,
-    insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertImageFile, applyLineHeight,
+    insertEmoji, insertSymbol, insertDateTime, insertPageBreak, insertTable, insertQuickTable, insertImageFile, applyLineHeight,
     findOpen, setFindOpen, findQuery, setFindQuery, replaceValue, setReplaceValue,
     findMatches, findIndex, runFind, findNext, findPrev, replaceCurrent, replaceAll, closeFind, resetFindHighlights,
     findOpts, updateFindOpts, findError, findMore, setFindMore, findHooks, findInputRef, replaceInputRef, lastFindField, insertFindCode,
@@ -23142,6 +23186,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                     <button onClick={() => fmt.encloseChars("circle")}>Círculo</button>
                     <button onClick={() => fmt.encloseChars("square")}>Quadrado</button>
                     <button onClick={() => fmt.encloseChars("round")}>Retângulo Arredondado</button>
+                    <button onClick={() => fmt.encloseChars("triangle")}>Triângulo</button>
+                    <button onClick={() => fmt.encloseChars("diamond")}>Losango</button>
+                    <button onClick={() => fmt.encloseChars("none")}>Remover</button>
                   </>)}
                   {rbm("effects", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Efeitos de Texto e Tipografia" data-tipdesc="Aplica sombra, contorno, versalete, caixa alta ou tachado duplo ao texto selecionado." onClick={t}><Sparkle size={15}/><ChevronDown size={9}/></button>, <>
                     <button onClick={() => applyTextEffect("shadow")}>Sombra</button>
@@ -23306,6 +23353,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
                 <div className="wordDropdownEmpty">{hoverGrid ? `${hoverGrid[1]} × ${hoverGrid[0]}` : "Passe o mouse para escolher"}</div>
                 <button onClick={() => setTableDialogOpen(true)}>Inserir Tabela…</button>
                 <button onClick={convertTextToTable}>Converter Texto em Tabela</button>
+                <div className="wordDropdownEmpty">Tabelas Rápidas</div>
+                <button onClick={() => fmt.insertQuickTable("tabular")}>Lista Tabular</button>
+                <button onClick={() => fmt.insertQuickTable("matrix")}>Matriz</button>
+                <button onClick={() => fmt.insertQuickTable("calendar")}>Calendário</button>
               </>)}
             </RbGroup>
             <RbGroup label="Ilustrações" wide>
