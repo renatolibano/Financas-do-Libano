@@ -32,6 +32,7 @@ MAX_MINUTES = int(os.environ.get("MAX_DURATION_MIN", "180"))  # limite de duraç
 MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "2"))       # downloads ao mesmo tempo
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "")             # cookies.txt (opcional, ajuda quando o YouTube pede login)
 WORK_DIR = Path(os.environ.get("WORK_DIR", tempfile.gettempdir())) / "libano-baixador"
+FRAGMENTS = int(os.environ.get("FRAGMENTS", "4"))                  # fragmentos baixados ao mesmo tempo (use 1 em hospedagem com pouca memória)
 JOB_TTL = float(os.environ.get("JOB_TTL_MIN", "120")) * 60       # arquivos prontos ficam disponíveis por este tempo
 
 WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -182,7 +183,7 @@ def run_job(job: dict, body: JobIn):
             "windowsfilenames": True,
             "progress_hooks": [hook],
             "postprocessor_hooks": [pp_hook],
-            "concurrent_fragment_downloads": 4,
+            "concurrent_fragment_downloads": FRAGMENTS,
             "match_filter": yt_dlp.utils.match_filter_func(f"duration <=? {MAX_MINUTES * 60}"),
         }
         if body.kind == "mp3":
