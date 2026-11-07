@@ -32,7 +32,7 @@ MAX_MINUTES = int(os.environ.get("MAX_DURATION_MIN", "180"))  # limite de duraç
 MAX_PARALLEL = int(os.environ.get("MAX_PARALLEL", "2"))       # downloads ao mesmo tempo
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "")             # cookies.txt (opcional, ajuda quando o YouTube pede login)
 WORK_DIR = Path(os.environ.get("WORK_DIR", tempfile.gettempdir())) / "libano-baixador"
-JOB_TTL = float(os.environ.get("JOB_TTL_MIN", "30")) * 60       # arquivos prontos ficam disponíveis por este tempo
+JOB_TTL = float(os.environ.get("JOB_TTL_MIN", "120")) * 60       # arquivos prontos ficam disponíveis por este tempo
 
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Libano Baixador")
@@ -206,7 +206,7 @@ def run_job(job: dict, body: JobIn):
             if not files:
                 raise RuntimeError(f"Vídeo maior que o limite de {MAX_MINUTES} minutos ou indisponível.")
             f = max(files, key=lambda p: p.stat().st_size)
-            job.update(status="done", progress=100, path=str(f), filename=f.name, size=f.stat().st_size)
+            job.update(status="done", progress=100, path=str(f), filename=f.name, size=f.stat().st_size, touched=time.time())
         except Exception as e:  # noqa: BLE001
             job.update(status="error", error=friendly_error(e))
             shutil.rmtree(out_dir, ignore_errors=True)
@@ -245,6 +245,7 @@ def get_file(job_id: str):
     job = JOBS.get(job_id)
     if not job or job.get("status") != "done" or not job.get("path") or not Path(job["path"]).exists():
         raise HTTPException(404, "Arquivo não encontrado (pode ter expirado). Peça o download de novo.")
+    job["touched"] = time.time()  # o prazo de expiração conta a partir do último acesso, não do início do job
     return FileResponse(job["path"], filename=job["filename"], media_type="application/octet-stream")
 
 
@@ -253,7 +254,7 @@ def cleaner():
         time.sleep(60)
         now = time.time()
         with LOCK:
-            old = [j for j in JOBS.values() if now - j["created"] > JOB_TTL and j["status"] in ("done", "error")]
+            old = [j for j in JOBS.values() if now - j.get("touched", j["created"]) > JOB_TTL and j["status"] in ("done", "error")]
             for j in old:
                 shutil.rmtree(WORK_DIR / j["id"], ignore_errors=True)
                 JOBS.pop(j["id"], None)

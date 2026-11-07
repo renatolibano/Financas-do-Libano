@@ -36,7 +36,7 @@ Depois coloque o endereço `https://...` e a mesma chave em **Configurar servido
 | `ALLOWED_ORIGINS` | Endereço(s) do app permitidos, separados por vírgula. | `*` |
 | `MAX_DURATION_MIN` | Duração máxima de um vídeo, em minutos. | `180` |
 | `MAX_PARALLEL` | Downloads ao mesmo tempo. | `2` |
-| `JOB_TTL_MIN` | Por quantos minutos o arquivo pronto fica disponível. | `30` |
+| `JOB_TTL_MIN` | Por quantos minutos o arquivo pronto fica disponível. | `120` |
 | `COOKIES_FILE` | Caminho de um `cookies.txt` (opcional). | vazio |
 
 ## Observações
