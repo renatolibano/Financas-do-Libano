@@ -20,7 +20,6 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
   const [follow, setFollow] = useState(true);
   const [sel, setSel] = useState(null);    // {text, top, left, pos}
   const [aiCard, setAiCard] = useState(null);
-  const [flash, setFlash] = useState("");
   const [menu, setMenu] = useState(false); // opções/ações ficam escondidas até clicar em "Opções"
   const listRef = useRef(null);
   const aiTokenRef = useRef(0);
@@ -70,7 +69,8 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
     const text = s.toString().replace(/\s+/g, " ").trim();
     if (!text) return;
     const r = s.getRangeAt(0).getBoundingClientRect();
-    const n = s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement;
+    const sc = s.getRangeAt(0).startContainer; // início da seleção: dá o ponto exato do áudio
+    const n = sc.nodeType === 1 ? sc : sc.parentElement;
     const i = Number(n?.closest?.("[data-i]")?.dataset.i);
     setFollow(false);
     setSel({ text, top: Math.max(8, r.top - 46), left: Math.max(130, Math.min(r.left + r.width / 2, window.innerWidth - 130)), pos: Number.isFinite(i) ? segs[i]?.s : undefined });
@@ -79,8 +79,8 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
   const clearSel = () => { setSel(null); window.getSelection()?.removeAllRanges(); };
   const addQuote = () => {
     if (!sel) return;
-    onAddQuote(sel.text, sel.pos != null ? { track: trackIdx, pos: sel.pos } : undefined);
-    clearSel(); setFlash("Citação adicionada"); setTimeout(() => setFlash(""), 2000);
+    onAddQuote(sel.text, sel.pos != null ? { track: trackIdx, pos: sel.pos } : undefined); // abre a janela de edição
+    clearSel();
   };
   const askAi = async () => {
     if (!sel) return;
@@ -138,7 +138,6 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
         </>
       )}
       {bookBusy && !busy && <small className="abTrHint">Há outro capítulo sendo transcrito em segundo plano.</small>}
-      {flash && <small className="abTrFlash">{flash}</small>}
 
       {tr === null && !busy && <p className="emptyHint">Este capítulo ainda não foi transcrito. A transcrição roda no seu aparelho e pode demorar; você pode fechar o painel enquanto ela trabalha.</p>}
       {segs.length > 0 && (

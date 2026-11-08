@@ -2843,3 +2843,12 @@ h1{font-size:23px}
 .abSideHead b{font-size:15px}
 .abSidePanel .abList{max-height:none;overflow:visible}
 .abSidePanel .abNotesPane .noteRichBody{max-height:none;min-height:55vh}
+
+/* Citação: janela flutuante de edição (centro da tela) e linha de citação clicável */
+.abQModalBack{position:fixed;inset:0;z-index:90;background:#000a;backdrop-filter:blur(5px);display:grid;place-items:center;padding:20px}
+.abQModal{width:min(620px,100%);max-height:calc(100vh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;background:var(--bg-modal,var(--bg-surface));border:1px solid var(--border);border-radius:16px;padding:18px;box-shadow:0 24px 70px #000b}
+.abQModal h3{margin:0;display:flex;align-items:center;gap:8px;font-size:16px}
+.abQModal small{color:var(--text-2);font-size:12px}
+.abQModal textarea{width:100%;resize:vertical;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:12px;font:inherit;font-size:15px;line-height:1.55;min-height:160px}
+.abQuoteRow>button:first-child{align-items:flex-start;flex-direction:column;gap:4px}
+.abQuoteGo{display:inline-flex;align-items:center;gap:4px;color:var(--accent)!important;font-weight:700}

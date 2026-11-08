@@ -667,10 +667,10 @@ function FullPlayer({
   book, trackIdx, pos, dur, live, playing, missing, loading, playErr, rate, setRate, sleep, sleepLeft, panel, setPanel, generated, notesPane,
   onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAddQuote, onRemoveQuote, onAttach, onCollapse, onClose,
 }) {
-  const [quoteOpen, setQuoteOpen] = useState(false);
-  const [quoteText, setQuoteText] = useState("");
+  const [quoteDraft, setQuoteDraft] = useState(null); // {text, track, pos}: janela flutuante de edição da citação
   const quotes = book.quotes || [];
-  const saveQuote = () => { if (!quoteText.trim()) return; onAddQuote(quoteText); setQuoteText(""); setQuoteOpen(false); };
+  const openQuote = (text, at) => setQuoteDraft({ text: text || "", track: at?.track ?? trackIdx, pos: Math.floor(at?.pos ?? pos) });
+  const saveQuote = () => { if (!quoteDraft?.text.trim()) return; onAddQuote(quoteDraft.text, { track: quoteDraft.track, pos: quoteDraft.pos }); setQuoteDraft(null); };
   const pr = bookProgress(book, live);
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
@@ -708,21 +708,14 @@ function FullPlayer({
           )}
           {panel === "marks" && (
             <div className="abPanel abList abListFree">
-              <button type="button" className="abAddMark" onClick={onAddMark}><BookmarkPlus size={15}/> Marcar este ponto ({fmtClock(pos)})</button>
-              <button type="button" className="abAddMark" onClick={() => setQuoteOpen(o => !o)}><Quote size={15}/> Adicionar citação</button>
-              {quoteOpen && (
-                <div className="abQuoteForm">
-                  <textarea rows={4} value={quoteText} onChange={e => setQuoteText(e.target.value)} placeholder="Escreva a citação (sem as aspas)..." autoFocus/>
-                  <div className="abQuoteActions">
-                    <button type="button" className="ghost" onClick={() => { setQuoteOpen(false); setQuoteText(""); }}>Cancelar</button>
-                    <button type="button" className="primary" onClick={saveQuote} disabled={!quoteText.trim()}>Salvar citação</button>
-                  </div>
-                </div>
-              )}
+              <button type="button" className="abAddMark" onClick={() => openQuote("")}><Quote size={15}/> Adicionar citação neste ponto ({fmtClock(pos)})</button>
               {quotes.length > 0 && <small className="abQuotesLabel">Citações deste audiolivro ({quotes.length})</small>}
               {quotes.map(q => (
                 <div key={q.id} className="abMarkRow abQuoteRow">
-                  <span className="abQuoteText">“{q.text}”</span>
+                  <button type="button" title="Ir para o ponto desta citação" onClick={() => onJumpMark(q)}>
+                    <span className="abQuoteText">“{q.text}”</span>
+                    <small className="abQuoteGo"><Play size={11}/> {tracks.length > 1 ? `Cap. ${q.track + 1} · ` : ""}{fmtClock(q.pos)}</small>
+                  </button>
                   <button type="button" className="abMarkDel" title="Remover citação" onClick={() => onRemoveQuote(q.id)}><Trash2 size={13}/></button>
                 </div>
               ))}
@@ -750,7 +743,7 @@ function FullPlayer({
           <span>Tocando agora</span>
           <button type="button" onClick={onClose} title="Fechar player"><X size={20}/></button>
         </div>
-        {lyrics && <div className="abLyricsCol"><AudioTranscript wide book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/></div>}
+        {lyrics && <div className="abLyricsCol"><AudioTranscript wide book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={openQuote}/></div>}
         <div className="abFullScroll">
           {sideOpen ? (
             <div className="abSidePanel">
@@ -811,9 +804,26 @@ function FullPlayer({
 
           </>)}
           {!sideOpen && panelContent}
-          {panel === "transcript" && !wide && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
+          {panel === "transcript" && !wide && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={openQuote}/>}
         </div>
       </div>
+      {quoteDraft && (
+        <div className="abQModalBack">
+          <div className="abQModal" role="dialog" aria-label="Editar citação">
+            <h3><Quote size={16}/> Nova citação</h3>
+            <small>Ponto: {tracks.length > 1 ? `Cap. ${quoteDraft.track + 1} · ` : ""}{fmtClock(quoteDraft.pos)}. Corrija o texto, se precisar, antes de salvar.</small>
+            <textarea
+              autoFocus rows={8} value={quoteDraft.text} placeholder="Escreva a citação (sem as aspas)..."
+              onChange={e => setQuoteDraft(d => ({ ...d, text: e.target.value }))}
+              onKeyDown={e => { if (e.key === "Escape") setQuoteDraft(null); else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveQuote(); }}
+            />
+            <div className="abQuoteActions">
+              <button type="button" className="ghost" onClick={() => setQuoteDraft(null)}>Cancelar</button>
+              <button type="button" className="primary" onClick={saveQuote} disabled={!quoteDraft.text.trim()}>Salvar citação</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
