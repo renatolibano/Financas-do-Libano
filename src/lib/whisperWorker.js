@@ -1,6 +1,6 @@
-// Web Worker: transcreve áudio (mono, 16 kHz) com Whisper rodando no próprio aparelho.
-// Processa em fatias de 5 min e devolve os trechos com tempo absoluto, para o app salvar
-// o progresso e poder continuar de onde parou.
+// Web Worker: transcreve uma parte do áudio (mono, 16 kHz, começando em baseSec) com Whisper no próprio
+// aparelho. Processa em fatias de 5 min e devolve os trechos com tempo absoluto, para o app salvar o
+// progresso e poder continuar de onde parou. O modelo fica carregado entre as partes.
 import { pipeline, env } from "@huggingface/transformers";
 
 env.allowLocalModels = false;
@@ -37,18 +37,19 @@ self.onmessage = async (e) => {
     const pipe = await load(m.model);
     const audio = m.audio;
     const total = audio.length;
-    let start = Math.floor((m.fromSec || 0) * SR);
+    let start = 0;
+    const base = m.baseSec || 0;
     while (start < total) {
       const end = Math.min(start + SLICE, total);
       const out = await pipe(audio.slice(start, end), {
         chunk_length_s: 30, stride_length_s: 5, return_timestamps: true,
         ...(m.lang ? { language: m.lang, task: "transcribe" } : {}),
       });
-      const off = start / SR, sliceEnd = end / SR;
+      const off = base + start / SR, sliceEnd = base + end / SR;
       const segs = (out.chunks || [])
         .map(c => ({ s: off + (c.timestamp?.[0] ?? 0), e: off + (c.timestamp?.[1] ?? (sliceEnd - off)), t: String(c.text || "").trim() }))
         .filter(x => x.t);
-      post({ type: "slice", segs, doneSec: sliceEnd, totalSec: total / SR });
+      post({ type: "slice", segs, doneSec: sliceEnd });
       start = end;
     }
     post({ type: "done" });
