@@ -78,7 +78,7 @@ import { money, maskMoney, timeAgo, formatBytes, todayIsoDate, formatTxDate } fr
 import {
   WEEKDAY_LABELS, MONTH_LABELS, pad2, parseReminderDate, daysUntil, daysUntilMonthlyDay,
   daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
-  calendarEventMatchesDate, formatWeekdaysLabel, CAL_TYPE_META, getDayEvents, buildMonthGrid,
+  calendarEventMatchesDate, formatWeekdaysLabel, reminderDaysUntil, recurrenceLabel, CAL_TYPE_META, getDayEvents, buildMonthGrid,
   sortByProximity,
 } from "./lib/calendar";
 import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
@@ -908,7 +908,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const notifItems = useMemo(()=>{
     const items = [];
     reminders.data.forEach(r=>{
-      if(daysUntil(r.date)===1){
+      if(r.recurrence!=="daily" && reminderDaysUntil(r)===1){
         const isBday = r.kind==="Aniversário";
         items.push({
           id:"rem-"+r.id, title:r.title,
@@ -997,7 +997,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       const nowHM = String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
       reminders.data.forEach(r=>{
         if(r.kind==="Aniversário" || !r.time) return;
-        if(daysUntil(r.date)!==0) return; // só dispara no próprio dia do lembrete
+        if(reminderDaysUntil(r)!==0) return; // só dispara no próprio dia do lembrete
         if(r.time>nowHM) return; // ainda não chegou a hora
         if(fired.includes(r.id)) return; // já disparou hoje
         fireBrowserNotification(r.title, "Lembrete · "+(r.kind||"Geral")+" · "+r.time);
@@ -1669,9 +1669,9 @@ function MobileMenuOverlay({navTree,page,goTo,onClose}){
 }
 
 function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals,hideValues,setHideValues,budgetAvailable,shoppingItems,fixedCount,debtsCount}){
- const overdue = reminders.filter(r=>{const d=daysUntil(r.date); return d!==null && d<0;});
- const dueToday = reminders.filter(r=>daysUntil(r.date)===0);
- const dueNext7 = reminders.filter(r=>{const d=daysUntil(r.date); return d!==null && d>0 && d<=7;});
+ const overdue = reminders.filter(r=>{const d=reminderDaysUntil(r); return d!==null && d<0;});
+ const dueToday = reminders.filter(r=>reminderDaysUntil(r)===0);
+ const dueNext7 = reminders.filter(r=>{const d=reminderDaysUntil(r); return d!==null && d>0 && d<=7;});
  const monthLabel = new Date(month+"-02").toLocaleDateString("pt-BR",{month:"long"});
  return <div className="content">
    <div className="mobileOverview">
@@ -1783,8 +1783,8 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
           key={r.id}
           icon={notifIcon(r.kind, 18)}
           title={r.title}
-          subtitle={(r.kind||"Geral")+" · "+r.date}
-          days={daysUntil(r.date)}
+          subtitle={(r.kind||"Geral")+" · "+(r.recurrence?recurrenceLabel(r):r.date)+(r.time?" às "+r.time:"")}
+          days={reminderDaysUntil(r)}
         />)}
         {reminders.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
       </div>
@@ -2029,32 +2029,39 @@ function CommonReminders({entity}){
   const {data,add,remove} = entity;
   const filtered = sortByProximity(data.filter(x=>x.kind!=="Aniversário"));
   const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro"); const [time,setTime]=useState("");
+  const [recurrence,setRecurrence]=useState(""); const [weekdays,setWeekdays]=useState([]);
   const [openMenuId,setOpenMenuId]=useState(null);
+  const toggleWeekday=(n)=>setWeekdays(w=>w.includes(n)?w.filter(x=>x!==n):[...w,n].sort((a,b)=>a-b));
   const submit=()=>{
-    if(!title.trim()||!date) return;
-    add({title,date,kind,time:time||null});
+    if(!title.trim()) return;
+    if(recurrence==="weekly" ? weekdays.length===0 : (recurrence==="daily" ? false : !date)) return;
+    add({title,date:(recurrence==="daily"||recurrence==="weekly")?null:date,kind,time:time||null,recurrence:recurrence||null,weekdays:recurrence==="weekly"?weekdays.join(","):null});
     // Se a pessoa definiu uma hora, já aproveita e pede permissão de notificação
     // (só pergunta de fato na primeira vez — depois disso o navegador lembra a escolha).
     if(time) requestNotificationPermission();
-    setTitle("");setDate("");setKind("Financeiro");setTime("");
+    setTitle("");setDate("");setKind("Financeiro");setTime("");setRecurrence("");setWeekdays([]);
   };
   return <div className="content">
     <div className="panel">
       <div className="inlineAdd">
         <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Título do lembrete"/>
-        <input value={date} onChange={e=>setDate(e.target.value)} placeholder="Data (dd/mm)"/>
+        <select value={recurrence} onChange={e=>setRecurrence(e.target.value)} title="Repetição"><option value="">Não repete</option><option value="daily">Todo dia</option><option value="weekly">Toda semana</option><option value="monthly">Todo mês</option></select>
+        {recurrence!=="daily" && recurrence!=="weekly" && <input value={date} onChange={e=>setDate(e.target.value)} placeholder={recurrence==="monthly"?"Dia do mês (ex.: 15)":"Data (dd/mm)"}/>}
         <input value={time} onChange={e=>setTime(e.target.value)} type="time" title="Hora do lembrete (opcional)" placeholder="Hora"/>
         <select value={kind} onChange={e=>setKind(e.target.value)}><option>Financeiro</option><option>Outros</option></select>
         <button onClick={submit}><Plus/></button>
       </div>
+      {recurrence==="weekly" && <div className="calWeekdayPicker" style={{marginTop:10}}>
+        {WEEKDAY_LABELS.map((l,n)=><button type="button" key={n} className={weekdays.includes(n)?"active":""} onClick={()=>toggleWeekday(n)}>{l}</button>)}
+      </div>}
     </div>
     <div className="reminderGrid">
       {filtered.map(x=><ReminderCard
         key={x.id}
         icon={<Bell size={18}/>}
         title={x.title}
-        subtitle={x.kind+" · "+x.date+(x.time?" às "+x.time:"")}
-        days={daysUntil(x.date)}
+        subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):x.date)+(x.time?" às "+x.time:"")}
+        days={reminderDaysUntil(x)}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
         menuContent={<button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>}
@@ -2239,7 +2246,10 @@ function CalendarSearchModal({reminders, calendarEvents, studyGoals, onJump, onC
         out.push({id:"sp-"+y+"-"+s.title, title:s.title, subtitle:(s.type==="holiday"?"Feriado":"Data comemorativa")+" · "+pad2(s.day)+"/"+pad2(s.month)+"/"+y, year:y, month:s.month, day:s.day});
       });
     });
-    reminders.filter(r=>r.title.toLowerCase().includes(query)).forEach(r=>{
+    reminders.filter(r=>r.recurrence && r.title.toLowerCase().includes(query)).forEach(r=>{
+      out.push({id:"rem-"+r.id, title:r.title, subtitle:"Recorrente · "+recurrenceLabel(r)+(r.time?" · "+r.time:""), recurring:true});
+    });
+    reminders.filter(r=>!r.recurrence && r.title.toLowerCase().includes(query)).forEach(r=>{
       const parts = String(r.date||"").split("/").map(p=>parseInt(p,10));
       if(parts.length<2 || Number.isNaN(parts[0])) return;
       const [d,m,y] = parts;

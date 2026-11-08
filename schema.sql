@@ -1366,3 +1366,9 @@ alter table audiobooks add column if not exists notes text;
 
 -- Atualização: citações escritas à mão nos audiolivros (aparecem no Dashboard dos Audiolivros).
 alter table audiobooks add column if not exists quotes jsonb not null default '[]';
+
+-- Atualização: Lembretes Comuns recorrentes (todo dia / toda semana em dias escolhidos / todo mês).
+-- recurrence: 'daily' | 'weekly' | 'monthly' (nulo = não repete). weekdays: 0=domingo ... 6=sábado,
+-- separados por vírgula (ex.: '3' para quarta, '1,3,5' para seg/qua/sex). No mensal, o dia vem de `date` (dd/mm).
+alter table reminders add column if not exists recurrence text;
+alter table reminders add column if not exists weekdays text;

@@ -112,6 +112,42 @@ export function reminderMatchesDay(dateStr, year, month, day){
   if(y) return d===day && m===month && y===year;
   return d===day && m===month;
 }
+// ---- Lembretes recorrentes ----
+// recurrence: "daily" (todo dia) | "weekly" (dias da semana em `weekdays`, ex.: "3" ou "1,3,5") |
+// "monthly" (todo mês, no dia de `date`). Sem recurrence, vale o comportamento antigo (dd/mm).
+const FULL_WEEKDAYS = ["domingo","segunda","terça","quarta","quinta","sexta","sábado"];
+const weekdaySet = (str) => String(str||"").split(",").filter(Boolean).map(n=>parseInt(n,10)).filter(n=>n>=0 && n<=6);
+const monthlyDay = (dateStr) => { const d = parseInt(String(dateStr||"").split("/")[0],10); return d>=1 && d<=31 ? d : null; };
+
+// Dias até a próxima ocorrência (0 = hoje). Para lembretes comuns usa a mesma conta de daysUntil.
+export function reminderDaysUntil(r){
+  if(r?.recurrence==="daily") return 0;
+  if(r?.recurrence==="weekly"){
+    const set = weekdaySet(r.weekdays);
+    if(!set.length) return null;
+    const dow = new Date().getDay();
+    return Math.min(...set.map(d=>(d-dow+7)%7));
+  }
+  if(r?.recurrence==="monthly") return daysUntilMonthlyDay(monthlyDay(r.date));
+  return daysUntil(r?.date);
+}
+export function reminderOccursOn(r, year, month, day){
+  if(r.recurrence==="daily") return true;
+  if(r.recurrence==="weekly") return weekdaySet(r.weekdays).includes(new Date(year, month-1, day).getDay());
+  if(r.recurrence==="monthly") return monthlyDay(r.date)===day;
+  return reminderMatchesDay(r.date, year, month, day);
+}
+// "Todo dia", "Toda quarta", "Seg, Qua e Sex", "Todo dia 15"... (vazio se o lembrete não repete)
+export function recurrenceLabel(r){
+  if(r?.recurrence==="daily") return "Todo dia";
+  if(r?.recurrence==="weekly"){
+    const set = weekdaySet(r.weekdays);
+    if(set.length===1) return "Toda "+FULL_WEEKDAYS[set[0]]+(set[0]===0||set[0]===6?"":"-feira");
+    return "Toda semana: "+set.map(n=>WEEKDAY_LABELS[n]).join(", ");
+  }
+  if(r?.recurrence==="monthly"){ const d = monthlyDay(r.date); return d ? "Todo dia "+d : "Todo mês"; }
+  return "";
+}
 export function studyGoalMatchesDay(dueDate, year, month, day){
   return !!dueDate && dueDate===`${year}-${pad2(month)}-${pad2(day)}`;
 }
@@ -141,7 +177,7 @@ export function getDayEvents(year, month, day, {specialDays, reminders, calendar
     items.push({id:"special-"+s.title, title:s.title, subtitle:s.type==="holiday"?"Feriado nacional":"Data comemorativa", type:s.type});
   });
   reminders.forEach(r=>{
-    if(reminderMatchesDay(r.date, year, month, day)){
+    if(reminderOccursOn(r, year, month, day)){
       const isBday = r.kind==="Aniversário";
       items.push({id:"rem-"+r.id, title:r.title, subtitle:isBday?"Aniversário":((r.kind||"Lembrete")+(r.time?" · "+r.time:"")), type:isBday?"birthday":"reminder"});
     }
@@ -178,8 +214,8 @@ export function buildMonthGrid(year, monthIdx){
 
 export function sortByProximity(list){
   return [...list].sort((a,b)=>{
-    const da = daysUntil(a.date);
-    const db = daysUntil(b.date);
+    const da = reminderDaysUntil(a);
+    const db = reminderDaysUntil(b);
     if(da===null && db===null) return 0;
     if(da===null) return 1;
     if(db===null) return -1;
