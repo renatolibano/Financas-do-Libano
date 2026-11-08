@@ -1,12 +1,12 @@
 import { supabase } from "./supabaseClient";
 
 // Chama a edge function "note-ai" (Gemini). action: improve | proofread |
-// explain | reformat | custom (custom exige `instruction`).
+// explain | reformat | quote_fix | custom (custom exige `instruction`; quote_fix aceita `context`).
 // Sempre resolve: { result, summary } em caso de sucesso, { error } se falhar.
-export async function runNoteAi({ action, text, instruction }) {
+export async function runNoteAi({ action, text, instruction, context }) {
   if (!supabase) return { error: "A IA precisa da conexão com o servidor." };
   try {
-    const { data, error } = await supabase.functions.invoke("note-ai", { body: { action, text, instruction } });
+    const { data, error } = await supabase.functions.invoke("note-ai", { body: { action, text, instruction, context } });
     if (error || data?.error) return { error: data?.error || "Não consegui falar com a IA agora." };
     return { result: data.result, summary: data.summary };
   } catch (err) {

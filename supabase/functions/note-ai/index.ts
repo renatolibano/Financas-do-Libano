@@ -32,6 +32,8 @@ const TASKS: Record<string, string> = {
     "Faça apenas a revisão do trecho: corrija ortografia, acentuação, pontuação e gramática. Não reescreva nem mude o estilo; altere o mínimo possível. Se não houver nada a corrigir, devolva o trecho igual.",
   explain:
     "Explique o trecho de forma simples e direta, em poucas frases, no mesmo idioma do trecho. Em \"result\" vai a explicação (não repita o trecho).",
+  quote_fix:
+    "O trecho é a transcrição automática (fala para texto) de uma citação de audiolivro. Corrija: (1) pontuação, maiúsculas e gramática (ponto final no lugar certo etc.); (2) palavras que o reconhecimento de voz errou ou que ficaram fora de contexto, trocando pela palavra certa que faz sentido pelo contexto (ex.: \"igoyás\" no contexto é \"e Goiás\"). NÃO altere nomes próprios, apelidos, gírias, nomes de lugares/personagens e termos do livro que estão corretos no contexto (ex.: \"Kid Preto\"); na dúvida, mantenha como está. Não reescreva, não resuma, não acrescente nem retire ideias; mantenha a ordem e o sentido e altere o mínimo necessário. Se não houver nada a corrigir, devolva o trecho igual.",
   reformat:
     "Reorganize o trecho para ficar bem estruturado e fácil de ler (parágrafos curtos, itens com \"- \" no início da linha quando fizer sentido), sem mudar o conteúdo nem o idioma.",
 };
@@ -50,7 +52,8 @@ Deno.serve(async (req) => {
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
     if (userError || !user) return json({ error: "Sessão inválida." }, 401);
 
-    const { action, text, instruction } = await req.json();
+    const { action, text, instruction, context } = await req.json();
+    const ctx = typeof context === "string" ? context.trim().slice(0, 4000) : "";
     const clean = typeof text === "string" ? text.trim().slice(0, 8000) : "";
     if (!clean) return json({ error: "Faltou o texto." }, 400);
 
@@ -72,7 +75,12 @@ Responda APENAS com um JSON válido, sem markdown, sem crases, no formato:
 
 Regras: devolva só texto simples (sem HTML nem markdown de ênfase); não inclua comentários fora do JSON.
 
-TRECHO:
+${action === "quote_fix" && ctx ? `CONTEXTO DO LIVRO (só para entender nomes e termos; NÃO devolva nem altere esta parte):
+"""
+${ctx}
+"""
+
+` : ""}TRECHO:
 """
 ${clean}
 """`;

@@ -2852,3 +2852,25 @@ h1{font-size:23px}
 .abQModal textarea{width:100%;resize:vertical;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:12px;font:inherit;font-size:15px;line-height:1.55;min-height:160px}
 .abQuoteRow>button:first-child{align-items:flex-start;flex-direction:column;gap:4px}
 .abQuoteGo{display:inline-flex;align-items:center;gap:4px;color:var(--accent)!important;font-weight:700}
+
+/* Editor de citação: IA + revisão alteração por alteração */
+.abQModalWide{width:min(720px,100%)}
+.abQAiRow{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.abQAiBtn{display:inline-flex;align-items:center;gap:6px}
+.abQLink{font-size:12px;color:var(--text-2);text-decoration:underline;background:none;border:0;padding:2px}
+.abQKeep{width:100%;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:9px 10px;font:inherit;font-size:13px}
+.abQMsg{color:var(--text-2)}
+.abQReviewHead{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2)}
+.abQReviewHead button{margin-left:6px;padding:5px 10px;font-size:12px}
+.abQReview{white-space:pre-wrap;line-height:2;font-size:15px;border:1px solid var(--border);border-radius:10px;background:var(--bg-surface);padding:12px;max-height:50vh;overflow-y:auto}
+.abQChg{display:inline;padding:1px 3px;border-radius:6px;background:var(--bg-hover-2)}
+.abQChg del{color:#ff8a8a;text-decoration:line-through;margin-right:2px}
+.abQChg ins{color:#7fe0a1;text-decoration:none;font-weight:700}
+.abQChg.accepted{background:#7fe0a122}
+.abQChg.rejected{background:transparent;outline:1px dashed var(--border)}
+.abQKept{opacity:.85}
+.abQNone{font-size:12px;color:var(--text-3);font-style:normal}
+.abQChgBtns{display:inline-flex;gap:2px;margin-left:4px;vertical-align:middle}
+.abQChgBtns button{width:20px;height:20px;display:inline-grid;place-items:center;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-2)}
+.abQChgBtns button:hover{border-color:var(--accent);color:var(--accent)}
+.abMarkEdit:hover{color:var(--accent)}

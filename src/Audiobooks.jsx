@@ -4,6 +4,7 @@ import {
   BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText, ChevronLeft,
 } from "lucide-react";
 import AudioTranscript from "./AudioTranscript";
+import QuoteEditor from "./QuoteEditor";
 import { usePersistentState } from "./lib/storage";
 import { bumpDailyGoals } from "./lib/notifications";
 import {
@@ -356,6 +357,11 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
     const q = { id: crypto.randomUUID(), text: t, track: at?.track ?? trackIdxRef.current, pos: Math.floor(at?.pos ?? audioRef.current?.currentTime ?? 0), createdAt: Date.now() };
     updateRef.current(b.id, { quotes: [...(b.quotes || []), q] });
   };
+  const updateQuote = (id, text) => {
+    const b = bookRef.current, t = String(text || "").trim();
+    if (!b || !t) return;
+    updateRef.current(b.id, { quotes: (b.quotes || []).map(q => q.id === id ? { ...q, text: t, editedAt: Date.now() } : q) });
+  };
   const removeQuote = (id) => { const b = bookRef.current; if (b) updateRef.current(b.id, { quotes: (b.quotes || []).filter(q => q.id !== id) }); };
   const removeBookmark = (id) => { const b = bookRef.current; if (b) updateRef.current(b.id, { bookmarks: (b.bookmarks || []).filter(m => m.id !== id) }); };
   const jumpBookmark = (m) => {
@@ -616,7 +622,7 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
           notesPane={NotesPane ? <NotesPane key={curBook.id} book={curBook} entity={entity} session={session}/> : null}
           onToggle={togglePlay} onSkip={skip} onSeek={seekTo} onPrev={prevChapter} onNext={nextChapter}
           onGoTrack={(i) => goTrack(i, 0)} onSleep={setSleep}
-          onAddMark={addBookmark} onJumpMark={jumpBookmark} onRemoveMark={removeBookmark} onAddQuote={addQuote} onRemoveQuote={removeQuote}
+          onAddMark={addBookmark} onJumpMark={jumpBookmark} onRemoveMark={removeBookmark} onAddQuote={addQuote} onUpdateQuote={updateQuote} onRemoveQuote={removeQuote}
           onAttach={() => pickFilesFor(curBook)} onCollapse={() => setExpanded(false)} onClose={closePlayer}/>
       )}
       {form && <AudiobookForm mode={form.mode} book={form.book} defaultStatus={form.status} busy={!!busy} onClose={() => setForm(null)} onSubmit={submitForm}/>}
@@ -665,12 +671,16 @@ function useMinWidth(px) {
 
 function FullPlayer({
   book, trackIdx, pos, dur, live, playing, missing, loading, playErr, rate, setRate, sleep, sleepLeft, panel, setPanel, generated, notesPane,
-  onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAddQuote, onRemoveQuote, onAttach, onCollapse, onClose,
+  onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAddQuote, onUpdateQuote, onRemoveQuote, onAttach, onCollapse, onClose,
 }) {
   const [quoteDraft, setQuoteDraft] = useState(null); // {text, track, pos}: janela flutuante de edição da citação
   const quotes = book.quotes || [];
   const openQuote = (text, at) => setQuoteDraft({ text: text || "", track: at?.track ?? trackIdx, pos: Math.floor(at?.pos ?? pos) });
-  const saveQuote = () => { if (!quoteDraft?.text.trim()) return; onAddQuote(quoteDraft.text, { track: quoteDraft.track, pos: quoteDraft.pos }); setQuoteDraft(null); };
+  const saveQuote = (text) => {
+    if (!quoteDraft || !String(text || "").trim()) return;
+    if (quoteDraft.id) onUpdateQuote(quoteDraft.id, text); else onAddQuote(text, { track: quoteDraft.track, pos: quoteDraft.pos });
+    setQuoteDraft(null);
+  };
   const pr = bookProgress(book, live);
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
@@ -716,6 +726,7 @@ function FullPlayer({
                     <span className="abQuoteText">“{q.text}”</span>
                     <small className="abQuoteGo"><Play size={11}/> {tracks.length > 1 ? `Cap. ${q.track + 1} · ` : ""}{fmtClock(q.pos)}</small>
                   </button>
+                  <button type="button" className="abMarkDel abMarkEdit" title="Editar citação" onClick={() => setQuoteDraft({ id: q.id, text: q.text, track: q.track, pos: q.pos })}><Pencil size={13}/></button>
                   <button type="button" className="abMarkDel" title="Remover citação" onClick={() => onRemoveQuote(q.id)}><Trash2 size={13}/></button>
                 </div>
               ))}
@@ -807,23 +818,7 @@ function FullPlayer({
           {panel === "transcript" && !wide && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={openQuote}/>}
         </div>
       </div>
-      {quoteDraft && (
-        <div className="abQModalBack">
-          <div className="abQModal" role="dialog" aria-label="Editar citação">
-            <h3><Quote size={16}/> Nova citação</h3>
-            <small>Ponto: {tracks.length > 1 ? `Cap. ${quoteDraft.track + 1} · ` : ""}{fmtClock(quoteDraft.pos)}. Corrija o texto, se precisar, antes de salvar.</small>
-            <textarea
-              autoFocus rows={8} value={quoteDraft.text} placeholder="Escreva a citação (sem as aspas)..."
-              onChange={e => setQuoteDraft(d => ({ ...d, text: e.target.value }))}
-              onKeyDown={e => { if (e.key === "Escape") setQuoteDraft(null); else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) saveQuote(); }}
-            />
-            <div className="abQuoteActions">
-              <button type="button" className="ghost" onClick={() => setQuoteDraft(null)}>Cancelar</button>
-              <button type="button" className="primary" onClick={saveQuote} disabled={!quoteDraft.text.trim()}>Salvar citação</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {quoteDraft && <QuoteEditor key={quoteDraft.id || "new"} book={book} draft={quoteDraft} onSave={saveQuote} onCancel={() => setQuoteDraft(null)}/>}
     </div>
   );
 }
