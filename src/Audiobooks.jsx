@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Headphones, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw, Plus, X, MoreVertical, Trash2, Pencil,
-  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText,
+  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText, ChevronLeft,
 } from "lucide-react";
 import AudioTranscript from "./AudioTranscript";
 import { usePersistentState } from "./lib/storage";
@@ -675,8 +675,73 @@ function FullPlayer({
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
   const toggle = (name) => setPanel(p => p === name ? null : name);
-  const lyrics = useMinWidth(900) && panel === "transcript"; // PC: letra grande à esquerda, player à direita
+  const wide = useMinWidth(900);
+  const [lyricsOn, setLyricsOn] = useState(false);
+  const lyrics = wide && lyricsOn; // PC: letra grande à esquerda, player (ou o painel aberto) à direita
+  const sideOpen = lyrics && !!panel && panel !== "transcript";
+  const SIDE_TITLES = { speed: "Velocidade", sleep: "Timer", chapters: "Capítulos", marks: "Marcadores e citações", notes: "Notas" };
   const marks = [...(book.bookmarks || [])].sort((a, b) => a.track - b.track || a.pos - b.pos);
+  const panelContent = (
+    <>
+          {panel === "speed" && (
+            <div className="abPanel abChips">
+              {RATES.map(r => <button key={r} type="button" className={r === rate ? "active" : ""} onClick={() => setRate(r)}>{r}×</button>)}
+            </div>
+          )}
+          {panel === "sleep" && (
+            <div className="abPanel abChips">
+              {SLEEP_OPTIONS.map(m => <button key={m} type="button" onClick={() => { onSleep({ type: "time", endsAt: Date.now() + m * 60000 }); setPanel(null); }}>{m} min</button>)}
+              {tracks.length > 1 && <button type="button" onClick={() => { onSleep({ type: "chapter" }); setPanel(null); }}>Fim do capítulo</button>}
+              {sleep && <button type="button" className="danger" onClick={() => { onSleep(null); setPanel(null); }}>Desligar</button>}
+            </div>
+          )}
+          {panel === "chapters" && (
+            <div className="abPanel abList">
+              {tracks.map((t, i) => (
+                <button key={t.id} type="button" className={i === trackIdx ? "active" : ""} onClick={() => onGoTrack(i)}>
+                  <span className="abListNum">{i + 1}</span>
+                  <span className="abListName">{t.name}</span>
+                  <small>{fmtClock(t.dur)}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          {panel === "marks" && (
+            <div className="abPanel abList abListFree">
+              <button type="button" className="abAddMark" onClick={onAddMark}><BookmarkPlus size={15}/> Marcar este ponto ({fmtClock(pos)})</button>
+              <button type="button" className="abAddMark" onClick={() => setQuoteOpen(o => !o)}><Quote size={15}/> Adicionar citação</button>
+              {quoteOpen && (
+                <div className="abQuoteForm">
+                  <textarea rows={4} value={quoteText} onChange={e => setQuoteText(e.target.value)} placeholder="Escreva a citação (sem as aspas)..." autoFocus/>
+                  <div className="abQuoteActions">
+                    <button type="button" className="ghost" onClick={() => { setQuoteOpen(false); setQuoteText(""); }}>Cancelar</button>
+                    <button type="button" className="primary" onClick={saveQuote} disabled={!quoteText.trim()}>Salvar citação</button>
+                  </div>
+                </div>
+              )}
+              {quotes.length > 0 && <small className="abQuotesLabel">Citações deste audiolivro ({quotes.length})</small>}
+              {quotes.map(q => (
+                <div key={q.id} className="abMarkRow abQuoteRow">
+                  <span className="abQuoteText">“{q.text}”</span>
+                  <button type="button" className="abMarkDel" title="Remover citação" onClick={() => onRemoveQuote(q.id)}><Trash2 size={13}/></button>
+                </div>
+              ))}
+              {marks.length === 0 && <p className="emptyHint">Nenhum marcador ainda.</p>}
+              {marks.map(m => (
+                <div key={m.id} className="abMarkRow">
+                  <button type="button" onClick={() => onJumpMark(m)}>
+                    <span className="abListName">{m.note || `Marcador`}</span>
+                    <small>{tracks.length > 1 ? `Cap. ${m.track + 1} · ` : ""}{fmtClock(m.pos)}</small>
+                  </button>
+                  <button type="button" className="abMarkDel" title="Remover" onClick={() => onRemoveMark(m.id)}><Trash2 size={13}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+          {panel === "notes" && notesPane}
+    </>
+  );
+
   return (
     <div className="abFullBack">
       <div className={"abFull" + (lyrics ? " lyrics" : "")}>
@@ -687,6 +752,15 @@ function FullPlayer({
         </div>
         {lyrics && <div className="abLyricsCol"><AudioTranscript wide book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/></div>}
         <div className="abFullScroll">
+          {sideOpen ? (
+            <div className="abSidePanel">
+              <div className="abSideHead">
+                <button type="button" onClick={() => setPanel(null)}><ChevronLeft size={16}/> Voltar</button>
+                <b>{SIDE_TITLES[panel]}</b>
+              </div>
+              {panelContent}
+            </div>
+          ) : (<>
           <div className="abFullCover"><AbCover book={book} generated={generated}/></div>
           <div className="abFullTitles">
             <h2>{book.title}</h2>
@@ -731,67 +805,13 @@ function FullPlayer({
             </button>
             <button type="button" className={panel === "chapters" ? "active" : ""} onClick={() => toggle("chapters")}><List size={16}/> Capítulos</button>
             <button type="button" className={panel === "marks" ? "active" : ""} onClick={() => toggle("marks")}><Bookmark size={16}/> Marcadores{marks.length ? ` (${marks.length})` : ""}</button>
-            <button type="button" className={panel === "transcript" ? "active" : ""} onClick={() => toggle("transcript")}><FileText size={16}/> Transcrição</button>
+            <button type="button" className={(wide ? lyricsOn : panel === "transcript") ? "active" : ""} onClick={() => (wide ? setLyricsOn(v => !v) : toggle("transcript"))}><FileText size={16}/> Transcrição</button>
             {notesPane && <button type="button" className={panel === "notes" ? "active" : ""} onClick={() => toggle("notes")}><StickyNote size={16}/> Notas</button>}
           </div>
 
-          {panel === "speed" && (
-            <div className="abPanel abChips">
-              {RATES.map(r => <button key={r} type="button" className={r === rate ? "active" : ""} onClick={() => setRate(r)}>{r}×</button>)}
-            </div>
-          )}
-          {panel === "sleep" && (
-            <div className="abPanel abChips">
-              {SLEEP_OPTIONS.map(m => <button key={m} type="button" onClick={() => { onSleep({ type: "time", endsAt: Date.now() + m * 60000 }); setPanel(null); }}>{m} min</button>)}
-              {tracks.length > 1 && <button type="button" onClick={() => { onSleep({ type: "chapter" }); setPanel(null); }}>Fim do capítulo</button>}
-              {sleep && <button type="button" className="danger" onClick={() => { onSleep(null); setPanel(null); }}>Desligar</button>}
-            </div>
-          )}
-          {panel === "chapters" && (
-            <div className="abPanel abList">
-              {tracks.map((t, i) => (
-                <button key={t.id} type="button" className={i === trackIdx ? "active" : ""} onClick={() => onGoTrack(i)}>
-                  <span className="abListNum">{i + 1}</span>
-                  <span className="abListName">{t.name}</span>
-                  <small>{fmtClock(t.dur)}</small>
-                </button>
-              ))}
-            </div>
-          )}
-          {panel === "marks" && (
-            <div className="abPanel abList">
-              <button type="button" className="abAddMark" onClick={onAddMark}><BookmarkPlus size={15}/> Marcar este ponto ({fmtClock(pos)})</button>
-              <button type="button" className="abAddMark" onClick={() => setQuoteOpen(o => !o)}><Quote size={15}/> Adicionar citação</button>
-              {quoteOpen && (
-                <div className="abQuoteForm">
-                  <textarea rows={4} value={quoteText} onChange={e => setQuoteText(e.target.value)} placeholder="Escreva a citação (sem as aspas)..." autoFocus/>
-                  <div className="abQuoteActions">
-                    <button type="button" className="ghost" onClick={() => { setQuoteOpen(false); setQuoteText(""); }}>Cancelar</button>
-                    <button type="button" className="primary" onClick={saveQuote} disabled={!quoteText.trim()}>Salvar citação</button>
-                  </div>
-                </div>
-              )}
-              {quotes.length > 0 && <small className="abQuotesLabel">Citações deste audiolivro ({quotes.length})</small>}
-              {quotes.map(q => (
-                <div key={q.id} className="abMarkRow abQuoteRow">
-                  <span className="abQuoteText">“{q.text}”</span>
-                  <button type="button" className="abMarkDel" title="Remover citação" onClick={() => onRemoveQuote(q.id)}><Trash2 size={13}/></button>
-                </div>
-              ))}
-              {marks.length === 0 && <p className="emptyHint">Nenhum marcador ainda.</p>}
-              {marks.map(m => (
-                <div key={m.id} className="abMarkRow">
-                  <button type="button" onClick={() => onJumpMark(m)}>
-                    <span className="abListName">{m.note || `Marcador`}</span>
-                    <small>{tracks.length > 1 ? `Cap. ${m.track + 1} · ` : ""}{fmtClock(m.pos)}</small>
-                  </button>
-                  <button type="button" className="abMarkDel" title="Remover" onClick={() => onRemoveMark(m.id)}><Trash2 size={13}/></button>
-                </div>
-              ))}
-            </div>
-          )}
-          {panel === "transcript" && !lyrics && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
-          {panel === "notes" && notesPane}
+          </>)}
+          {!sideOpen && panelContent}
+          {panel === "transcript" && !wide && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
         </div>
       </div>
     </div>

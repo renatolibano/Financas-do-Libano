@@ -2831,3 +2831,15 @@ h1{font-size:23px}
 .abTr.wide .abTrList p.past{opacity:.35}
 .abTr.wide .abTrList p.on{opacity:1}
 .abTr.wide .abTrList p:hover{opacity:.85}
+.abTrMenuBtn.active{border-color:var(--accent);color:var(--accent)}
+
+/* Citações/marcadores abrem livres (sem caixa com altura fixa), como nos livros */
+.abList.abListFree{max-height:none;overflow:visible}
+/* PC com letra aberta: o painel escolhido ocupa o lugar da capa e dos botões, à direita */
+.abSidePanel{display:flex;flex-direction:column;gap:10px}
+.abSideHead{display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:2;padding:4px 0 8px;background:var(--bg-grad-2,transparent)}
+.abSideHead button{display:inline-flex;align-items:center;gap:4px;padding:7px 11px;border-radius:99px;border:1px solid var(--border);color:var(--text-1);font-size:12.5px;font-weight:700;background:var(--bg-surface)}
+.abSideHead button:hover{border-color:var(--accent)}
+.abSideHead b{font-size:15px}
+.abSidePanel .abList{max-height:none;overflow:visible}
+.abSidePanel .abNotesPane .noteRichBody{max-height:none;min-height:55vh}

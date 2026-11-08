@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useSyncExternalStore } from "react";
-import { Quote, Sparkles, X, Trash2, RefreshCw, ArrowDownToLine } from "lucide-react";
+import { Quote, Sparkles, X, Trash2, RefreshCw, ArrowDownToLine, Settings2 } from "lucide-react";
 import { usePersistentState } from "./lib/storage";
 import { getTranscript, deleteTranscript, getLocalTrackIds } from "./lib/audiobooks";
 import {
@@ -21,6 +21,7 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
   const [sel, setSel] = useState(null);    // {text, top, left, pos}
   const [aiCard, setAiCard] = useState(null);
   const [flash, setFlash] = useState("");
+  const [menu, setMenu] = useState(false); // opções/ações ficam escondidas até clicar em "Opções"
   const listRef = useRef(null);
   const aiTokenRef = useRef(0);
   const job = track ? jobs[`${book.id}:${track.id}`] : null;
@@ -35,7 +36,7 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
     return () => { alive = false; };
   }, [book.id, track?.id, job?.doneSec, job?.status]);
 
-  useEffect(() => { setFollow(true); setSel(null); setAiCard(null); }, [track?.id]);
+  useEffect(() => { setFollow(true); setSel(null); setAiCard(null); setMenu(false); }, [track?.id]);
 
   const segs = tr?.segments || [];
   const active = useMemo(() => {
@@ -50,7 +51,7 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
     if (box && el) box.scrollTo({ top: el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
   }, [active, follow]);
 
-  const start = (t) => transcribeTrack(book.id, t, { model, lang });
+  const start = (t) => { setMenu(false); transcribeTrack(book.id, t, { model, lang }); };
   const startAll = async () => {
     const local = new Set(await getLocalTrackIds(book.id));
     for (const t of book.tracks || []) {
@@ -59,7 +60,8 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
       if (!done?.complete) start(t);
     }
   };
-  const remove = async () => { await deleteTranscript(book.id, track.id); setTr(null); setAiCard(null); setSel(null); };
+  const redo = () => { if (window.confirm("Refazer a transcrição deste capítulo? A atual será substituída.")) start(track); };
+  const remove = async () => { if (!window.confirm("Excluir a transcrição deste capítulo?")) return; setMenu(false); await deleteTranscript(book.id, track.id); setTr(null); setAiCard(null); setSel(null); };
 
   const readSelection = () => setTimeout(() => {
     const s = window.getSelection();
@@ -112,20 +114,27 @@ export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSe
       ) : (
         <>
           {job?.status === "error" && <div className="abNotice err"><span>{job.error}</span></div>}
-          <div className="abTrOpts">
-            <select value={model} onChange={e => setModel(e.target.value)} title="Modelo">
-              {WHISPER_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </select>
-            <select value={lang} onChange={e => setLang(e.target.value)} title="Idioma do áudio">
-              {TRANSCRIBE_LANGS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-            </select>
-          </div>
           <div className="abTrActions">
             {!tr?.complete && <button type="button" className="primary" onClick={() => start(track)}>{tr ? "Continuar transcrição" : "Transcrever este capítulo"}</button>}
-            {tr?.complete && <button type="button" className="ghost" onClick={() => start(track)} title="Refazer com o modelo/idioma escolhidos"><RefreshCw size={14}/> Refazer</button>}
-            {(book.tracks?.length || 0) > 1 && <button type="button" className="ghost" onClick={startAll}>Transcrever todos os capítulos</button>}
-            {tr && <button type="button" className="ghost" onClick={remove} title="Excluir a transcrição deste capítulo"><Trash2 size={14}/></button>}
+            <button type="button" className={"ghost abTrMenuBtn" + (menu ? " active" : "")} onClick={() => setMenu(m => !m)} aria-expanded={menu}><Settings2 size={14}/> Opções</button>
           </div>
+          {menu && (
+            <>
+              <div className="abTrOpts">
+                <select value={model} onChange={e => setModel(e.target.value)} title="Modelo">
+                  {WHISPER_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                <select value={lang} onChange={e => setLang(e.target.value)} title="Idioma do áudio">
+                  {TRANSCRIBE_LANGS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+                </select>
+              </div>
+              <div className="abTrActions">
+                {tr?.complete && <button type="button" className="ghost" onClick={redo} title="Refazer com o modelo/idioma escolhidos"><RefreshCw size={14}/> Refazer</button>}
+                {(book.tracks?.length || 0) > 1 && <button type="button" className="ghost" onClick={() => { setMenu(false); startAll(); }}>Transcrever todos os capítulos</button>}
+                {tr && <button type="button" className="ghost" onClick={remove} title="Excluir a transcrição deste capítulo"><Trash2 size={14}/> Excluir</button>}
+              </div>
+            </>
+          )}
         </>
       )}
       {bookBusy && !busy && <small className="abTrHint">Há outro capítulo sendo transcrito em segundo plano.</small>}
