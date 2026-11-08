@@ -48,9 +48,15 @@ export async function saveTrackBlob(bookId, trackId, blob) {
   return true;
 }
 
+// Transcrição (texto com tempos) de cada capítulo: também só no aparelho.
+const transcriptKey = (bookId, trackId) => `audiobook_transcript:${bookId}:${trackId}`;
+export const getTranscript = (bookId, trackId) => idbGet(transcriptKey(bookId, trackId), null);
+export const saveTranscript = (bookId, trackId, data) => idbSet(transcriptKey(bookId, trackId), data);
+export const deleteTranscript = (bookId, trackId) => idbDelete(transcriptKey(bookId, trackId));
+
 export async function deleteLocalFiles(bookId) {
   const ids = await idbGet(filesKey(bookId), []);
-  for (const id of ids) await idbDelete(trackKey(bookId, id));
+  for (const id of ids) { await idbDelete(trackKey(bookId, id)); await idbDelete(transcriptKey(bookId, id)); }
   await idbDelete(filesKey(bookId));
 }
 

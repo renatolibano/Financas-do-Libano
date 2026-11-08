@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  worker: { format: "es" },
   plugins: [
     react(),
     VitePWA({
@@ -56,7 +57,15 @@ export default defineConfig({
         // dividir o bundle em pedaços menores (code-splitting), mas isso
         // é uma mudança maior; por ora, isso resolve o build.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+        // Motor do transcritor de audiolivros (onnxruntime, ~22 MB): fora do pré-cache para não pesar a
+        // instalação do app; é guardado no cache só quando a transcrição é usada pela primeira vez.
+        globIgnores: ["**/ort-wasm*"],
         runtimeCaching: [
+          {
+            urlPattern: ({ url }) => /\/assets\/ort-wasm/.test(url.pathname),
+            handler: "CacheFirst",
+            options: { cacheName: "ort-wasm", expiration: { maxEntries: 4 } },
+          },
           {
             // Chamadas ao Supabase sempre vão para a rede (dados financeiros atualizados)
             urlPattern: ({ url }) => url.hostname.endsWith("supabase.co"),

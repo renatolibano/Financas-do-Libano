@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Headphones, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw, Plus, X, MoreVertical, Trash2, Pencil,
-  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote,
+  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText,
 } from "lucide-react";
+import AudioTranscript from "./AudioTranscript";
 import { usePersistentState } from "./lib/storage";
 import { bumpDailyGoals } from "./lib/notifications";
 import {
@@ -349,10 +350,10 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
   };
   // Citações escritas à mão (não dá pra marcar trecho num áudio): ficam no audiolivro e aparecem
   // no Dashboard dos Audiolivros, igual às citações dos livros.
-  const addQuote = (text) => {
+  const addQuote = (text, at) => {
     const b = bookRef.current, t = String(text || "").trim();
     if (!b || !t) return;
-    const q = { id: crypto.randomUUID(), text: t, track: trackIdxRef.current, pos: Math.floor(audioRef.current?.currentTime || 0), createdAt: Date.now() };
+    const q = { id: crypto.randomUUID(), text: t, track: at?.track ?? trackIdxRef.current, pos: Math.floor(at?.pos ?? audioRef.current?.currentTime ?? 0), createdAt: Date.now() };
     updateRef.current(b.id, { quotes: [...(b.quotes || []), q] });
   };
   const removeQuote = (id) => { const b = bookRef.current; if (b) updateRef.current(b.id, { quotes: (b.quotes || []).filter(q => q.id !== id) }); };
@@ -715,6 +716,7 @@ function FullPlayer({
             </button>
             <button type="button" className={panel === "chapters" ? "active" : ""} onClick={() => toggle("chapters")}><List size={16}/> Capítulos</button>
             <button type="button" className={panel === "marks" ? "active" : ""} onClick={() => toggle("marks")}><Bookmark size={16}/> Marcadores{marks.length ? ` (${marks.length})` : ""}</button>
+            <button type="button" className={panel === "transcript" ? "active" : ""} onClick={() => toggle("transcript")}><FileText size={16}/> Transcrição</button>
             {notesPane && <button type="button" className={panel === "notes" ? "active" : ""} onClick={() => toggle("notes")}><StickyNote size={16}/> Notas</button>}
           </div>
 
@@ -773,6 +775,7 @@ function FullPlayer({
               ))}
             </div>
           )}
+          {panel === "transcript" && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
           {panel === "notes" && notesPane}
         </div>
       </div>

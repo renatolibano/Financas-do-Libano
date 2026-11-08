@@ -2799,3 +2799,23 @@ h1{font-size:23px}
 .abQuotesLabel{display:block;margin:10px 0 4px;color:var(--text-2)}
 .abQuoteRow{align-items:flex-start}
 .abQuoteText{flex:1;font-style:italic;font-size:13px;line-height:1.5;white-space:pre-line;padding:4px 2px}
+
+/* ---- Transcrição dos audiolivros (estilo letra do Spotify) ---- */
+.abTr{display:flex;flex-direction:column;gap:8px;position:relative}
+.abTrOpts,.abTrActions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.abTrOpts select{flex:1;min-width:0;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:7px 8px}
+.abTrActions button{display:inline-flex;align-items:center;gap:6px}
+.abTrProgress{display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--text-2)}
+.abTrBar{height:6px;border-radius:99px;background:var(--bg-hover-2);overflow:hidden}
+.abTrBar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.abTrHint{color:var(--text-2);font-size:11px}
+.abTrFlash{color:var(--accent);font-size:12px}
+.abTrFollow{align-self:flex-end;display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:99px;border:1px solid var(--border);color:var(--text-1);background:var(--bg-surface)}
+.abTrList{max-height:46vh;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:12px 4px;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
+.abTrList p{margin:0;font-size:19px;line-height:1.4;font-weight:600;color:var(--text-2);opacity:.55;cursor:pointer;transition:color .2s,opacity .2s;user-select:text;-webkit-user-select:text}
+.abTrList p.past{opacity:.4}
+.abTrList p.on{color:var(--text-1);opacity:1}
+.abSelToolbar{position:fixed;z-index:80;transform:translateX(-50%);display:flex;gap:2px;padding:4px;border-radius:10px;background:var(--bg-modal,var(--bg-surface));border:1px solid var(--border);box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.abSelToolbar button{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:6px 9px;border-radius:7px;color:var(--text-1);white-space:nowrap}
+.abSelToolbar button:hover{background:var(--bg-hover-2)}
+.abAiInline{position:static;transform:none;width:auto;max-height:none;margin-top:4px}
