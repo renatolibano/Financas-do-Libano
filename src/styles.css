@@ -2819,3 +2819,15 @@ h1{font-size:23px}
 .abSelToolbar button{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:6px 9px;border-radius:7px;color:var(--text-1);white-space:nowrap}
 .abSelToolbar button:hover{background:var(--bg-hover-2)}
 .abAiInline{position:static;transform:none;width:auto;max-height:none;margin-top:4px}
+
+/* ---- PC: letra grande à esquerda e player à direita (como no Spotify) ---- */
+.abFull.lyrics{width:min(1500px,100%);display:grid;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);column-gap:20px;padding:0 20px 16px}
+.abFull.lyrics .abFullTop{grid-column:1/-1;grid-row:1}
+.abFull.lyrics .abLyricsCol{grid-column:1;grid-row:2;min-height:0;display:flex}
+.abFull.lyrics .abFullScroll{grid-column:2;grid-row:2;min-height:0;padding:4px 6px 20px}
+.abTr.wide{flex:1;min-width:0;min-height:0;border:0;border-radius:18px;padding:18px 28px;background:color-mix(in srgb,var(--accent) 38%,var(--bg-surface))}
+.abTr.wide .abTrList{flex:1;max-height:none;min-height:0;gap:22px;padding:18vh 8px 45vh}
+.abTr.wide .abTrList p{font-size:clamp(26px,2.4vw,40px);line-height:1.25;font-weight:800;color:var(--text-1);opacity:.5}
+.abTr.wide .abTrList p.past{opacity:.35}
+.abTr.wide .abTrList p.on{opacity:1}
+.abTr.wide .abTrList p:hover{opacity:.85}

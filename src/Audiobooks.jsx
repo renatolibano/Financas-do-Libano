@@ -650,6 +650,19 @@ function MiniBar({ book, trackIdx, pos, dur, live, playing, missing, loading, ge
   );
 }
 
+// true quando a janela tem pelo menos `px` de largura (acompanha redimensionamento)
+function useMinWidth(px) {
+  const q = `(min-width:${px}px)`;
+  const [m, setM] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(q);
+    const f = () => setM(mq.matches);
+    mq.addEventListener("change", f); f();
+    return () => mq.removeEventListener("change", f);
+  }, [q]);
+  return m;
+}
+
 function FullPlayer({
   book, trackIdx, pos, dur, live, playing, missing, loading, playErr, rate, setRate, sleep, sleepLeft, panel, setPanel, generated, notesPane,
   onToggle, onSkip, onSeek, onPrev, onNext, onGoTrack, onSleep, onAddMark, onJumpMark, onRemoveMark, onAddQuote, onRemoveQuote, onAttach, onCollapse, onClose,
@@ -662,15 +675,17 @@ function FullPlayer({
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
   const toggle = (name) => setPanel(p => p === name ? null : name);
+  const lyrics = useMinWidth(900) && panel === "transcript"; // PC: letra grande à esquerda, player à direita
   const marks = [...(book.bookmarks || [])].sort((a, b) => a.track - b.track || a.pos - b.pos);
   return (
     <div className="abFullBack">
-      <div className="abFull">
+      <div className={"abFull" + (lyrics ? " lyrics" : "")}>
         <div className="abFullTop">
           <button type="button" onClick={onCollapse} title="Minimizar"><ChevronDown size={22}/></button>
           <span>Tocando agora</span>
           <button type="button" onClick={onClose} title="Fechar player"><X size={20}/></button>
         </div>
+        {lyrics && <div className="abLyricsCol"><AudioTranscript wide book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/></div>}
         <div className="abFullScroll">
           <div className="abFullCover"><AbCover book={book} generated={generated}/></div>
           <div className="abFullTitles">
@@ -775,7 +790,7 @@ function FullPlayer({
               ))}
             </div>
           )}
-          {panel === "transcript" && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
+          {panel === "transcript" && !lyrics && <AudioTranscript book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={onAddQuote}/>}
           {panel === "notes" && notesPane}
         </div>
       </div>

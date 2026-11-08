@@ -12,7 +12,7 @@ const BUSY = ["queued", "decoding", "loading", "running"];
 
 // Transcrição do capítulo no estilo "letra do Spotify": a frase atual fica destacada, tocar numa
 // frase pula o áudio para ela, e selecionar um trecho permite salvar como citação ou pedir à IA.
-export default function AudioTranscript({ book, track, trackIdx, pos, onSeek, onAddQuote }) {
+export default function AudioTranscript({ wide, book, track, trackIdx, pos, onSeek, onAddQuote }) {
   const jobs = useSyncExternalStore(subscribeTranscribe, getTranscribeState);
   const [model, setModel] = usePersistentState("audiobookWhisperModel", WHISPER_MODELS[1].id);
   const [lang, setLang] = usePersistentState("audiobookWhisperLang", "portuguese");
@@ -102,7 +102,7 @@ export default function AudioTranscript({ book, track, trackIdx, pos, onSeek, on
     : job.status === "loading" ? `Carregando o modelo (na 1ª vez baixa o arquivo)... ${Math.round(job.loadPct || 0)}%` : `Transcrevendo... ${job.pct || 0}%`;
 
   return (
-    <div className="abPanel abTr">
+    <div className={"abPanel abTr" + (wide ? " wide" : "")}>
       {busy ? (
         <div className="abTrProgress">
           <div className="abTrBar"><i style={{ width: `${job.status === "running" ? job.pct : 0}%` }}/></div>
