@@ -1,5 +1,9 @@
 apply plugin: 'com.android.application'
 
+// Versão vinda do workflow do GitHub (variáveis de ambiente); valores padrão para build local.
+def appVersionName = System.getenv("APP_VERSION_NAME") ?: "1.0"
+def appVersionCode = (System.getenv("APP_VERSION_CODE") ?: "1") as Integer
+
 android {
     namespace "app.libano.mobile"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +11,8 @@ android {
         applicationId "app.libano.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode (System.getenv("APP_VERSION_CODE") ?: "1").toInteger()
-        versionName (System.getenv("APP_VERSION_NAME") ?: "1.0")
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
