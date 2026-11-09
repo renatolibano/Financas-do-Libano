@@ -18,23 +18,65 @@ const posKey = (bookId) => `audiobook-pos:${bookId}`;
 const BUCKET = "audiobooks";
 const cloudPath = (userId, bookId, trackId) => `${userId}/${bookId}/${trackId}`;
 
-export async function uploadTrackToCloud(userId, bookId, trackId, blob) {
-  const { error } = await supabase.storage.from(BUCKET).upload(cloudPath(userId, bookId, trackId), blob, {
-    contentType: blob.type || "audio/mpeg",
-    upsert: true,
-  });
-  if (error) throw error;
+// O Supabase limita o tamanho de CADA arquivo (50 MB no plano gratuito). Capítulos maiores que isso
+// são enviados em partes de 40 MB (`<id>.p0000`, `<id>.p0001`...) e remontados ao baixar.
+// Capítulos pequenos continuam sendo um único arquivo (`<id>`), como antes.
+const CLOUD_CHUNK = 40 * 1024 * 1024;
+const partPath = (userId, bookId, trackId, i) => `${cloudPath(userId, bookId, trackId)}.p${String(i).padStart(4, "0")}`;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function withRetry(fn) {
+  let err;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fn();
+    if (!r.error) return r;
+    err = r.error;
+    await sleep(800 * (attempt + 1));
+  }
+  throw err;
 }
 
-export async function downloadTrackFromCloud(userId, bookId, trackId) {
-  const { data, error } = await supabase.storage.from(BUCKET).download(cloudPath(userId, bookId, trackId));
-  if (error) throw error;
-  return data;
+// Devolve o nº de partes (0 = arquivo único). onProgress(feitas, total) só é chamado quando há partes.
+export async function uploadTrackToCloud(userId, bookId, trackId, blob, onProgress) {
+  const contentType = blob.type || "audio/mpeg";
+  if (blob.size <= CLOUD_CHUNK) {
+    const { error } = await supabase.storage.from(BUCKET).upload(cloudPath(userId, bookId, trackId), blob, { contentType, upsert: true });
+    if (error) throw error;
+    return 0;
+  }
+  const n = Math.ceil(blob.size / CLOUD_CHUNK);
+  for (let i = 0; i < n; i++) {
+    const part = blob.slice(i * CLOUD_CHUNK, (i + 1) * CLOUD_CHUNK, contentType);
+    await withRetry(() => supabase.storage.from(BUCKET).upload(partPath(userId, bookId, trackId, i), part, { contentType: "application/octet-stream", upsert: true }));
+    onProgress?.(i + 1, n);
+  }
+  return n;
+}
+
+// `track` = objeto do capítulo ({ id, cloudParts?, cloudType? }).
+export async function downloadTrackFromCloud(userId, bookId, track, onProgress) {
+  const parts = track.cloudParts || 0;
+  if (!parts) {
+    const { data, error } = await supabase.storage.from(BUCKET).download(cloudPath(userId, bookId, track.id));
+    if (error) throw error;
+    return data;
+  }
+  const blobs = [];
+  for (let i = 0; i < parts; i++) {
+    const { data } = await withRetry(() => supabase.storage.from(BUCKET).download(partPath(userId, bookId, track.id, i)));
+    blobs.push(data);
+    onProgress?.(i + 1, parts);
+  }
+  return new Blob(blobs, { type: track.cloudType || "audio/mpeg" });
 }
 
 export async function deleteCloudTracks(userId, bookId, trackIds) {
   if (!userId || !trackIds?.length) return;
-  await supabase.storage.from(BUCKET).remove(trackIds.map(id => cloudPath(userId, bookId, id)));
+  const folder = `${userId}/${bookId}`;
+  const paths = trackIds.map(id => `${folder}/${id}`);
+  const { data } = await supabase.storage.from(BUCKET).list(folder, { limit: 1000 });
+  for (const f of data || []) if (trackIds.some(id => f.name.startsWith(id + ".p"))) paths.push(`${folder}/${f.name}`);
+  await supabase.storage.from(BUCKET).remove(paths);
 }
 
 export const getLocalTrackIds = (bookId) => idbGet(filesKey(bookId), []);

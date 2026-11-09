@@ -250,7 +250,7 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
     if (!blob && t.cloud && userIdRef.current) {
       setBusy(`Baixando "${t.name}" da nuvem…`);
       try {
-        const dl = await downloadTrackFromCloud(userIdRef.current, b.id, t.id);
+        const dl = await downloadTrackFromCloud(userIdRef.current, b.id, t, (i, n) => setBusy(`Baixando "${t.name}" da nuvem… (parte ${i} de ${n})`));
         await saveTrackBlob(b.id, t.id, dl);
         blob = dl;
         refreshLocal();
@@ -479,7 +479,10 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
         const tr = { id: String(i), name: cleanName(f.name), file: f.name, dur: Math.round(d), size: f.size };
         if (cloudOn && !cloudFail) {
           setBusy(`Enviando arquivo ${i + 1} de ${files.length} para a nuvem…`);
-          try { await uploadTrackToCloud(userId, id, tr.id, f); tr.cloud = true; }
+          try {
+            const parts = await uploadTrackToCloud(userId, id, tr.id, f, (k, n) => setBusy(`Enviando arquivo ${i + 1} de ${files.length} para a nuvem… (parte ${k} de ${n})`));
+            tr.cloud = true; if (parts) { tr.cloudParts = parts; tr.cloudType = f.type || "audio/mpeg"; }
+          }
           catch (e) { console.error(e); cloudFail = true; }
         }
         tracks.push(tr);
@@ -561,8 +564,8 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
         setBusy(`Enviando arquivo ${i + 1} de ${tracks.length} para a nuvem…`);
         const blob = await getTrackBlob(b.id, tracks[i].id);
         if (!blob) throw new Error("Os arquivos precisam estar neste aparelho para enviar.");
-        await uploadTrackToCloud(userId, b.id, tracks[i].id, blob);
-        tracks[i] = { ...tracks[i], cloud: true };
+        const parts = await uploadTrackToCloud(userId, b.id, tracks[i].id, blob, (k, n) => setBusy(`Enviando arquivo ${i + 1} de ${tracks.length} para a nuvem… (parte ${k} de ${n})`));
+        tracks[i] = { ...tracks[i], cloud: true, ...(parts ? { cloudParts: parts, cloudType: blob.type || "audio/mpeg" } : {}) };
       }
       await update(b.id, { tracks });
     } catch (e) {
