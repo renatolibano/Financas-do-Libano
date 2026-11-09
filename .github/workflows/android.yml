@@ -38,7 +38,15 @@ jobs:
         run: npm version "${{ steps.ver.outputs.name }}" --no-git-tag-version --allow-same-version
 
       - name: Build web (modo app) e copiar para o Android
-        run: npm run build:android
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Faltam os secrets VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY (veja ANDROID.md). Sem eles o app nasce sem login/sincronização."
+            exit 1
+          fi
+          npm run build:android
 
       - name: Preparar chave de assinatura
         env:
