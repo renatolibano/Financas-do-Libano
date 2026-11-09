@@ -1,3 +1,4 @@
+import { isNative, nativeRequestPermission, nativeNotify } from "./native";
 // Toca um som de notificação (dois "bips" curtos) via Web Audio API — não depende de
 // nenhum arquivo de áudio externo, então funciona offline como o resto do app.
 // Reaproveitado por toda notificação do app (toasts, sininho de lembretes e os
@@ -29,6 +30,7 @@ export function playNotifSound() {
 // Pede permissão de notificações do navegador (uma vez só — se já foi concedida ou
 // negada antes, não pergunta de novo). Usado antes de agendar lembretes com hora.
 export function requestNotificationPermission() {
+  if (isNative) { nativeRequestPermission(); return; }
   if (!("Notification" in window)) return;
   if (Notification.permission === "default") {
     Notification.requestPermission().catch(() => {});
@@ -40,6 +42,7 @@ export function requestNotificationPermission() {
 // ou se a permissão não tiver sido concedida.
 export function fireBrowserNotification(title, body) {
   playNotifSound();
+  if (isNative) { nativeNotify(title, body); return; }
   try {
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification(title, { body, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png" });
@@ -203,6 +206,7 @@ export async function syncDailyGoalNotifications(goals, { enabled, userId } = {}
     last[g.id] = Date.now();
     try { localStorage.setItem(storageKey, JSON.stringify(last)); } catch (e) { /* ignora */ }
     playNotifSound();
+    if (isNative) { nativeNotify(title, body); continue; }
     try {
       if ("Notification" in window && Notification.permission === "granted") {
         const opts = { body, tag, icon: "/icons/icon-192.png", badge: "/icons/icon-192.png", requireInteraction: true, data: { url: "/" } };

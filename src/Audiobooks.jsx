@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import AudioTranscript from "./AudioTranscript";
 import QuoteEditor from "./QuoteEditor";
+import { hasMediaSession, getMediaSession, makeMediaMetadata } from "./lib/native";
 import { usePersistentState } from "./lib/storage";
 import { bumpDailyGoals } from "./lib/notifications";
 import {
@@ -388,10 +389,10 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
 
   // Controles na tela de bloqueio / fones (Media Session)
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !curBook) return;
-    const ms = navigator.mediaSession;
+    if (!hasMediaSession() || !curBook) return;
+    const ms = getMediaSession();
     try {
-      ms.metadata = new window.MediaMetadata({
+      ms.metadata = makeMediaMetadata({
         title: curBook.tracks?.[trackIdx]?.name || curBook.title,
         artist: curBook.author || "Audiolivro",
         album: curBook.title,
@@ -408,10 +409,11 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curBook?.id, curBook?.title, trackIdx]);
   useEffect(() => {
-    if (!("mediaSession" in navigator)) return;
+    if (!hasMediaSession()) return;
     try {
-      navigator.mediaSession.playbackState = playing ? "playing" : "paused";
-      if (dur > 0) navigator.mediaSession.setPositionState({ duration: dur, playbackRate: rate, position: Math.min(pos, dur) });
+      const ms = getMediaSession();
+      ms.playbackState = playing ? "playing" : "paused";
+      if (dur > 0) ms.setPositionState({ duration: dur, playbackRate: rate, position: Math.min(pos, dur) });
     } catch (e) { /* ignora */ }
   }, [playing, dur, rate, Math.floor(pos / 5)]);
 

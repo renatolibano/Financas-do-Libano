@@ -1,0 +1,10 @@
+{
+  "appId": "app.libano.mobile",
+  "appName": "Libano",
+  "webDir": "dist",
+  "backgroundColor": "#0b0d12",
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_icon", "iconColor": "#ba282d" }
+  }
+}

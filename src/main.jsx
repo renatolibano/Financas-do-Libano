@@ -1,3 +1,5 @@
+import { isNative, appOrigin, syncReminderNotifications } from "./lib/native";
+import UpdateBanner from "./components/UpdateBanner";
 import React, {useMemo, useState, useEffect, useLayoutEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
 import {createPortal} from "react-dom";
@@ -985,6 +987,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // gastaria bateria à toa). Guarda no localStorage quais já dispararam hoje pra
   // não repetir a notificação a cada nova checagem.
   useEffect(()=>{
+    if(isNative) return; // no app Android os lembretes com hora são agendados no sistema (ver syncReminderNotifications)
     const check = ()=>{
       // Respeita as preferências de notificação: mestre desligado ou categoria
       // "Lembrete" desligada, não dispara notificação nativa nem som.
@@ -1008,6 +1011,11 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     check();
     const interval = setInterval(check, 20000);
     return ()=>clearInterval(interval);
+  },[reminders.data,notifSettings]);
+
+  // App Android: agenda no sistema os lembretes com hora (inclusive recorrentes) para tocarem com o app fechado.
+  useEffect(()=>{
+    syncReminderNotifications(reminders.data, notifSettings.enabled && notifSettings.kinds["Lembrete"]!==false);
   },[reminders.data,notifSettings]);
 
   // Metas diárias pendentes (ler N páginas / ouvir N minutos por dia): mantém a notificação
@@ -15791,7 +15799,7 @@ function Goals({entity, session}){
     finally{ setInviteBusy(false); }
   };
 
-  const inviteLink = inviteCode ? (window.location.origin + window.location.pathname + "?invite=" + inviteCode) : "";
+  const inviteLink = inviteCode ? (appOrigin() + (isNative ? "/" : window.location.pathname) + "?invite=" + inviteCode) : "";
 
   return <div className="content">
     <div className="panel">
@@ -16958,7 +16966,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
     finally{ setInviteBusy(false); }
   };
 
-  const inviteLink = inviteCode ? (window.location.origin + window.location.pathname + "?invite=" + inviteCode) : "";
+  const inviteLink = inviteCode ? (appOrigin() + (isNative ? "/" : window.location.pathname) + "?invite=" + inviteCode) : "";
 
   // Metas "por dias" completam sozinhas assim que o contador (dias corridos desde
   // o início, sem contar os dias congelados por uma Falha) bate a meta.
@@ -24944,4 +24952,4 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
 }
 
 
-createRoot(document.getElementById("root")).render(<Root/>);
+createRoot(document.getElementById("root")).render(<><Root/><UpdateBanner/></>);

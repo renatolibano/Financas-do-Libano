@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { appOrigin } from "./lib/native";
 
 function AuthBrand() {
   return (
@@ -38,7 +39,7 @@ export default function Auth() {
         // ("PASSWORD_RECOVERY"), que o Root() detecta e mostra a tela de
         // nova senha (ver ResetPassword mais abaixo e useSession em main.jsx).
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin,
+          redirectTo: appOrigin(), // no app (APK) a origem seria https://localhost
         });
         if (error) throw error;
         setMessage("Se esse e-mail tiver uma conta, enviamos um link para redefinir a senha. Confira sua caixa de entrada (e o spam).");

@@ -1,12 +1,20 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import fs from "node:fs";
+
+const pkg = JSON.parse(fs.readFileSync("./package.json", "utf-8"));
+const appConfig = JSON.parse(fs.readFileSync("./public/app-config.json", "utf-8"));
+// Build do app Android (VITE_NATIVE=1): sem service worker/PWA — os arquivos já vão dentro do APK.
+const native = process.env.VITE_NATIVE === "1";
 
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(pkg.version), __APP_CONFIG__: JSON.stringify(appConfig) },
   worker: { format: "es" },
   plugins: [
     react(),
     VitePWA({
+      disable: native,
       registerType: "autoUpdate",
       includeAssets: ["favicon.png", "icons/apple-touch-icon.png"],
       manifest: {

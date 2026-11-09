@@ -2874,3 +2874,7 @@ h1{font-size:23px}
 .abQChgBtns button{width:20px;height:20px;display:inline-grid;place-items:center;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border);color:var(--text-2)}
 .abQChgBtns button:hover{border-color:var(--accent);color:var(--accent)}
 .abMarkEdit:hover{color:var(--accent)}
+
+/* Aviso de atualização do app Android */
+.updateBanner{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 8px);z-index:200;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 20px);padding:8px 10px 8px 14px;border-radius:14px;background:var(--bg-modal,var(--bg-surface));border:1px solid var(--accent);box-shadow:0 10px 30px #0008;font-size:13px;color:var(--text-1)}
+.updateBanner button{display:inline-flex;align-items:center;gap:5px;padding:7px 11px;font-size:12.5px}

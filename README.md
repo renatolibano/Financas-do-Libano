@@ -108,3 +108,8 @@ Observações:
 ## Próximas etapas para produção
 
 Transforme o projeto em PWA e publique o frontend em um host como Vercel/Cloudflare Pages.
+
+
+## App Android
+
+Veja `ANDROID.md` para gerar e publicar o APK (instalação fora da Play Store).
