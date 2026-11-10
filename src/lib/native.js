@@ -92,11 +92,22 @@ const onOf = (o, hour, minute) => {
   return on;
 };
 
+// Uma única vez: abre o aviso do Android "permitir que o app rode em segundo plano" (sem isso a economia de bateria
+// da Samsung/Xiaomi etc. pode impedir os lembretes de tocar com o app fechado).
+async function allowBackgroundOnce() {
+  try {
+    if (localStorage.getItem("libano-battery-asked")) return;
+    localStorage.setItem("libano-battery-asked", "1");
+    await registerPlugin("Background").allowIgnoreBattery();
+  } catch { /* ignora */ }
+}
+
 export async function syncReminderNotifications(reminders, enabled = true, birthdaysEnabled = enabled) {
   if (!isNative) return;
   try {
     const ln = await LN();
-    const perm = await ln.checkPermissions();
+    let perm = await ln.checkPermissions();
+    if (perm.display !== "granted" && (enabled || birthdaysEnabled)) perm = await ln.requestPermissions(); // Android 13+: pergunta já na abertura do app
     const pending = await ln.getPending();
     const old = (pending.notifications || []).filter(n => n.id >= SYNC_BASE);
     if (old.length) await ln.cancel({ notifications: old.map(n => ({ id: n.id })) });
@@ -132,7 +143,7 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
         } else add(o, "s", MORNING_HOUR, 0, bday ? "Aniversário hoje" : "Hoje · " + label);
       }
     }
-    if (out.length) await ln.schedule({ notifications: out });
+    if (out.length) { await ln.schedule({ notifications: out }); allowBackgroundOnce(); }
   } catch (err) { console.log("[lembretes] não foi possível agendar no Android", err); }
 }
 

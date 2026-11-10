@@ -45,5 +45,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Lembretes com hora no minuto certo (alarme exato) -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Android 13+: sem esta permissão declarada o sistema nem pergunta e bloqueia todas as notificações -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Reagenda os lembretes depois que o celular reinicia -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Pede para o app não ser colocado pra "dormir" pela economia de bateria (lembretes com o app fechado) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
 </manifest>
