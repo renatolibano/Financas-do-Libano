@@ -1,6 +1,6 @@
 // Camada do app Android (Capacitor). No navegador/PWA nada daqui faz efeito: isNative = false
 // e tudo cai nos caminhos que já existiam (Notification do navegador, navigator.mediaSession...).
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { MediaSession } from "@jofr/capacitor-media-session";
 
 export const isNative = Capacitor.isNativePlatform();
@@ -153,8 +153,24 @@ export async function checkForUpdate() {
   } catch { return null; }
 }
 
-export async function openExternal(url) {
+// system = true: abre no navegador padrão do sistema (downloads, como o do APK, funcionam melhor do que na aba embutida).
+// Baixa o APK dentro do app e abre o instalador do Android. Retorna "installing" ou "permission"
+// (1ª vez: o Android pede para permitir instalar apps deste app — depois é só tocar em Atualizar de novo).
+export async function installUpdate(url, onProgress) {
+  const ApkInstaller = registerPlugin("ApkInstaller");
+  const handle = await ApkInstaller.addListener("progress", e => onProgress?.(e.percent));
+  try { return (await ApkInstaller.install({ url })).status; } finally { handle.remove(); }
+}
+
+export async function openExternal(url, system = false) {
   if (!isNative) { window.open(url, "_blank", "noopener"); return; }
+  if (system) {
+    try {
+      const { App } = await import("@capacitor/app");
+      await App.openUrl({ url });
+      return;
+    } catch { /* cai na aba embutida */ }
+  }
   const { Browser } = await import("@capacitor/browser");
   await Browser.open({ url });
 }
