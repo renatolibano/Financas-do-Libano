@@ -154,6 +154,40 @@ export async function checkForUpdate() {
 }
 
 // system = true: abre no navegador padrão do sistema (downloads, como o do APK, funcionam melhor do que na aba embutida).
+// Notificação "Nova versão disponível": uma imediata (1x por versão) + um lembrete diário às 10h até atualizar.
+// Ao tocar, o app abre direto no aviso de atualização (ver onUpdateNotificationTap).
+const UPDATE_NOTIF_NOW = 888888801, UPDATE_NOTIF_DAILY = 888888802;
+export async function notifyUpdateAvailable(version) {
+  if (!isNative) return;
+  try {
+    const ln = await LN();
+    let p = await ln.checkPermissions();
+    if (p.display !== "granted") p = await ln.requestPermissions();
+    if (p.display !== "granted") return;
+    await ensureChannel(ln);
+    const base = { title: "Nova versão do Libano disponível", body: `A versão ${version} está pronta. Toque para atualizar.`, channelId: CHANNEL, smallIcon: SMALL_ICON, extra: { action: "update" } };
+    const list = [{ ...base, id: UPDATE_NOTIF_DAILY, schedule: { on: { hour: 10, minute: 0 }, repeats: true, allowWhileIdle: true } }];
+    if (localStorage.getItem("libano-update-notified") !== version) {
+      list.push({ ...base, id: UPDATE_NOTIF_NOW, schedule: { at: new Date(Date.now() + 500) } });
+      localStorage.setItem("libano-update-notified", version);
+    }
+    await ln.schedule({ notifications: list });
+  } catch (err) { console.log("[atualização] não foi possível notificar", err); }
+}
+export async function clearUpdateNotifications() {
+  if (!isNative) return;
+  try { const ln = await LN(); await ln.cancel({ notifications: [{ id: UPDATE_NOTIF_NOW }, { id: UPDATE_NOTIF_DAILY }] }); } catch { /* ignora */ }
+}
+// Chama cb quando a pessoa toca na notificação de atualização. Retorna a função que remove o ouvinte.
+export async function onUpdateNotificationTap(cb) {
+  if (!isNative) return () => {};
+  try {
+    const ln = await LN();
+    const h = await ln.addListener("localNotificationActionPerformed", e => { if (e?.notification?.extra?.action === "update") cb(); });
+    return () => h.remove();
+  } catch { return () => {}; }
+}
+
 // Baixa o APK dentro do app e abre o instalador do Android. Retorna "installing" ou "permission"
 // (1ª vez: o Android pede para permitir instalar apps deste app — depois é só tocar em Atualizar de novo).
 export async function installUpdate(url, onProgress) {
