@@ -980,32 +980,38 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     return items.filter(it => notifSettings.enabled && notifSettings.kinds[it.kind] !== false);
   },[reminders.data,debts.data,fixed.data,recurring.data,studyGoals.data,calendarEvents.data,notifSettings]);
 
-  // Dispara os Lembretes Comuns que têm uma HORA marcada assim que o relógio bate
-  // esse horário no dia certo — notificação do navegador + som, mesmo com o app
-  // aberto em outra aba/página. Confere a cada 20s (não precisa ser por segundo:
-  // a notificação só precisa aparecer perto do minuto certo, e checar toda hora
-  // gastaria bateria à toa). Guarda no localStorage quais já dispararam hoje pra
-  // não repetir a notificação a cada nova checagem.
+  // Notificações dos lembretes com o app aberto (navegador/PWA): 1 dia antes (a partir das 18h),
+  // 1h antes (se tiver hora) e no próprio dia (na hora marcada, ou às 9h se não tiver hora) —
+  // notificação do navegador + som. Confere a cada 20s. Guarda no localStorage quais já
+  // dispararam hoje pra não repetir a cada nova checagem.
   useEffect(()=>{
-    if(isNative) return; // no app Android os lembretes com hora são agendados no sistema (ver syncReminderNotifications)
+    if(isNative) return; // no app Android os lembretes são agendados no sistema (ver syncReminderNotifications)
     const check = ()=>{
-      // Respeita as preferências de notificação: mestre desligado ou categoria
-      // "Lembrete" desligada, não dispara notificação nativa nem som.
-      if(!notifSettings.enabled || notifSettings.kinds["Lembrete"]===false) return;
+      if(!notifSettings.enabled) return;
       const now = new Date();
-      const todayKey = now.toISOString().slice(0,10);
+      const todayKey = now.getFullYear()+"-"+pad2(now.getMonth()+1)+"-"+pad2(now.getDate());
       const storageKey = "libano-timed-reminders-fired-"+todayKey;
       let fired = [];
       try{ fired = JSON.parse(localStorage.getItem(storageKey)||"[]"); }catch(e){}
-      const nowHM = String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+      const nowHM = pad2(now.getHours())+":"+pad2(now.getMinutes());
       reminders.data.forEach(r=>{
-        if(r.kind==="Aniversário" || !r.time) return;
-        if(reminderDaysUntil(r)!==0) return; // só dispara no próprio dia do lembrete
-        if(r.time>nowHM) return; // ainda não chegou a hora
-        if(fired.includes(r.id)) return; // já disparou hoje
-        fireBrowserNotification(r.title, "Lembrete · "+(r.kind||"Geral")+" · "+r.time);
-        fired.push(r.id);
-        try{ localStorage.setItem(storageKey, JSON.stringify(fired)); }catch(e){}
+        const bday = r.kind==="Aniversário";
+        if(notifSettings.kinds[bday?"Aniversário":"Lembrete"]===false) return;
+        const days = reminderDaysUntil(r);
+        if(days===null) return;
+        const tm = bday ? null : /^(\d{1,2}):(\d{2})$/.exec(String(r.time||""));
+        const time = tm ? pad2(tm[1])+":"+tm[2] : null;
+        const label = bday ? "Aniversário" : "Lembrete · "+(r.kind||"Geral");
+        const fire = (key, body)=>{
+          if(fired.includes(r.id+key)) return;
+          fireBrowserNotification(r.title, body);
+          fired.push(r.id+key);
+          try{ localStorage.setItem(storageKey, JSON.stringify(fired)); }catch(e){}
+        };
+        if(r.recurrence!=="daily" && days===1 && nowHM>="18:00") fire(":e", "Amanhã · "+label+(time?" · "+time:""));
+        if(days!==0) return;
+        if(time && Number(tm[1])>=1 && nowHM>=pad2(Number(tm[1])-1)+":"+tm[2] && nowHM<time) fire(":h", "Em 1 hora · "+label+" · "+time);
+        if(nowHM>=(time||"09:00")) fire(":s", time ? label+" · "+time : (bday ? "Aniversário hoje" : "Hoje · "+label));
       });
     };
     check();
@@ -1013,9 +1019,9 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     return ()=>clearInterval(interval);
   },[reminders.data,notifSettings]);
 
-  // App Android: agenda no sistema os lembretes com hora (inclusive recorrentes) para tocarem com o app fechado.
+  // App Android: agenda no sistema os lembretes (1 dia antes, no dia e 1h antes) para tocarem com o app fechado.
   useEffect(()=>{
-    syncReminderNotifications(reminders.data, notifSettings.enabled && notifSettings.kinds["Lembrete"]!==false);
+    syncReminderNotifications(reminders.data, notifSettings.enabled && notifSettings.kinds["Lembrete"]!==false, notifSettings.enabled && notifSettings.kinds["Aniversário"]!==false);
   },[reminders.data,notifSettings]);
 
   // Metas diárias pendentes (ler N páginas / ouvir N minutos por dia): mantém a notificação
@@ -2044,9 +2050,8 @@ function CommonReminders({entity}){
     if(!title.trim()) return;
     if(recurrence==="weekly" ? weekdays.length===0 : (recurrence==="daily" ? false : !date)) return;
     add({title,date:(recurrence==="daily"||recurrence==="weekly")?null:date,kind,time:time||null,recurrence:recurrence||null,weekdays:recurrence==="weekly"?weekdays.join(","):null});
-    // Se a pessoa definiu uma hora, já aproveita e pede permissão de notificação
-    // (só pergunta de fato na primeira vez — depois disso o navegador lembra a escolha).
-    if(time) requestNotificationPermission();
+    // Pede permissão de notificação (só pergunta de fato na primeira vez — depois disso o navegador lembra a escolha).
+    requestNotificationPermission();
     setTitle("");setDate("");setKind("Financeiro");setTime("");setRecurrence("");setWeekdays([]);
   };
   return <div className="content">
@@ -2087,6 +2092,7 @@ function Birthdays({entity}){
   const submit=()=>{
     if(!title.trim()||!date) return;
     add({title,date,kind:"Aniversário"});
+    requestNotificationPermission();
     setTitle("");setDate("");
   };
   return <div className="content">

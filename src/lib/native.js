@@ -58,11 +58,41 @@ export async function nativeNotify(title, body) {
   } catch (err) { console.log("[notificação] falhou no app", err); }
 }
 
-// Agenda no Android os lembretes com hora (inclusive recorrentes), para tocarem com o app fechado.
+// Agenda no Android os lembretes (inclusive recorrentes e aniversários), para tocarem com o app fechado:
+//  · 1 dia antes (18h) · no próprio dia (na hora marcada, ou 9h se não tiver hora) · 1h antes (só com hora).
 // Ids >= 1.000.000.000 são destes agendamentos; a cada sincronização apaga os antigos e recria.
 const SYNC_BASE = 1000000000;
+const EVE_HOUR = 18;    // aviso "amanhã"
+const MORNING_HOUR = 9; // lembrete sem hora: avisa de manhã no próprio dia
 const hashId = (str) => { let h = 0; for (const c of String(str)) h = (h * 31 + c.charCodeAt(0)) | 0; return SYNC_BASE + (Math.abs(h) % 900000000); };
-export async function syncReminderNotifications(reminders, enabled = true) {
+
+// Partes da data de cada ocorrência (weekday: 0 = domingo)
+function reminderDates(r) {
+  if (r.recurrence === "daily") return [{ k: "d" }];
+  if (r.recurrence === "weekly") return String(r.weekdays || "").split(",").filter(Boolean).map(Number).filter(n => n >= 0 && n <= 6).map(n => ({ k: "w" + n, weekday: n }));
+  const [dd, mm] = String(r.date || "").split("/").map(n => parseInt(n, 10));
+  if (!(dd >= 1 && dd <= 31)) return [];
+  if (r.recurrence === "monthly") return [{ k: "m", day: dd }];
+  return mm >= 1 && mm <= 12 ? [{ k: "y", month: mm, day: dd }] : []; // data dd/mm repete todo ano, como no app
+}
+// Dia anterior à ocorrência (null quando não dá pra expressar como repetição do Android)
+function dayBefore(o) {
+  if (o.k === "d") return o;
+  if (o.weekday !== undefined) return { k: o.k + "-1", weekday: (o.weekday + 6) % 7 };
+  if (o.day > 1) return { ...o, k: o.k + "-1", day: o.day - 1 };
+  if (o.k === "m") return null;
+  const month = o.month === 1 ? 12 : o.month - 1;
+  return { ...o, k: o.k + "-1", month, day: new Date(2001, month, 0).getDate() };
+}
+const onOf = (o, hour, minute) => {
+  const on = { hour, minute };
+  if (o.weekday !== undefined) on.weekday = o.weekday + 1; // Android: 1 = domingo
+  if (o.month) on.month = o.month;
+  if (o.day) on.day = o.day;
+  return on;
+};
+
+export async function syncReminderNotifications(reminders, enabled = true, birthdaysEnabled = enabled) {
   if (!isNative) return;
   try {
     const ln = await LN();
@@ -70,22 +100,36 @@ export async function syncReminderNotifications(reminders, enabled = true) {
     const pending = await ln.getPending();
     const old = (pending.notifications || []).filter(n => n.id >= SYNC_BASE);
     if (old.length) await ln.cancel({ notifications: old.map(n => ({ id: n.id })) });
-    if (!enabled || perm.display !== "granted") return;
+    if ((!enabled && !birthdaysEnabled) || perm.display !== "granted") return;
     await ensureChannel(ln);
     const out = [];
     for (const r of reminders || []) {
-      if (!r.time || r.kind === "Aniversário" || !/^\d{1,2}:\d{2}$/.test(r.time)) continue;
-      const [hour, minute] = r.time.split(":").map(Number);
-      const base = { title: r.title, body: `Lembrete · ${r.kind || "Geral"} · ${r.time}`, channelId: CHANNEL, smallIcon: SMALL_ICON };
-      const add = (key, on) => out.push({ ...base, id: hashId(r.id + ":" + key), schedule: { on: { ...on, hour, minute }, repeats: true, allowWhileIdle: true } });
-      if (r.recurrence === "daily") add("d", {});
-      else if (r.recurrence === "weekly") {
-        for (const n of String(r.weekdays || "").split(",").filter(Boolean).map(Number)) if (n >= 0 && n <= 6) add("w" + n, { weekday: n + 1 }); // Android: 1 = domingo
-      } else {
-        const [dd, mm] = String(r.date || "").split("/").map(n => parseInt(n, 10));
-        if (!(dd >= 1 && dd <= 31)) continue;
-        if (r.recurrence === "monthly") add("m", { day: dd });
-        else if (mm >= 1 && mm <= 12) add("y", { month: mm, day: dd }); // data dd/mm repete todo ano, como no app
+      const bday = r.kind === "Aniversário";
+      if (!(bday ? birthdaysEnabled : enabled)) continue;
+      const tm = /^(\d{1,2}):(\d{2})$/.exec(bday ? "" : String(r.time || ""));
+      const label = bday ? "Aniversário" : "Lembrete · " + (r.kind || "Geral");
+      const add = (o, suffix, hour, minute, body) => out.push({ id: hashId(r.id + ":" + o.k + suffix), title: r.title, body, channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { on: onOf(o, hour, minute), repeats: true, allowWhileIdle: true } });
+      for (const o of reminderDates(r)) {
+        // 1 dia antes
+        if (o.k !== "d") {
+          const eveBody = "Amanhã · " + label + (tm ? " · " + r.time : "");
+          const eve = dayBefore(o);
+          if (eve) add(eve, "e", EVE_HOUR, 0, eveBody);
+          else { // mensal no dia 1: o dia anterior é o último dia do mês (varia), então agenda a próxima ocorrência
+            const now = new Date();
+            let at = new Date(now.getFullYear(), now.getMonth() + 1, 0, EVE_HOUR, 0);
+            if (at <= now) at = new Date(now.getFullYear(), now.getMonth() + 2, 0, EVE_HOUR, 0);
+            out.push({ id: hashId(r.id + ":m-1e"), title: r.title, body: eveBody, channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at, allowWhileIdle: true } });
+          }
+        }
+        // no próprio dia
+        if (tm) {
+          const hour = Number(tm[1]), minute = Number(tm[2]);
+          add(o, "s", hour, minute, `${label} · ${r.time}`);
+          // 1h antes
+          if (hour >= 1) add(o, "h", hour - 1, minute, `Em 1 hora · ${label} · ${r.time}`);
+          else { const prev = dayBefore(o); if (prev) add(prev, "h", 23, minute, `Em 1 hora · ${label} · ${r.time}`); }
+        } else add(o, "s", MORNING_HOUR, 0, bday ? "Aniversário hoje" : "Hoje · " + label);
       }
     }
     if (out.length) await ln.schedule({ notifications: out });
