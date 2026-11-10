@@ -1,4 +1,4 @@
-import { isNative, appOrigin, syncReminderNotifications } from "./lib/native";
+import { isNative, appOrigin, syncReminderNotifications, testNativeNotification } from "./lib/native";
 import UpdateBanner from "./components/UpdateBanner";
 import React, {useMemo, useState, useEffect, useLayoutEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
@@ -1490,6 +1490,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
               <span className="switchKnob"/>
             </span>
           </label>
+          {isNative && <button type="button" className="ghost" style={{marginTop:8}} onClick={async()=>alert(await testNativeNotification())}>Testar notificação do celular</button>}
           {notifSettings.enabled && (
             <div className="notifKindsList">
               {NOTIF_KIND_DEFS.map(k => {
@@ -1928,7 +1929,7 @@ function BankConnect({onImported}){
 
   return <div className="panel">
     <div className="inlineAdd" style={{alignItems:"center"}}>
-      <button onClick={openWidget} disabled={opening||syncing}>
+      <button className="bankBtn" onClick={openWidget} disabled={opening||syncing}>
         <Landmark size={16}/> {syncing ? "Importando..." : opening ? "Abrindo..." : "Conectar banco"}
       </button>
       {message && <small className={message.type==="error"?"negative":"positive"}>{message.text}</small>}
@@ -17893,9 +17894,7 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
   const [query, setQuery] = useState("");
 
   // Importar .docx/.odt/.rtf/.html/.md/.txt/.tex como um documento novo (lib/wordFormats.js).
-  const handleImport = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+  const importFile = async (file) => {
     if (!file) return;
     setImporting(true);
     try {
@@ -17907,6 +17906,11 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     } finally {
       setImporting(false);
     }
+  };
+  const handleImport = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    importFile(file);
   };
 
   const openDoc = async (doc) => {
@@ -18027,6 +18031,7 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
           doc={activeDoc}
           onClose={() => setActiveDoc(null)}
           onNew={createDoc}
+          onOpenFile={importFile}
           onSaveAs={handleSaveAsFromEditor}
           docsList={data.filter(d => d.id !== activeDoc.id).map(d => ({ id: d.id, title: d.title }))}
           onFetchDocContent={async (id) => {
@@ -20470,7 +20475,7 @@ function RbMenu({ id, menu, setMenu, trigger, children, popClass }) {
   );
 }
 
-function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDocContent }) {
+function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsList, onFetchDocContent }) {
   const [title, setTitle] = useState(doc.title || "");
   const [pageSize, setPageSize] = useState(doc.page_size || "a4");
   const [orientation, setOrientation] = useState(doc.orientation || "retrato");
@@ -22002,6 +22007,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
   const openFileMenu = (section = "info") => { setFileMenuSection(section); setFileMenuOpen(true); };
 
   const fileMenuNew = () => { flushSave(); onNew?.(); closeFileMenu(); };
+  // "Abrir": seletor de arquivos do computador (.docx, .odt, .rtf, .html, .md, .txt, .tex) — importa e abre como novo documento.
+  const openFileInputRef = useRef(null);
+  const fileMenuOpenFile = () => openFileInputRef.current?.click();
+  const handleOpenFilePicked = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    flushSave();
+    closeFileMenu();
+    onOpenFile?.(file);
+  };
   const fileMenuSave = () => { flushSave(); setJustSaved(true); clearTimeout(saveTimer.current); setTimeout(() => setJustSaved(false), 1800); };
   const fileMenuSaveAs = () => {
     const suggested = (title.trim() || "Documento sem título") + " (cópia)";
@@ -23116,7 +23132,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onSaveAs, docsList, onFetchDo
               <button className="wordBackstageBack" onClick={closeFileMenu}><ArrowLeft size={16}/> Voltar</button>
               <button className={fileMenuSection === "info" ? "active" : ""} onClick={() => setFileMenuSection("info")}><Info size={15}/> Informações</button>
               <button onClick={fileMenuNew}><Plus size={15}/> Novo</button>
-              <button onClick={handleClose}><Folder size={15}/> Abrir</button>
+              <button onClick={fileMenuOpenFile}><Folder size={15}/> Abrir</button>
+              <input ref={openFileInputRef} type="file" accept={IMPORT_ACCEPT} hidden onChange={handleOpenFilePicked}/>
               <button onClick={fileMenuSave}><Download size={15}/> Salvar</button>
               <button className={fileMenuSection === "saveas" ? "active" : ""} onClick={fileMenuSaveAs}><FileDown size={15}/> Salvar como</button>
               <button className={fileMenuSection === "export" ? "active" : ""} onClick={() => setFileMenuSection("export")}><FileType2 size={15}/> Exportar</button>

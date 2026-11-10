@@ -46,6 +46,21 @@ export async function nativeRequestPermission() {
   } catch { /* ignora */ }
 }
 
+// Teste manual (Configurações > Notificações): agenda uma notificação para daqui 5s e devolve um diagnóstico em texto.
+export async function testNativeNotification() {
+  if (!isNative) return "O teste só funciona no app Android.";
+  try {
+    const ln = await LN();
+    let p = await ln.checkPermissions();
+    if (p.display !== "granted") p = await ln.requestPermissions();
+    if (p.display !== "granted") return "O Android bloqueou as notificações do app. Ative em Configurações > Apps > Libano > Notificações.";
+    await ensureChannel(ln);
+    await ln.schedule({ notifications: [{ id: 888888803, title: "Teste do Libano", body: "Se você está vendo isso, as notificações funcionam.", channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at: new Date(Date.now() + 5000), allowWhileIdle: true } }] });
+    const pending = await ln.getPending();
+    return `Teste agendado para daqui 5 segundos — saia do app para conferir. Notificações agendadas no total: ${(pending.notifications || []).length}.`;
+  } catch (err) { return "Falhou: " + (err?.message || err); }
+}
+
 // Notificação imediata (mesma função que no navegador usava new Notification).
 export async function nativeNotify(title, body) {
   if (!isNative) return;
