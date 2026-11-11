@@ -31,9 +31,11 @@ import {
   Share2, Info, Heart, ChefHat, Repeat, Timer, Hash, Weight,
  Keyboard, ChevronsUpDown, PilcrowLeft, PilcrowRight,
  Puzzle, PenLine, FileInput, Tag, Scale, MapPin, GitBranch, ShieldCheck, ChevronsLeft, ChevronsRight, BringToFront, SendToBack, Move, Contrast, LayoutTemplate, CircleHelp, TextCursorInput, Languages, ArrowDownRight, BookOpenText, BookType, SlidersHorizontal, Mail, ListChecks, PanelLeft, BookText,
- Save, FilePlus
+ Save, FilePlus, Shapes
 } from "lucide-react";
 import { recognizeHandwriting } from "./lib/handwriting";
+import { WordInkCapture, WordInkReplay } from "./components/WordInk";
+import { INK_DEFAULTS, INK_TOOLS, INK_WIDTHS, MAX_PENS, PT as INK_PT, inkItems, rasterizeItems, removeItems as removeInkItems } from "./lib/wordInk";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
@@ -53,9 +55,10 @@ import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
 import { findExcerptRanges, excerptLineRects } from "./lib/excerptHighlight";
 import { runNoteAi } from "./lib/noteAi";
 import { AudiobookHost } from "./Audiobooks";
+import { MusicHost } from "./Music";
 import StravaRuns from "./Strava";
 import { hasPendingStravaCallback } from "./lib/strava";
-import { Footprints } from "lucide-react";
+import { Footprints, Music2 } from "lucide-react";
 import { useAudioStats, imageToCoverThumb } from "./lib/audiobooks";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
@@ -278,7 +281,7 @@ const HOME_PAGE_OPTIONS = [
   { group: "Livros", pages: [{key:"Biblioteca", label:"Dashboard da biblioteca"},{key:"Livros Lendo", label:"Lendo agora"},{key:"Livros Lidos", label:"Livros que já li"},{key:"Livros Para Ler", label:"Livros que quero ler"}] },
   { group: "Audiolivros", pages: [{key:"Audiolivros", label:"Dashboard dos audiolivros"},{key:"Audiolivros Ouvindo", label:"Ouvindo agora"},{key:"Audiolivros Ouvidos", label:"Audiolivros que já ouvi"},{key:"Audiolivros Quero Ouvir", label:"Audiolivros que quero ouvir"}] },
   { group: "Área de Estudos", pages: [{key:"Metas de Estudo", label:"Metas"},"Flashcards","Nivelamento","Leitor de PDF","Word"] },
-  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos","Baixador",{key:"Teste de PC", label:"Meu PC roda?"}] },
+  { group: "Área de Lazer", pages: ["Treino","Filmes e Séries","Jogos","Músicas","Baixador",{key:"Teste de PC", label:"Meu PC roda?"}] },
 ];
 
 function Root(){
@@ -654,6 +657,10 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const audiolivrosVisitado = ["Audiolivros","Audiolivros Ouvindo","Audiolivros Ouvidos","Audiolivros Quero Ouvir"].some(k => visitedPages.has(k));
   const audiobooks = useEntity("audiobooks", [], session, "asc", {orderable:true, listSelect: "id,title,author,status,tracks,total_seconds,current_track,current_pos,last_played_at,bookmarks,quotes,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: audiolivrosVisitado || visitedPages.has("Metas de Estudo")});
   const audioStats = useAudioStats(session, audiolivrosVisitado);
+  // Músicas (Lazer): só links do YouTube + letras; nenhum áudio é guardado. A letra (colunas pesadas) fica fora da listagem.
+  const musicasVisitado = visitedPages.has("Músicas");
+  const musicPlaylists = useEntity("music_playlists", [], session, "asc", {orderable:true, enabled: musicasVisitado});
+  const musicTracks = useEntity("music_tracks", [], session, "asc", {orderable:true, listSelect: "id,playlist_id,video_id,title,artist,duration,lyrics_source,sort_order,created_at", enabled: musicasVisitado});
   const studyPdfs = useEntity("study_pdfs", initialStudyPdfs, session, "asc", {orderable:true, listSelect: "id,title,file_path,total_pages,current_page,favorite_pages,important_pages,group_id,sort_order,created_at" + (generatedCovers ? "" : ",cover_thumb"), enabled: pdfEstudoVisitado});
   const studyPdfGroups = useEntity("study_pdf_groups", [], session, "asc", {orderable:true, enabled: pdfEstudoVisitado});
   const wordDocs = useEntity("word_documents", initialWordDocuments, session, "desc", {orderable:true, listSelect: "id,title,preview,page_size,orientation,margins,sort_order,updated_at,created_at", enabled: wordVisitado});
@@ -1222,6 +1229,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       { key:"Treino", icon:Dumbbell },
       { key:"Filmes e Séries", icon:Clapperboard },
       { key:"Jogos", icon:Gamepad2 },
+      { key:"Músicas", icon:Music2 },
       { key:"Baixador", icon:Download },
       { key:"Teste de PC", label:"Meu PC roda?", icon:Cpu },
     ]},
@@ -1338,6 +1346,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       {page==="Notas" && <Notes entity={notes} openNoteId={openNoteId} onConsumeOpenNote={()=>setOpenNoteId(null)} onOpenChange={setActiveNoteUrlId} closeSignal={notesCloseSignal}/>}
       {page==="Biblioteca" && <LibraryDashboard entity={books} setPage={setPage} readingStats={readingStats} session={session}/>}
       <AudiobookHost page={page} setPage={setPage} entity={audiobooks} stats={audioStats} studyGoals={studyGoals} NotesPane={AudioNotesPane} generatedCovers={generatedCovers} session={session}/>
+      <MusicHost page={page} tracksEntity={musicTracks} playlistsEntity={musicPlaylists} session={session}/>
       {page==="Livros Lendo" && <BookShelf entity={books} status="lendo" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Lidos" && <BookShelf entity={books} status="lido" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
       {page==="Livros Para Ler" && <BookShelf entity={books} status="quero_ler" session={session} studyGoals={studyGoals} readingStats={readingStats} groupsEntity={bookGroups} openItemId={bookOpenTrigger} onConsumeOpenItem={()=>setBookOpenTrigger(null)} onOpenChange={setActiveBookUrlId} closeSignal={bookCloseSignal}/>}
@@ -1888,23 +1897,40 @@ function Transactions({entity,session,bankAvailable,onImported}){
 // Botão "Conectar banco": abre o widget da Pluggy Connect, e ao concluir manda
 // o item conectado pro servidor sincronizar (edge function pluggy-sync).
 function BankConnect({onImported}){
-  const [PluggyConnect,setPluggyConnect] = useState(null);
-  const [connectToken,setConnectToken] = useState(null);
+  // Usa o SDK da Pluggy direto (pluggy-connect-sdk). O wrapper "react-pluggy-connect" depende de
+  // ReactDOM.findDOMNode, removido no React 19: ao abrir o widget ele derrubava o app (tela preta).
+  const widgetRef = useRef(null);
   const [opening,setOpening] = useState(false);
   const [syncing,setSyncing] = useState(false);
   const [message,setMessage] = useState(null);
+
+  const closeWidget = ()=>{
+    const w = widgetRef.current;
+    widgetRef.current = null;
+    if(w) w.destroy().catch(()=>{});
+  };
+  useEffect(()=>closeWidget,[]); // limpa ao sair da aba
 
   const openWidget = async ()=>{
     setMessage(null);
     setOpening(true);
     try{
-      const [{ PluggyConnect: Widget }, token] = await Promise.all([
-        import("react-pluggy-connect"),
+      closeWidget();
+      const [{ PluggyConnect }, token] = await Promise.all([
+        import("pluggy-connect-sdk"),
         getPluggyConnectToken(),
       ]);
-      setPluggyConnect(()=>Widget);
-      setConnectToken(token);
+      const widget = new PluggyConnect({
+        connectToken: token,
+        includeSandbox: false,
+        onSuccess: onSuccess,
+        onError: ()=>setMessage({type:"error", text:"Erro ao conectar com o banco."}),
+        onClose: ()=>{ widgetRef.current = null; },
+      });
+      widgetRef.current = widget;
+      await widget.init();
     }catch(err){
+      widgetRef.current = null;
       setMessage({type:"error", text: err.message || "Não foi possível abrir a conexão com o banco."});
     }finally{
       setOpening(false);
@@ -1912,7 +1938,7 @@ function BankConnect({onImported}){
   };
 
   const onSuccess = async (itemData)=>{
-    setConnectToken(null); // fecha o widget
+    closeWidget(); // fecha o widget
     setSyncing(true);
     setMessage(null);
     try{
@@ -1934,15 +1960,6 @@ function BankConnect({onImported}){
       </button>
       {message && <small className={message.type==="error"?"negative":"positive"}>{message.text}</small>}
     </div>
-    {connectToken && PluggyConnect && (
-      <PluggyConnect
-        connectToken={connectToken}
-        includeSandbox={false}
-        onSuccess={onSuccess}
-        onError={()=>setMessage({type:"error", text:"Erro ao conectar com o banco."})}
-        onClose={()=>setConnectToken(null)}
-      />
-    )}
   </div>
 }
 
@@ -3362,7 +3379,7 @@ const PASTE_BLOCK_TAGS = new Set([
 ]);
 
 function sanitizePastedHtml(container) {
-  container.querySelectorAll("script,style,meta,link").forEach((el) => el.remove());
+  container.querySelectorAll("script,style,meta,link,.word-ink-layer").forEach((el) => el.remove());
 
   function walk(node) {
     Array.from(node.childNodes).forEach((child) => {
@@ -20504,12 +20521,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [dlg, setDlg] = useState(null);
   const [dlgForm, setDlgForm] = useState({});
   const [clipHistory, setClipHistory] = useState([]);
-  const [pens, setPens] = useState([
-    { id: "pen", name: "Caneta", tool: "pen", color: "#1a1a1a", size: 3 },
-    { id: "pencil", name: "Lápis", tool: "pen", color: "#5b5f66", size: 2 },
-    { id: "hl", name: "Marca-texto", tool: "highlighter", color: "#ffe066", size: 10 },
-  ]);
-  const [activePen, setActivePen] = useState("pen");
+  const [pens, setPens] = useState([]); // galeria da aba Desenhar: { id, kind, color, width }
   const [macroRecording, setMacroRecording] = useState(false);
   const [citeStyle, setCiteStyle] = useState("abnt");
   const [highlightFields, setHighlightFields] = useState(false);
@@ -20602,12 +20614,34 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [insertFieldOpen, setInsertFieldOpen] = useState(false);
   const [mergePreview, setMergePreview] = useState(false);
   const [mergeIndex, setMergeIndex] = useState(0);
-  // Aba "Desenhar" — só define as ferramentas padrão com que a tela de
-  // desenho (WordDrawDialog) abre; o desenho em si continua sendo feito lá.
-  const [drawTool, setDrawTool] = useState("pen");
-  const [drawColor, setDrawColor] = useState("#1a1a1a");
-  const [drawSize, setDrawSize] = useState(3);
+  // Aba "Desenhar": tinta direto na página (WordInkCapture). drawTool = select | lasso |
+  // eraser | pen | pencil | highlighter; cada caneta guarda a própria cor e espessura (pt).
+  // A tela de desenho (WordDrawDialog) continua disponível em Inserir > Tela de Desenho.
+  const [drawTool, setDrawTool] = useState("select");
+  const [penSet, setPenSet] = useState(INK_DEFAULTS);
+  const [inkToShape, setInkToShape] = useState(false);
+  const [inkReplay, setInkReplay] = useState(false);
+  const [inkSelCount, setInkSelCount] = useState(0);
+  const inkApiRef = useRef(null);
   const [drawRuler, setDrawRuler] = useState(false);
+  const inkKind = INK_TOOLS.includes(drawTool) ? drawTool : "pen";
+  const drawColor = penSet[inkKind].color;
+  const drawSize = penSet[inkKind].width;
+  // Caneta da galeria em uso (mesmo tipo, cor e espessura): mudar cor/espessura muda ela também.
+  const galleryIdx = pens.findIndex(p => p.kind === drawTool && p.color === drawColor && Math.abs(p.width - drawSize) < 0.01);
+  const patchPen = (patch) => {
+    setPenSet(st => ({ ...st, [inkKind]: { ...st[inkKind], ...patch } }));
+    if (galleryIdx >= 0) setPens(l => l.map((p, i) => (i === galleryIdx ? { ...p, ...patch } : p)));
+  };
+  const setDrawColor = (c) => {
+    if (inkApiRef.current?.hasSelection()) { inkApiRef.current.recolor(c); return; } // com tinta selecionada no laço, a cor vai pra seleção
+    patchPen({ color: String(c).toLowerCase() });
+  };
+  const setDrawSize = (w) => patchPen({ width: w });
+  const pickInkTool = (tool, set) => {
+    if (set) setPenSet(st => ({ ...st, [tool]: { ...st[tool], ...set } }));
+    setDrawTool(tool);
+  };
   // Formas / WordArt / SmartArt (Inserir > Ilustrações/Texto)
   const [selectedShape, setSelectedShape] = useState(null);
   const [cropDialogOpen, setCropDialogOpen] = useState(false);
@@ -20704,6 +20738,26 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     refreshNavHeadings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id]);
+
+  // A camada de tinta é um nó não editável no corpo: Backspace no começo do texto poderia
+  // apagá-la sozinha. Se só ela sumiu, volta pro lugar (trocar o HTML inteiro — desfazer,
+  // abrir outro documento — não cai nisso).
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return undefined;
+    const mo = new MutationObserver((recs) => {
+      for (const r of recs) {
+        if (r.addedNodes.length || r.removedNodes.length !== 1) continue;
+        const n = r.removedNodes[0];
+        if (n.nodeType !== 1 || !n.classList.contains("word-ink-layer") || el.querySelector(":scope > .word-ink-layer")) continue;
+        el.insertBefore(n, r.nextSibling && r.nextSibling.parentNode === el ? r.nextSibling : el.firstChild);
+        handleBodyInput();
+      }
+    });
+    mo.observe(el, { childList: true });
+    return () => mo.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const scheduleSave = (patch) => {
     clearTimeout(saveTimer.current);
@@ -22066,6 +22120,32 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
 
   // ====== Ribbon no padrão wordcraft/Word: estado dos botões, menus e comandos extras ======
+  // ---- Aba Desenhar: conversões da tinta da página ----------------------------------------
+  const inkToShapeClick = () => {
+    if (inkApiRef.current?.hasSelection()) {
+      if (!inkApiRef.current.convert()) alert("Nenhum dos traços selecionados parece uma forma.");
+      return;
+    }
+    setInkToShape(v => !v);
+  };
+  const inkToMathClick = async () => {
+    const sel = inkApiRef.current?.hasSelection() ? inkApiRef.current.selection() : [];
+    const items = sel.length ? sel : inkItems(bodyRef.current);
+    if (!items.length) { setInkMode("math"); setDrawOpen(true); return; } // sem tinta na página: tela de desenho
+    try {
+      const url = await rasterizeItems(items);
+      if (!url) { alert("Não há tinta de caneta/lápis pra reconhecer."); return; }
+      const txt = await recognizeHandwriting(url);
+      if (!txt) { alert("Não foi possível reconhecer a escrita."); return; }
+      commitHistoryCheckpoint();
+      removeInkItems(items);
+      inkApiRef.current?.clear();
+      bodyRef.current?.focus();
+      fmt.exec("insertHTML", buildEquationHtml(txt, txt.includes("\\") ? "latex" : "linear", false) + "&nbsp;");
+      handleBodyInput();
+    } catch (err) { alert(err?.message || "Falha ao reconhecer a escrita."); }
+  };
+
   const rbm = (id, trigger, items, popClass) => (
     <RbMenu id={id} menu={rbMenu} setMenu={setRbMenu} trigger={trigger} popClass={popClass}>{items}</RbMenu>
   );
@@ -23496,31 +23576,46 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
 
           {ribbonTab === "draw" && (<>
             <RbGroup label="Ferramentas de Desenho" wide>
-              <RbBig icon={MousePointer2} label="Selecionar" tip="Selecionar" desc="Seleciona traços já desenhados na tela de desenho." active={drawTool === "select"} onClick={() => { setDrawTool("select"); setActivePen(null); }}/>
-              <RbBig icon={Eraser} label="Borracha" tip="Borracha" desc="Apaga partes do desenho." active={drawTool === "eraser"} onClick={() => { setDrawTool("eraser"); setActivePen(null); }}/>
-              {pens.map(p => (
-                <RbBig key={p.id} icon={p.tool === "highlighter" ? Highlighter : PenTool} label={p.name} tip={p.name} desc="Seleciona esta caneta, com a cor e a espessura salvas nela." active={activePen === p.id} onClick={() => { setActivePen(p.id); setDrawTool(p.tool); setDrawColor(p.color); setDrawSize(p.size); }}/>
-              ))}
-              {rbm("addpen", (t) => <RbBig icon={Plus} label={"Adicionar\nCaneta"} chevron tip="Adicionar Caneta" desc="Cria uma nova caneta com a cor e a espessura atuais." onClick={t}/>, <>
-                {[["Caneta", "pen"], ["Lápis", "pen"], ["Marca-texto", "highlighter"]].map(([n, tool]) => <button key={n} onClick={() => { const id = "p" + Date.now(); setPens(l => [...l, { id, name: n, tool, color: drawColor, size: drawSize }]); setActivePen(id); setDrawTool(tool); }}>{n}</button>)}
+              <RbBig icon={MousePointer2} label="Selecionar" tip="Selecionar" desc="Volta à seleção normal de texto e objetos: arrastar na página não desenha." active={drawTool === "select"} onClick={() => setDrawTool("select")}/>
+              <RbBig icon={Lasso} label="Laço" tip="Laço" desc="Desenhe uma volta em torno da tinta para selecioná-la. Arraste a seleção para mover, mude a cor, converta em formas ou aperte Delete para apagar." active={drawTool === "lasso"} onClick={() => setDrawTool("lasso")}/>
+              <RbBig icon={Eraser} label="Borracha" tip="Borracha" desc="Clique ou arraste sobre um traço para apagá-lo inteiro." active={drawTool === "eraser"} onClick={() => setDrawTool("eraser")}/>
+              <RbBig icon={PenTool} label="Caneta" tip="Caneta" desc="Desenha tinta direto na página." active={drawTool === "pen" && galleryIdx < 0} onClick={() => pickInkTool("pen")}/>
+              <RbBig icon={Pencil} label="Lápis" tip="Lápis" desc="Desenha com um traço fino e um pouco mais claro." active={drawTool === "pencil" && galleryIdx < 0} onClick={() => pickInkTool("pencil")}/>
+              <RbBig icon={Highlighter} label="Marca-texto" tip="Marca-texto" desc="Destaca por trás do texto, com transparência." active={drawTool === "highlighter" && galleryIdx < 0} onClick={() => pickInkTool("highlighter")}/>
+              {pens.map((p, i) => {
+                const PenIcon = p.kind === "highlighter" ? Highlighter : p.kind === "pencil" ? Pencil : PenTool;
+                const kindName = p.kind === "highlighter" ? "Marca-texto" : p.kind === "pencil" ? "Lápis" : "Caneta";
+                return (
+                  <button key={p.id} type="button" className={"rbBig" + (galleryIdx === i ? " active" : "")} data-tip={`${kindName}: ${p.width} pt, ${p.color}`} data-tipdesc="Clique para usar esta caneta; clique com o botão direito para removê-la." onClick={() => pickInkTool(p.kind, { color: p.color, width: p.width })} onContextMenu={(e) => { e.preventDefault(); setPens(l => l.filter((_, j) => j !== i)); }}>
+                    <PenIcon size={22} style={{ color: p.color }}/>
+                    <span className="rbLabel"><span style={{ display: "block", width: 22, height: Math.min(8, Math.max(1.5, p.width * 0.6)), background: p.color, borderRadius: 2 }}/></span>
+                  </button>
+                );
+              })}
+              {rbm("addpen", (t) => <RbBig icon={Plus} label={"Adicionar\nCaneta"} chevron tip="Adicionar Caneta" desc="Guarda na galeria uma caneta com a cor e a espessura atuais do tipo escolhido." onClick={t}/>, <>
+                {[["Caneta", "pen"], ["Lápis", "pencil"], ["Marca-texto", "highlighter"]].map(([n, kind]) => <button key={n} onClick={() => { if (pens.length >= MAX_PENS) return; const cur = penSet[kind]; setPens(l => [...l, { id: "p" + Date.now(), kind, color: cur.color, width: cur.width }]); setDrawTool(kind); setRbMenu(null); }}>{n}</button>)}
               </>)}
               <div className="rbCol">
                 <div className="wordDropdownWrap">
-                  <RbSplit icon={Palette} tip="Cor da Caneta" desc="Escolhe a cor usada pela caneta atual." color={drawColor} onMain={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))} onArrow={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))}/>
+                  <RbSplit icon={Palette} tip="Cor" desc={inkSelCount ? "Muda a cor da tinta selecionada no laço." : "Escolhe a cor da caneta em uso."} color={drawColor} onMain={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))} onArrow={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))}/>
                   {rbMenu === "pencolor" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setDrawColor(c); setRbMenu(null); }}/>)}</div>}
                 </div>
-                {rbm("pensize", (t) => <RbSm icon={SlidersHorizontal} label={`${drawSize} pt`} chevron tip="Espessura" desc="Define a espessura do traço." onClick={t}/>, <>
-                  {[1, 2, 3, 5, 8, 12].map(n => <button key={n} className={drawSize === n ? "active" : ""} onClick={() => setDrawSize(n)}>{n} pt</button>)}
+                {rbm("pensize", (t) => <RbSm icon={SlidersHorizontal} label={`${drawSize} pt`} chevron tip="Espessura" desc="Define a espessura do traço da caneta em uso." onClick={t}/>, <>
+                  {INK_WIDTHS[inkKind].map(n => <button key={n} className={Math.abs(drawSize - n) < 0.01 ? "active" : ""} onClick={() => { setDrawSize(n); setRbMenu(null); }}>{n} pt</button>)}
                 </>)}
               </div>
             </RbGroup>
             <RbGroup label="Converter">
+              <RbBig icon={Shapes} label={"Tinta para\nForma"} tip="Tinta para Forma" desc="Transforma traços em linha, seta, retângulo, elipse ou polígono. Com tinta selecionada no laço, converte a seleção; senão, liga ou desliga a conversão automática ao desenhar." active={inkToShape} onClick={inkToShapeClick}/>
+              <RbBig icon={Sigma} label={"Tinta para\nEquação"} tip="Tinta para Equação" desc="Reconhece a equação escrita à mão na página (ou só a selecionada no laço) e a insere como bloco de equação (requer conta/sincronização)." onClick={inkToMathClick}/>
               <RbBig icon={Type} label={"Tinta para\nTexto"} tip="Tinta para Texto" desc="Escreva à mão na tela de desenho; o texto reconhecido é inserido no documento (requer conta/sincronização)." onClick={() => { setInkMode("text"); setDrawOpen(true); }}/>
-              <RbBig icon={Sigma} label={"Tinta para\nEquação"} tip="Tinta para Equação" desc="Escreva uma fórmula à mão; ela é reconhecida e inserida como bloco de equação (requer conta/sincronização)." onClick={() => { setInkMode("math"); setDrawOpen(true); }}/>
             </RbGroup>
             <RbGroup label="Inserir">
               <RbBig icon={PenTool} label={"Tela de\nDesenho"} tip="Abrir Tela de Desenho" desc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => { setInkMode(false); setDrawOpen(true); }}/>
               <RbBig icon={Ruler} label="Régua" tip="Régua" desc="Mostra uma grade de apoio na tela de desenho." active={drawRuler} onClick={() => setDrawRuler(r => !r)}/>
+            </RbGroup>
+            <RbGroup label="Reproduzir">
+              <RbBig icon={Play} label={"Reprodução\nde Tinta"} tip="Reprodução de Tinta" desc="Esconde a tinta da página e a desenha de novo, traço por traço, na ordem em que foi feita." active={inkReplay} onClick={() => { setInkReplay(v => !v); setDrawTool("select"); }}/>
             </RbGroup>
           </>)}
 
@@ -24359,7 +24454,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             )}
             <div
               ref={pageRef}
-              className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "") + (viewMode === "web" ? " wordPage-web" : "") + (viewMode === "outline" ? " wordPage-outline" : "")}
+              className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "") + (viewMode === "web" ? " wordPage-web" : "") + (viewMode === "outline" ? " wordPage-outline" : "") + (inkReplay ? " wordInkReplaying" : "")}
               style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...pageBorderStyle(pageBorder) }}
             >
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
@@ -24394,6 +24489,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 onContextMenu={handleBodyContextMenu}
                 data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
               />
+              {drawTool !== "select" && !inkReplay && !docProtected && (
+                <WordInkCapture
+                  bodyRef={bodyRef} mode={drawTool} color={drawColor} width={drawSize} inkToShape={inkToShape}
+                  onBefore={commitHistoryCheckpoint} onChange={handleBodyInput} apiRef={inkApiRef} onSelection={setInkSelCount}
+                />
+              )}
+              {inkReplay && <WordInkReplay bodyRef={bodyRef} onClose={() => setInkReplay(false)}/>}
             </div>
           </div>
           {splitOn && <div className="wordSplitPane wordRichBody" dangerouslySetInnerHTML={{ __html: splitHtml }}/>}
@@ -24852,7 +24954,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 else fmt.exec("insertText", txt);
               } catch (err) { alert(err?.message || "Falha ao reconhecer a escrita."); }
             }}
-            defaultTool={drawTool} defaultColor={drawColor} defaultSize={drawSize} defaultRuler={drawRuler}
+            defaultTool={drawTool === "highlighter" || drawTool === "eraser" ? drawTool : "pen"} defaultColor={drawColor} defaultSize={Math.max(1, Math.round(drawSize * INK_PT))} defaultRuler={drawRuler}
           />
         )}
 

@@ -47,6 +47,7 @@ export const PAGE_TO_SLUG = {
   "Filmes e Séries": "filmes-e-series",
   "Jogos": "jogos",
   "Teste de PC": "teste-de-pc",
+  "Músicas": "musicas",
   "Gráfico": "grafico",
 };
 

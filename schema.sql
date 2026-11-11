@@ -1372,3 +1372,48 @@ alter table audiobooks add column if not exists quotes jsonb not null default '[
 -- separados por vírgula (ex.: '3' para quarta, '1,3,5' para seg/qua/sex). No mensal, o dia vem de `date` (dd/mm).
 alter table reminders add column if not exists recurrence text;
 alter table reminders add column if not exists weekdays text;
+
+-- Atualização: aba Músicas (Área de Lazer)
+-- Playlists e músicas vêm de links do YouTube / YouTube Music. Nada de áudio é guardado:
+-- só o cadastro (video_id, título, artista) e a letra, pra sincronizar entre aparelhos.
+create table if not exists music_playlists (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  source_list_id text,
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+create table if not exists music_tracks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  playlist_id uuid references music_playlists(id) on delete cascade,
+  video_id text not null,
+  title text not null,
+  artist text,
+  duration int not null default 0,
+  lyrics text,
+  lyrics_synced text,           -- letra com tempos (formato LRC), quando existir
+  lyrics_source text,           -- 'lrclib' | 'youtube' | 'manual' | 'none'
+  sort_order int,
+  created_at timestamptz not null default now()
+);
+create index if not exists music_tracks_playlist_idx on music_tracks (playlist_id);
+alter table music_playlists enable row level security;
+alter table music_tracks enable row level security;
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['music_playlists','music_tracks']
+  loop
+    execute format('drop policy if exists "select_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "insert_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "update_own_%1$s" on %1$s', t);
+    execute format('drop policy if exists "delete_own_%1$s" on %1$s', t);
+    execute format('create policy "select_own_%1$s" on %1$s for select using (auth.uid() = user_id)', t);
+    execute format('create policy "insert_own_%1$s" on %1$s for insert with check (auth.uid() = user_id)', t);
+    execute format('create policy "update_own_%1$s" on %1$s for update using (auth.uid() = user_id)', t);
+    execute format('create policy "delete_own_%1$s" on %1$s for delete using (auth.uid() = user_id)', t);
+  end loop;
+end $$;

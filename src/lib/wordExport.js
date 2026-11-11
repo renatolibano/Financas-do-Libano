@@ -159,6 +159,7 @@ function rasterizeToPng(src, w, h, { filter, opacity } = {}) {
 async function preprocessExportHtml(html) {
   const container = document.createElement("div");
   container.innerHTML = html || "";
+  container.querySelectorAll(".word-ink-layer").forEach(n => n.remove()); // tinta da aba Desenhar: só existe na tela/impressão
 
   for (const shape of Array.from(container.querySelectorAll(".word-shape"))) {
     const svg = shape.querySelector("svg");
