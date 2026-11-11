@@ -47,18 +47,28 @@ export async function nativeRequestPermission() {
 }
 
 // Teste manual (Configurações > Notificações): agenda uma notificação para daqui 5s e devolve um diagnóstico em texto.
+// Cada etapa tem limite de tempo: se o Android/plugin não responder, o texto diz em qual etapa parou.
+const withTimeout = (label, p, ms = 10000) => Promise.race([
+  Promise.resolve(p),
+  new Promise((_, rej) => setTimeout(() => rej(new Error(`sem resposta em ${Math.round(ms / 1000)}s`)), ms)),
+]).catch((e) => { throw new Error(`etapa "${label}": ${e?.message || e}`); });
+
 export async function testNativeNotification() {
   if (!isNative) return "O teste só funciona no app Android.";
+  const done = [];
+  const ok = (t) => done.push("✓ " + t);
+  const info = `Plataforma: ${Capacitor.getPlatform()} · plugin LocalNotifications: ${Capacitor.isPluginAvailable("LocalNotifications") ? "disponível" : "NÃO disponível"}`;
   try {
-    const ln = await LN();
-    let p = await ln.checkPermissions();
-    if (p.display !== "granted") p = await ln.requestPermissions();
-    if (p.display !== "granted") return "O Android bloqueou as notificações do app. Ative em Configurações > Apps > Libano > Notificações.";
-    await ensureChannel(ln);
-    await ln.schedule({ notifications: [{ id: 888888803, title: "Teste do Libano", body: "Se você está vendo isso, as notificações funcionam.", channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at: new Date(Date.now() + 5000), allowWhileIdle: true } }] });
-    const pending = await ln.getPending();
-    return `Teste agendado para daqui 5 segundos — saia do app para conferir. Notificações agendadas no total: ${(pending.notifications || []).length}.`;
-  } catch (err) { return "Falhou: " + (err?.message || err); }
+    const ln = await withTimeout("carregar plugin", LN()); ok("plugin carregado");
+    let p = await withTimeout("ver permissão", ln.checkPermissions()); ok(`permissão atual: ${p.display}`);
+    if (p.display !== "granted") { p = await withTimeout("pedir permissão", ln.requestPermissions(), 30000); ok(`permissão após pedir: ${p.display}`); }
+    if (p.display !== "granted") return "O Android bloqueou as notificações do app. Ative em Configurações > Apps > Libano > Notificações.\n\n" + info + "\n" + done.join("\n");
+    try { await withTimeout("criar canal", ln.createChannel({ id: CHANNEL, name: "Lembretes e metas", importance: 4, vibration: true, visibility: 1 })); ok("canal criado"); channelReady = true; }
+    catch (e) { done.push("✗ " + e.message + " (seguindo sem canal)"); }
+    await withTimeout("agendar", ln.schedule({ notifications: [{ id: 888888803, title: "Teste do Libano", body: "Se você está vendo isso, as notificações funcionam.", channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at: new Date(Date.now() + 5000), allowWhileIdle: true } }] })); ok("agendada");
+    const pending = await withTimeout("listar agendadas", ln.getPending()); ok(`agendadas no total: ${(pending.notifications || []).length}`);
+    return `Teste agendado para daqui 5 segundos — saia do app para conferir.\n\n${info}\n${done.join("\n")}`;
+  } catch (err) { return `Falhou — ${err?.message || err}\n\n${info}\n${done.join("\n")}`; }
 }
 
 // Notificação imediata (mesma função que no navegador usava new Notification).
