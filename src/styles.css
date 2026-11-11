@@ -3048,3 +3048,5 @@ body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px
   .remAddBtn{display:none}
   .remFab{display:flex;position:fixed;right:18px;bottom:84px;width:56px;height:56px;border-radius:50%;background:var(--accent);color:var(--accent-text-on);align-items:center;justify-content:center;box-shadow:0 10px 26px #0007;z-index:20}
 }
+.reminderCard.clickable{cursor:pointer}
+.reminderCard.clickable:active{transform:scale(.99)}

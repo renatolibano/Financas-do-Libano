@@ -2159,6 +2159,7 @@ function CommonReminders({entity}){
         title={x.title}
         subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):(String(x.date||"").split("/").length===2?"Todo ano · ":"")+x.date)+(x.time?" às "+x.time:"")}
         days={reminderDaysUntil(x)}
+        onClick={()=>openEdit(x)}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
         menuContent={<>
@@ -2167,7 +2168,7 @@ function CommonReminders({entity}){
           <button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>
         </>}
       >
-        {x.description && <p className={"remDesc"+(openDescId===x.id?" open":"")} onClick={()=>setOpenDescId(id=>id===x.id?null:x.id)}>{x.description}</p>}
+        {x.description && <p className={"remDesc"+(openDescId===x.id?" open":"")} onClick={(e)=>{e.stopPropagation();setOpenDescId(id=>id===x.id?null:x.id);}}>{x.description}</p>}
       </ReminderCard>)}
       {filtered.length===0 && <p className="emptyHint">{all.length===0 ? "Nenhum lembrete por aqui ainda. Toque em “Novo lembrete”." : "Nenhum lembrete neste filtro."}</p>}
     </div>
@@ -2226,22 +2227,26 @@ function CommonReminders({entity}){
 }
 
 function Birthdays({entity}){
-  const {data,add,remove} = entity;
+  const {data,add,remove,update} = entity;
   const filtered = sortByProximity(data.filter(x=>x.kind==="Aniversário"));
   const [title,setTitle]=useState(""); const [date,setDate]=useState("");
+  const [editingId,setEditingId]=useState(null);
   const [openMenuId,setOpenMenuId]=useState(null);
-  const submit=()=>{
+  const reset=()=>{setTitle("");setDate("");setEditingId(null);};
+  const submit=async()=>{
     if(!title.trim()||!date) return;
-    add({title,date,kind:"Aniversário"});
-    requestNotificationPermission();
-    setTitle("");setDate("");
+    if(editingId){ const res = await update(editingId,{title,date}); if(res===null) return; }
+    else { await add({title,date,kind:"Aniversário"}); requestNotificationPermission(); }
+    reset();
   };
+  const startEdit=(x)=>{ setOpenMenuId(null); setEditingId(x.id); setTitle(x.title||""); setDate(x.date||""); window.scrollTo({top:0,behavior:"smooth"}); };
   return <div className="content">
     <div className="panel">
       <div className="inlineAdd">
         <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Nome"/>
         <input value={date} onChange={e=>setDate(e.target.value)} placeholder="Data (dd/mm)"/>
-        <button onClick={submit}><Plus/></button>
+        <button onClick={submit} title={editingId?"Salvar":"Adicionar"}>{editingId?<Check/>:<Plus/>}</button>
+        {editingId && <button onClick={reset} title="Cancelar edição" style={{background:"var(--bg-surface-3)",color:"var(--text-1)",border:"1px solid var(--border)"}}><X/></button>}
       </div>
     </div>
     <div className="reminderGrid">
@@ -2251,9 +2256,13 @@ function Birthdays({entity}){
         title={x.title}
         subtitle={"Aniversário · "+x.date}
         days={daysUntil(x.date)}
+        onClick={()=>startEdit(x)}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
-        menuContent={<button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>}
+        menuContent={<>
+          <button onClick={()=>startEdit(x)}><Pencil size={13}/> Editar</button>
+          <button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>
+        </>}
       />)}
       {filtered.length===0 && <p className="emptyHint">Nenhum aniversário cadastrado ainda.</p>}
     </div>

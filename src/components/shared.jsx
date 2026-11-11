@@ -132,9 +132,9 @@ export function HandwritingPad({ onConvert, onCancel }) {
   );
 }
 
-export function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children}){
+export function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children, onClick}){
   const cls = urgencyClass(days);
-  return <div className={"reminderCard "+cls}>
+  return <div className={"reminderCard "+cls+(onClick?" clickable":"")} onClick={onClick}>
     <div className="reminderCardTop">
       <div className="reminderCardLeft">
         <div className="reminderCardIcon">{icon}</div>
