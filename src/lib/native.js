@@ -29,7 +29,21 @@ export function getMediaSession() {
 const CHANNEL = "libano-lembretes";
 const SMALL_ICON = "ic_stat_icon";
 let channelReady = false;
-const LN = () => import("@capacitor/local-notifications").then(m => m.LocalNotifications);
+// ATENÇÃO: não devolva o plugin direto de uma Promise. O plugin do Capacitor é um Proxy: ao resolver a Promise o JS
+// procura `.then` nele, o Proxy repassa essa chamada ao Android e ela nunca responde (o `await` trava para sempre).
+// Por isso devolvemos um objeto simples que só repassa os métodos usados.
+const LN = async () => {
+  const { LocalNotifications: P } = await import("@capacitor/local-notifications");
+  return {
+    checkPermissions: () => P.checkPermissions(),
+    requestPermissions: () => P.requestPermissions(),
+    createChannel: (o) => P.createChannel(o),
+    schedule: (o) => P.schedule(o),
+    getPending: () => P.getPending(),
+    cancel: (o) => P.cancel(o),
+    addListener: (e, f) => P.addListener(e, f),
+  };
+};
 
 async function ensureChannel(ln) {
   if (channelReady) return;
