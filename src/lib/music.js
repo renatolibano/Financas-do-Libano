@@ -37,6 +37,7 @@ async function callYt(body) {
   if (!supabase) return { error: "Para importar do YouTube é preciso estar conectado ao servidor (fazer login)." };
   try {
     const { data, error } = await supabase.functions.invoke("youtube-music", { body });
+    if (error?.context?.status === 404) return { error: "A função \"youtube-music\" ainda não foi publicada no Supabase. Rode: supabase functions deploy youtube-music" };
     if (error || data?.error) return { error: data?.error || "Não consegui falar com o servidor agora." };
     return { data };
   } catch (e) {
