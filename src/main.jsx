@@ -1499,7 +1499,12 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
               <span className="switchKnob"/>
             </span>
           </label>
-          {isNative && <button type="button" className="ghost" style={{marginTop:8}} onClick={async()=>alert(await testNativeNotification())}>Testar notificação do celular</button>}
+          {isNative && <button type="button" className="ghost" style={{marginTop:8}} onClick={()=>{
+            alert("1. O botão está funcionando!");
+            testNativeNotification()
+              .then((resultado)=>{ alert("2. Resultado do teste:\n"+resultado); })
+              .catch((erro)=>{ alert("3. Erro:\n"+String(erro)); });
+          }}>Testar notificação do celular</button>}
           {notifSettings.enabled && (
             <div className="notifKindsList">
               {NOTIF_KIND_DEFS.map(k => {
