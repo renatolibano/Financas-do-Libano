@@ -1741,7 +1741,7 @@ export const EXPORT_FORMATS = {
   odt: { ext: "odt", mime: "application/vnd.oasis.opendocument.text", label: "OpenDocument (.odt)" },
 };
 
-export const IMPORT_ACCEPT = ".docx,.odt,.rtf,.html,.htm,.md,.markdown,.txt,.tex";
+export const IMPORT_ACCEPT = ".docx,.odt,.rtf,.html,.htm,.md,.markdown,.txt,.tex,.pdf,application/pdf";
 
 export async function exportWordAs(doc, kind) {
   const f = EXPORT_FORMATS[kind];
@@ -1781,6 +1781,7 @@ export async function importWordFile(file) {
     case "tex": case "latex": case "ltx": { const r = latexToFlow(decodeText(buf)); return finish(r.flow, r.title || base); }
     case "odt": { const r = await odtToFlow(buf); return finish(r.flow, r.title || base); }
     case "docx": { const r = await docxToFlow(buf); return finish(r.flow, base); }
-    default: throw new Error("Formato não suportado. Use .docx, .odt, .rtf, .html, .md, .txt ou .tex.");
+    case "pdf": { const { pdfFileToNote } = await import("./pdfToNote"); const r = await pdfFileToNote(file); return { title: r.title || base, html: r.content }; }
+    default: throw new Error("Formato não suportado. Use .docx, .odt, .rtf, .html, .md, .txt, .tex ou .pdf.");
   }
 }

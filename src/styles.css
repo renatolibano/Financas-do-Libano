@@ -2920,6 +2920,13 @@ h1{font-size:23px}
 .abMiniCover .muThumb,.abFullCover .muThumb{height:100%}
 .muMini{z-index:71}
 body:has(.abMini:not(.muMini)) .muMini{bottom:92px}
+/* Celular: sobe os players flutuantes acima da barra de navegação inferior (handle 26px; painel aberto +88px) */
+@media(max-width:760px){
+.abMini{bottom:38px;transition:bottom .22s ease}
+body:has(.mobileTabBarPanel.open) .abMini{bottom:126px}
+body:has(.abMini:not(.muMini)) .muMini{bottom:118px}
+body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px}
+}
 .muMiniBtn{width:36px;height:36px;display:grid;place-items:center;border-radius:50%;color:var(--text-1)}
 .muMiniBtn:hover{background:var(--bg-hover-2)}
 .muErrText{color:#ff9d9d!important}
