@@ -1373,6 +1373,9 @@ alter table audiobooks add column if not exists quotes jsonb not null default '[
 alter table reminders add column if not exists recurrence text;
 alter table reminders add column if not exists weekdays text;
 
+-- Atualização: descrição nos Lembretes Comuns (texto livre com o que precisa ser lembrado).
+alter table reminders add column if not exists description text;
+
 -- Atualização: aba Músicas (Área de Lazer)
 -- Playlists e músicas vêm de links do YouTube / YouTube Music. Nada de áudio é guardado:
 -- só o cadastro (video_id, título, artista) e a letra, pra sincronizar entre aparelhos.

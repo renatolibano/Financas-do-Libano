@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
+import { isNative, setNativeOrientation } from "./lib/native";
 
 // Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
 // o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
@@ -35,6 +36,45 @@ export function useFullscreen(ref, { native = true, startOpen = false } = {}) {
   useEffect(() => () => { if (native && document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, [native]);
 
   return [fullscreen, toggleFullscreen];
+}
+
+// Botão de girar a tela (celular): alterna entre horizontal travado e o comportamento normal.
+// No app Android usa o plugin nativo; no navegador usa fullscreen + Screen Orientation API
+// (que o iOS não suporta — aí avisa).
+export function useScreenRotate(ref) {
+  const [landscape, setLandscape] = useState(false);
+  const onRef = useRef(false);
+  const enteredFs = useRef(false);
+
+  const toggle = async () => {
+    const next = !onRef.current;
+    try {
+      if (isNative) await setNativeOrientation(next ? "landscape" : "auto");
+      else if (next) {
+        if (!document.fullscreenElement) {
+          await (ref?.current || document.documentElement).requestFullscreen?.();
+          enteredFs.current = !!document.fullscreenElement;
+        }
+        await screen.orientation.lock("landscape");
+      } else {
+        screen.orientation.unlock();
+        if (enteredFs.current && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+        enteredFs.current = false;
+      }
+      onRef.current = next;
+      setLandscape(next);
+    } catch (e) {
+      alert("Este navegador não permite girar a tela por aqui. No app Android ou no Chrome do celular funciona.");
+    }
+  };
+
+  useEffect(() => () => {
+    if (!onRef.current) return;
+    if (isNative) setNativeOrientation("auto").catch(() => {});
+    else { try { screen.orientation.unlock(); } catch (e) {} }
+  }, []);
+
+  return [landscape, toggle];
 }
 
 export function useSession(){

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Headphones, Play, Pause, SkipBack, SkipForward, RotateCcw, RotateCw, Plus, X, MoreVertical, Trash2, Pencil,
-  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText, ChevronLeft,
+  BookmarkPlus, Bookmark, List, Moon, Gauge, ChevronDown, Check, Library, Hourglass, CheckCircle2, Clock3, HardDrive, Search, Cloud, StickyNote, Quote, FileText, ChevronLeft, TabletSmartphone,
 } from "lucide-react";
 import AudioTranscript from "./AudioTranscript";
 import QuoteEditor from "./QuoteEditor";
 import { hasMediaSession, getMediaSession, makeMediaMetadata } from "./lib/native";
 import { usePersistentState } from "./lib/storage";
+import { useScreenRotate } from "./hooks";
 import { bumpDailyGoals } from "./lib/notifications";
 import {
   getLocalTrackIds, getTrackBlob, saveTrackBlob, deleteLocalFiles, saveLocalPos, loadLocalPos,
@@ -690,6 +691,7 @@ function FullPlayer({
   const tracks = book.tracks || [];
   const track = tracks[trackIdx];
   const toggle = (name) => setPanel(p => p === name ? null : name);
+  const [rotated, toggleRotate] = useScreenRotate();
   const wide = useMinWidth(900);
   const [lyricsOn, setLyricsOn] = useState(false);
   const lyrics = wide && lyricsOn; // PC: letra grande à esquerda, player (ou o painel aberto) à direita
@@ -757,7 +759,10 @@ function FullPlayer({
         <div className="abFullTop">
           <button type="button" onClick={onCollapse} title="Minimizar"><ChevronDown size={22}/></button>
           <span>Tocando agora</span>
-          <button type="button" onClick={onClose} title="Fechar player"><X size={20}/></button>
+          <div className="abFullTopR">
+            <button type="button" className={"rotateScreenBtn"+(rotated?" active":"")} onClick={toggleRotate} title={rotated?"Voltar para vertical":"Girar a tela (horizontal)"}><TabletSmartphone size={20}/></button>
+            <button type="button" onClick={onClose} title="Fechar player"><X size={20}/></button>
+          </div>
         </div>
         {lyrics && <div className="abLyricsCol"><AudioTranscript wide book={book} track={track} trackIdx={trackIdx} pos={pos} onSeek={onSeek} onAddQuote={openQuote}/></div>}
         <div className="abFullScroll">

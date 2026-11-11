@@ -158,7 +158,9 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
       if (!(bday ? birthdaysEnabled : enabled)) continue;
       const tm = /^(\d{1,2}):(\d{2})$/.exec(bday ? "" : String(r.time || ""));
       const label = bday ? "Aniversário" : "Lembrete · " + (r.kind || "Geral");
-      const add = (o, suffix, hour, minute, body) => out.push({ id: hashId(r.id + ":" + o.k + suffix), title: r.title, body, channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { on: onOf(o, hour, minute), repeats: true, allowWhileIdle: true } });
+      const dsc = bday ? "" : String(r.description || "").trim().slice(0, 160);
+      const withDsc = (b) => (dsc ? b + "\n" + dsc : b);
+      const add = (o, suffix, hour, minute, body) => out.push({ id: hashId(r.id + ":" + o.k + suffix), title: r.title, body: withDsc(body), channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { on: onOf(o, hour, minute), repeats: true, allowWhileIdle: true } });
       for (const o of reminderDates(r)) {
         // 1 dia antes
         if (o.k !== "d") {
@@ -169,7 +171,7 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
             const now = new Date();
             let at = new Date(now.getFullYear(), now.getMonth() + 1, 0, EVE_HOUR, 0);
             if (at <= now) at = new Date(now.getFullYear(), now.getMonth() + 2, 0, EVE_HOUR, 0);
-            out.push({ id: hashId(r.id + ":m-1e"), title: r.title, body: eveBody, channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at, allowWhileIdle: true } });
+            out.push({ id: hashId(r.id + ":m-1e"), title: r.title, body: withDsc(eveBody), channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at, allowWhileIdle: true } });
           }
         }
         // no próprio dia
@@ -257,4 +259,10 @@ export async function openExternal(url, system = false) {
   }
   const { Browser } = await import("@capacitor/browser");
   await Browser.open({ url });
+}
+
+// ---------- Girar a tela (leitor de livros / audiolivros) ----------
+// mode: "landscape" | "portrait" | "auto". Só no app Android; no navegador use a Screen Orientation API (ver useScreenRotate).
+export async function setNativeOrientation(mode) {
+  await registerPlugin("Orientation").setMode({ mode });
 }

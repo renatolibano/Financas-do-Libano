@@ -58,7 +58,7 @@ import { AudiobookHost } from "./Audiobooks";
 import { MusicHost } from "./Music";
 import StravaRuns from "./Strava";
 import { hasPendingStravaCallback } from "./lib/strava";
-import { Footprints, Music2 } from "lucide-react";
+import { Footprints, Music2, TabletSmartphone } from "lucide-react";
 import { useAudioStats, imageToCoverThumb } from "./lib/audiobooks";
 import NoteSelectionMenu from "./NoteSelectionMenu";
 import { recipeToText, downloadRecipePdf, downloadRecipeFile, parseRecipeImport } from "./lib/recipeExport";
@@ -86,7 +86,7 @@ import {
   calendarEventMatchesDate, formatWeekdaysLabel, reminderDaysUntil, recurrenceLabel, CAL_TYPE_META, getDayEvents, buildMonthGrid,
   sortByProximity,
 } from "./lib/calendar";
-import { useFullscreen, useSession, useTheme, useDismissedToday } from "./hooks";
+import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import WordRuler from "./components/WordRuler";
@@ -1011,7 +1011,8 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         const label = bday ? "Aniversário" : "Lembrete · "+(r.kind||"Geral");
         const fire = (key, body)=>{
           if(fired.includes(r.id+key)) return;
-          fireBrowserNotification(r.title, body);
+          const desc = bday ? "" : String(r.description||"").trim().slice(0,160);
+          fireBrowserNotification(r.title, desc ? body+"\n"+desc : body);
           fired.push(r.id+key);
           try{ localStorage.setItem(storageKey, JSON.stringify(fired)); }catch(e){}
         };
@@ -2062,48 +2063,165 @@ function Cards({entity,bill}){
   </div>
 }
 
+const REM_PRESETS = [
+  {label:"Todos os dias", days:[0,1,2,3,4,5,6]},
+  {label:"Dias úteis", days:[1,2,3,4,5]},
+  {label:"Fim de semana", days:[0,6]},
+];
+const REM_REPEATS = [
+  {key:"none", label:"Não repete"},
+  {key:"year", label:"Todo ano"},
+  {key:"monthly", label:"Todo mês"},
+  {key:"weekly", label:"Dias da semana"},
+  {key:"daily", label:"Todo dia"},
+];
+const remTodayISO = ()=>{ const d=new Date(); return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); };
+const remISOToBR = (iso, withYear)=>{ const [y,m,d]=String(iso||"").split("-"); return withYear ? d+"/"+m+"/"+y : d+"/"+m; };
+const remBlankForm = ()=>({id:null, title:"", description:"", kind:"Financeiro", repeat:"none", dateISO:remTodayISO(), monthDay:String(new Date().getDate()), weekdays:[], time:"", hadDescription:false});
+function remToForm(r){
+  const base = {...remBlankForm(), id:r.id, title:r.title||"", description:r.description||"", kind:r.kind||"Financeiro", time:r.time||"", hadDescription:r.description!==undefined && r.description!==null};
+  if(r.recurrence==="daily") return {...base, repeat:"daily"};
+  if(r.recurrence==="weekly") return {...base, repeat:"weekly", weekdays:String(r.weekdays||"").split(",").filter(Boolean).map(Number).filter(n=>n>=0&&n<=6)};
+  if(r.recurrence==="monthly") return {...base, repeat:"monthly", monthDay:String(parseInt(String(r.date||"").split("/")[0],10)||new Date().getDate())};
+  const p = String(r.date||"").split("/").map(n=>parseInt(n,10));
+  if(p.length>=2 && p[0] && p[1]) return {...base, repeat:p[2]?"none":"year", dateISO:(p[2]||new Date().getFullYear())+"-"+pad2(p[1])+"-"+pad2(p[0])};
+  return base;
+}
+function remFormToPayload(f){
+  const p = {
+    title:f.title.trim(), kind:f.kind, time:f.time||null,
+    recurrence:["daily","weekly","monthly"].includes(f.repeat)?f.repeat:null,
+    weekdays:f.repeat==="weekly"?f.weekdays.join(","):null,
+    date:f.repeat==="none"?remISOToBR(f.dateISO,true):f.repeat==="year"?remISOToBR(f.dateISO,false):f.repeat==="monthly"?String(parseInt(f.monthDay,10)):null,
+  };
+  const desc = f.description.trim();
+  if(desc || f.hadDescription) p.description = desc || null;
+  return p;
+}
+function remFormValid(f){
+  if(!f.title.trim()) return false;
+  if(f.repeat==="weekly") return f.weekdays.length>0;
+  if(f.repeat==="monthly"){ const d=parseInt(f.monthDay,10); return d>=1 && d<=31; }
+  if(f.repeat==="none" || f.repeat==="year") return !!f.dateISO;
+  return true;
+}
+function remFormSummary(f){
+  if(!remFormValid(f)) return "";
+  const p = remFormToPayload(f);
+  const when = p.recurrence ? recurrenceLabel(p) : (f.repeat==="year" ? "Todo ano em "+p.date : p.date);
+  return when + (p.time ? " às "+p.time : "");
+}
+
 function CommonReminders({entity}){
-  const {data,add,remove} = entity;
-  const filtered = sortByProximity(data.filter(x=>x.kind!=="Aniversário"));
-  const [title,setTitle]=useState(""); const [date,setDate]=useState(""); const [kind,setKind]=useState("Financeiro"); const [time,setTime]=useState("");
-  const [recurrence,setRecurrence]=useState(""); const [weekdays,setWeekdays]=useState([]);
+  const {data,add,remove,update} = entity;
+  const [filter,setFilter]=useState("all");
+  const [form,setForm]=useState(null);
+  const [saving,setSaving]=useState(false);
   const [openMenuId,setOpenMenuId]=useState(null);
-  const toggleWeekday=(n)=>setWeekdays(w=>w.includes(n)?w.filter(x=>x!==n):[...w,n].sort((a,b)=>a-b));
-  const submit=()=>{
-    if(!title.trim()) return;
-    if(recurrence==="weekly" ? weekdays.length===0 : (recurrence==="daily" ? false : !date)) return;
-    add({title,date:(recurrence==="daily"||recurrence==="weekly")?null:date,kind,time:time||null,recurrence:recurrence||null,weekdays:recurrence==="weekly"?weekdays.join(","):null});
+  const [openDescId,setOpenDescId]=useState(null);
+  const all = data.filter(x=>x.kind!=="Aniversário");
+  const filtered = sortByProximity(all.filter(x=>filter==="all" ? true : filter==="rec" ? !!x.recurrence : x.kind===filter));
+  const setF = (patch)=>setForm(f=>({...f,...patch}));
+  const closeForm = ()=>{ setForm(null); setSaving(false); };
+  const toggleWeekday=(n)=>setForm(f=>({...f, weekdays:f.weekdays.includes(n)?f.weekdays.filter(x=>x!==n):[...f.weekdays,n].sort((a,b)=>a-b)}));
+  const valid = !!form && remFormValid(form);
+  useEffect(()=>{
+    if(!form) return;
+    const onKey = (e)=>{ if(e.key==="Escape") closeForm(); };
+    window.addEventListener("keydown", onKey);
+    return ()=>window.removeEventListener("keydown", onKey);
+  },[!!form]);
+  const save = async ()=>{
+    if(!form || !valid || saving) return;
+    setSaving(true);
+    const payload = remFormToPayload(form);
+    const res = form.id ? await update(form.id, payload) : await add(payload);
+    if(res===null){ setSaving(false); return; } // erro no banco (o alerta já foi exibido) — mantém a tela aberta
     // Pede permissão de notificação (só pergunta de fato na primeira vez — depois disso o navegador lembra a escolha).
     requestNotificationPermission();
-    setTitle("");setDate("");setKind("Financeiro");setTime("");setRecurrence("");setWeekdays([]);
+    closeForm();
   };
+  const openNew = ()=>{ setOpenMenuId(null); setForm(remBlankForm()); };
+  const openEdit = (x)=>{ setOpenMenuId(null); setForm(remToForm(x)); };
+  const duplicate = (x)=>{ setOpenMenuId(null); setForm({...remToForm(x), id:null}); };
+  const FILTERS = [{key:"all",label:"Todos"},{key:"Financeiro",label:"Financeiro"},{key:"Outros",label:"Outros"},{key:"rec",label:"Repetem"}];
   return <div className="content">
-    <div className="panel">
-      <div className="inlineAdd">
-        <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Título do lembrete"/>
-        <select value={recurrence} onChange={e=>setRecurrence(e.target.value)} title="Repetição"><option value="">Não repete</option><option value="daily">Todo dia</option><option value="weekly">Toda semana</option><option value="monthly">Todo mês</option></select>
-        {recurrence!=="daily" && recurrence!=="weekly" && <input value={date} onChange={e=>setDate(e.target.value)} placeholder={recurrence==="monthly"?"Dia do mês (ex.: 15)":"Data (dd/mm)"}/>}
-        <input value={time} onChange={e=>setTime(e.target.value)} type="time" title="Hora do lembrete (opcional)" placeholder="Hora"/>
-        <select value={kind} onChange={e=>setKind(e.target.value)}><option>Financeiro</option><option>Outros</option></select>
-        <button onClick={submit}><Plus/></button>
+    <div className="remHeader">
+      <div className="remFilters">
+        {FILTERS.map(f=><button type="button" key={f.key} className={"remChip"+(filter===f.key?" active":"")} onClick={()=>setFilter(f.key)}>{f.label}</button>)}
       </div>
-      {recurrence==="weekly" && <div className="calWeekdayPicker" style={{marginTop:10}}>
-        {WEEKDAY_LABELS.map((l,n)=><button type="button" key={n} className={weekdays.includes(n)?"active":""} onClick={()=>toggleWeekday(n)}>{l}</button>)}
-      </div>}
+      <button type="button" className="remAddBtn" onClick={openNew}><Plus size={17}/> Novo lembrete</button>
     </div>
     <div className="reminderGrid">
       {filtered.map(x=><ReminderCard
         key={x.id}
         icon={<Bell size={18}/>}
         title={x.title}
-        subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):x.date)+(x.time?" às "+x.time:"")}
+        subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):(String(x.date||"").split("/").length===2?"Todo ano · ":"")+x.date)+(x.time?" às "+x.time:"")}
         days={reminderDaysUntil(x)}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
-        menuContent={<button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>}
-      />)}
-      {filtered.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
+        menuContent={<>
+          <button onClick={()=>openEdit(x)}><Pencil size={13}/> Editar</button>
+          <button onClick={()=>duplicate(x)}><Copy size={13}/> Duplicar</button>
+          <button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>
+        </>}
+      >
+        {x.description && <p className={"remDesc"+(openDescId===x.id?" open":"")} onClick={()=>setOpenDescId(id=>id===x.id?null:x.id)}>{x.description}</p>}
+      </ReminderCard>)}
+      {filtered.length===0 && <p className="emptyHint">{all.length===0 ? "Nenhum lembrete por aqui ainda. Toque em “Novo lembrete”." : "Nenhum lembrete neste filtro."}</p>}
     </div>
+    <button type="button" className="remFab" onClick={openNew} aria-label="Novo lembrete"><Plus size={26}/></button>
+    {form && createPortal(<div className="remScreen" role="dialog" aria-modal="true">
+      <div className="remScreenHead">
+        <button type="button" className="remIconBtn" onClick={closeForm} aria-label="Voltar"><ArrowLeft size={20}/></button>
+        <h2>{form.id?"Editar lembrete":"Novo lembrete"}</h2>
+        <button type="button" className="remSaveTop" disabled={!valid||saving} onClick={save}>Salvar</button>
+      </div>
+      <div className="remScreenBody"><div className="remScreenInner">
+        <label className="remField"><span>Título</span>
+          <input value={form.title} onChange={e=>setF({title:e.target.value})} placeholder="Ex.: Pagar a fatura" autoFocus={!form.id} maxLength={120}/>
+        </label>
+        <label className="remField"><span>Descrição <em>(opcional)</em></span>
+          <textarea value={form.description} onChange={e=>setF({description:e.target.value})} rows={5} placeholder="Escreva aqui o que você precisa saber sobre este lembrete…"/>
+        </label>
+        <div className="remField"><span>Tipo</span>
+          <div className="remChips">
+            {["Financeiro","Outros"].map(k=><button type="button" key={k} className={"remChip"+(form.kind===k?" active":"")} onClick={()=>setF({kind:k})}>{k}</button>)}
+          </div>
+        </div>
+        <div className="remField"><span>Repetição</span>
+          <div className="remChips">
+            {REM_REPEATS.map(o=><button type="button" key={o.key} className={"remChip"+(form.repeat===o.key?" active":"")} onClick={()=>setF({repeat:o.key})}>{o.label}</button>)}
+          </div>
+        </div>
+        {form.repeat==="weekly" && <div className="remField"><span>Dias da semana</span>
+          <div className="remDays">
+            {WEEKDAY_LABELS.map((l,n)=><button type="button" key={n} className={form.weekdays.includes(n)?"active":""} onClick={()=>toggleWeekday(n)} aria-pressed={form.weekdays.includes(n)}>{l}</button>)}
+          </div>
+          <div className="remChips" style={{marginTop:10}}>
+            {REM_PRESETS.map(p=><button type="button" key={p.label} className={"remChip small"+(form.weekdays.join(",")===p.days.join(",")?" active":"")} onClick={()=>setF({weekdays:p.days})}>{p.label}</button>)}
+          </div>
+        </div>}
+        {(form.repeat==="none" || form.repeat==="year") && <label className="remField"><span>{form.repeat==="year"?"Data (repete todo ano)":"Data"}</span>
+          <input type="date" value={form.dateISO} onChange={e=>setF({dateISO:e.target.value})}/>
+        </label>}
+        {form.repeat==="monthly" && <label className="remField"><span>Dia do mês</span>
+          <input type="number" inputMode="numeric" min={1} max={31} value={form.monthDay} onChange={e=>setF({monthDay:e.target.value})}/>
+        </label>}
+        <div className="remField"><span>Hora <em>(opcional)</em></span>
+          <div className="remTimeRow">
+            <input type="time" value={form.time} onChange={e=>setF({time:e.target.value})}/>
+            {form.time && <button type="button" className="remChip small" onClick={()=>setF({time:""})}><X size={13}/> Sem horário</button>}
+          </div>
+          <small className="remHint">Você é avisado 1 dia antes{form.time?", 1 hora antes e na hora marcada.":" e no dia (às 9h)."}</small>
+        </div>
+        {valid && <div className="remSummary"><Bell size={15}/> {remFormSummary(form)}</div>}
+      </div></div>
+      <div className="remScreenFoot"><div className="remScreenInner">
+        <button type="button" className="remSaveBtn" disabled={!valid||saving} onClick={save}><Check size={18}/> {form.id?"Salvar alterações":"Adicionar lembrete"}</button>
+      </div></div>
+    </div>, document.body)}
   </div>
 }
 
@@ -3963,6 +4081,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const containerRef = useRef(null);
   const modalRef = useRef(null);
   const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
+  const [rotated, toggleRotate] = useScreenRotate(modalRef);
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
   // `book` e um snapshot congelado no momento em que o leitor abriu - nao
@@ -4796,6 +4915,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title="Esconder as barras — só o livro" onClick={toggleUiHidden}><EyeOff size={16}/> <span>Só o livro</span></button>
+            <button className={"rotateScreenBtn"+(rotated?" active":"")} title={rotated?"Voltar para vertical":"Girar a tela (horizontal)"} onClick={toggleRotate}><TabletSmartphone size={16}/></button>
             <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
         </div>
@@ -11313,9 +11433,21 @@ function WorkoutLoadModal({ item, history, onSave, onClose }) {
   );
 }
 
+// Duração do treino em partes ({ n, u }) pra exibir grande: 1h 12min · 47min 32s · 45s.
+function workoutDurationParts(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  if (h) return [{ n: h, u: "h" }, { n: pad(m), u: "min" }];
+  if (m) return [{ n: m, u: "min" }, { n: pad(sec), u: "s" }];
+  return [{ n: sec, u: "s" }];
+}
+const fmtClockBR = (ms) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
 // Tela "Treino concluído" / "Evolução do dia": compara a carga/repetições/tempo de hoje com a anterior.
-function WorkoutEvolutionScreen({ items, history, dateStr, title, finished, onClose }) {
+function WorkoutEvolutionScreen({ items, history, dateStr, title, finished, startedAt, endedAt, onClose }) {
   const rows = workoutEvolution(items, history, dateStr);
+  const elapsedMs = finished && startedAt && endedAt && endedAt > startedAt ? endedAt - startedAt : null;
   const ups = rows.filter(r => r.status === "up").length;
   const total = rows.length;
   const pct = total ? Math.round((ups / total) * 100) : 0;
@@ -11330,6 +11462,16 @@ function WorkoutEvolutionScreen({ items, history, dateStr, title, finished, onCl
         <button className="ghost" onClick={onClose} aria-label="Voltar"><ArrowLeft size={18}/></button>
         <h2>{finished ? "Treino concluído" : "Evolução do dia"}</h2>
       </div>
+      {elapsedMs != null && (
+        <div className="evoTime">
+          <span className="evoTimeIcon"><Timer size={24}/></span>
+          <div className="evoTimeBody">
+            <small>Tempo de treino</small>
+            <div className="evoTimeVal">{workoutDurationParts(elapsedMs).map(p => <React.Fragment key={p.u}><span className="evoTimeNum">{p.n}</span><span className="evoTimeUnit">{p.u}</span></React.Fragment>)}</div>
+            <em>Início {fmtClockBR(startedAt)} · Fim {fmtClockBR(endedAt)}</em>
+          </div>
+        </div>
+      )}
       <div className="evoHero">
         <div className="evoRing" style={{ "--p": `${pct}%` }}>
           <div className="evoRingIn">{finished ? <Trophy size={26}/> : <TrendingUp size={26}/>}</div>
@@ -11519,17 +11661,20 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
     }
   };
 
+  const startKey = `${sessionKey}@start`; // hora em que o treino começou (só neste aparelho, junto do progresso)
   const startWorkout = () => {
+    setSessions(all => (all && all[startKey] ? all : { ...(all || {}), [startKey]: Date.now() }));
     const first = selectedItems.find(i => !progress[i.id]?.done) || selectedItems[0];
     setPlayerOpenId(first ? first.id : null);
     setPlayerOpen(true);
   };
 
   const finishWorkout = () => {
+    const startedAt = sessions?.[startKey] || null, endedAt = Date.now();
     if (!doneToday) addCompletion({ id: crypto.randomUUID(), date: todayStr });
-    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
+    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; delete next[startKey]; return next; });
     setPlayerOpen(false);
-    setEvo({ items: selectedItems, title: WEEKDAY_FULL[selectedDay], finished: true });
+    setEvo({ items: selectedItems, title: WEEKDAY_FULL[selectedDay], finished: true, startedAt, endedAt });
   };
 
   const moveItem = (it, dir) => {
@@ -11546,7 +11691,7 @@ function WorkoutShelf({ itemsEntity, completionsEntity, notesEntity, foldersEnti
   };
 
   if (evo) {
-    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} onClose={() => setEvo(null)}/>;
+    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} startedAt={evo.startedAt} endedAt={evo.endedAt} onClose={() => setEvo(null)}/>;
   }
 
   if (view === "runs") {
@@ -11913,16 +12058,19 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
     next[sessionKey] = typeof updater === "function" ? updater(cur) : updater;
     return next;
   });
+  const startKey = `${sessionKey}@start`;
   const startWorkout = () => {
+    setSessions(all => (all && all[startKey] ? all : { ...(all || {}), [startKey]: Date.now() }));
     const first = list.find(i => !progress[i.id]?.done) || list[0];
     setPlayerOpenId(first ? first.id : null);
     setPlayerOpen(true);
   };
   const finishWorkout = () => {
+    const startedAt = sessions?.[startKey] || null, endedAt = Date.now();
     markDoneToday();
-    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; return next; });
+    setSessions(all => { const next = { ...(all || {}) }; delete next[sessionKey]; delete next[startKey]; return next; });
     setPlayerOpen(false);
-    setEvo({ items: list, title: folder?.name, finished: true });
+    setEvo({ items: list, title: folder?.name, finished: true, startedAt, endedAt });
   };
   const saveLoad = (it, patch) => { recordLoad(it, patch); updateItem(it.id, patch); };
 
@@ -11949,7 +12097,7 @@ function WorkoutLibrary({ foldersEntity, itemsEntity, notesEntity, session, sess
   };
 
   if (evo) {
-    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} onClose={() => setEvo(null)}/>;
+    return <WorkoutEvolutionScreen items={evo.items} history={loadHistory || {}} dateStr={todayStr} title={evo.title} finished={evo.finished} startedAt={evo.startedAt} endedAt={evo.endedAt} onClose={() => setEvo(null)}/>;
   }
 
   if (itemModal !== null && folder) {
@@ -17920,8 +18068,8 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     if (!file) return;
     setImporting(true);
     try {
-      const { title, html } = await importWordFile(file);
-      const inserted = await add({ title, content: html, preview: stripHtml(html).trim().slice(0, 200), page_size: "a4", orientation: "retrato", margins: "normal" });
+      const { title, html, page_size, orientation, margins } = await importWordFile(file);
+      const inserted = await add({ title, content: html, preview: stripHtml(html).replace(/\s+/g, " ").trim().slice(0, 200), page_size: page_size || "a4", orientation: orientation || "retrato", margins: margins || "normal" });
       if (inserted) setActiveDoc(inserted);
     } catch (err) {
       alert("Não foi possível importar: " + (err?.message || err));
@@ -17965,6 +18113,20 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     onConsumeOpenDoc?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDocId, data]);
+
+  // Ao entrar na aba Word, abre direto o documento editado por último, em tela cheia (como o quadro
+  // infinito), sem parar na lista. Só acontece uma vez por visita; ao fechar o editor a lista aparece.
+  // Link direto (/word/id) tem prioridade. Sem documentos, mostra a lista normalmente.
+  const autoOpenDone = useRef(false);
+  useEffect(() => {
+    if (autoOpenDone.current) return;
+    if (activeDoc || openDocId) { autoOpenDone.current = true; return; }
+    if (!data.length) return;
+    autoOpenDone.current = true;
+    const ts = d => new Date(d.updated_at || d.created_at || 0).getTime() || 0;
+    openDoc([...data].sort((x, y) => ts(y) - ts(x))[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, activeDoc, openDocId]);
 
   const createDoc = async () => {
     setCreating(true);

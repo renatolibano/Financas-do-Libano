@@ -1781,7 +1781,7 @@ export async function importWordFile(file) {
     case "tex": case "latex": case "ltx": { const r = latexToFlow(decodeText(buf)); return finish(r.flow, r.title || base); }
     case "odt": { const r = await odtToFlow(buf); return finish(r.flow, r.title || base); }
     case "docx": { const r = await docxToFlow(buf); return finish(r.flow, base); }
-    case "pdf": { const { pdfFileToNote } = await import("./pdfToNote"); const r = await pdfFileToNote(file); return { title: r.title || base, html: r.content }; }
+    case "pdf": { const { pdfFileToWordHtml } = await import("./pdfToWord"); const r = await pdfFileToWordHtml(file); return { ...r, title: r.title || base }; }
     default: throw new Error("Formato não suportado. Use .docx, .odt, .rtf, .html, .md, .txt, .tex ou .pdf.");
   }
 }

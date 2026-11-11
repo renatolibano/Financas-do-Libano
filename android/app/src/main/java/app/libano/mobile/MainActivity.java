@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(io.github.jofr.capacitor.mediasessionplugin.MediaSessionPlugin.class);
         registerPlugin(ApkInstallerPlugin.class);
         registerPlugin(BackgroundPlugin.class);
+        registerPlugin(OrientationPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
