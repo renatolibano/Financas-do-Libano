@@ -156,7 +156,7 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
     for (const r of reminders || []) {
       const bday = r.kind === "Aniversário";
       if (!(bday ? birthdaysEnabled : enabled)) continue;
-      const tm = /^(\d{1,2}):(\d{2})$/.exec(bday ? "" : String(r.time || ""));
+      const times = bday ? [] : parseTimes(r.time);
       const label = bday ? "Aniversário" : "Lembrete · " + (r.kind || "Geral");
       const dsc = bday ? "" : String(r.description || "").trim().slice(0, 160);
       const withDsc = (b) => (dsc ? b + "\n" + dsc : b);
@@ -164,7 +164,7 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
       for (const o of reminderDates(r)) {
         // 1 dia antes
         if (o.k !== "d") {
-          const eveBody = "Amanhã · " + label + (tm ? " · " + r.time : "");
+          const eveBody = "Amanhã · " + label + (times.length ? " · " + times.join(", ") : "");
           const eve = dayBefore(o);
           if (eve) add(eve, "e", EVE_HOUR, 0, eveBody);
           else { // mensal no dia 1: o dia anterior é o último dia do mês (varia), então agenda a próxima ocorrência
@@ -175,17 +175,28 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
           }
         }
         // no próprio dia
-        if (tm) {
-          const hour = Number(tm[1]), minute = Number(tm[2]);
-          add(o, "s", hour, minute, `${label} · ${r.time}`);
-          // 1h antes
-          if (hour >= 1) add(o, "h", hour - 1, minute, `Em 1 hora · ${label} · ${r.time}`);
-          else { const prev = dayBefore(o); if (prev) add(prev, "h", 23, minute, `Em 1 hora · ${label} · ${r.time}`); }
+        if (times.length) {
+          times.forEach((hm, i) => {
+            const [hh, mm] = hm.split(":").map(Number);
+            add(o, "s" + i, hh, mm, `${label} · ${hm}`);
+            // 1h antes
+            if (hh >= 1) add(o, "h" + i, hh - 1, mm, `Em 1 hora · ${label} · ${hm}`);
+            else { const prev = dayBefore(o); if (prev) add(prev, "h" + i, 23, mm, `Em 1 hora · ${label} · ${hm}`); }
+          });
         } else add(o, "s", MORNING_HOUR, 0, bday ? "Aniversário hoje" : "Hoje · " + label);
       }
     }
     if (out.length) { await ln.schedule({ notifications: out }); allowBackgroundOnce(); }
   } catch (err) { console.log("[lembretes] não foi possível agendar no Android", err); }
+}
+
+function parseTimes(v) {
+  const out = [];
+  String(v || "").split(/[,;\s]+/).forEach((t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+    if (m && +m[1] < 24 && +m[2] < 60) { const hm = String(m[1]).padStart(2, "0") + ":" + m[2]; if (!out.includes(hm)) out.push(hm); }
+  });
+  return out.sort();
 }
 
 // ---------- Atualização do app (APK publicado no GitHub Releases) ----------

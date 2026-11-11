@@ -3,6 +3,16 @@ import { Flag, PartyPopper, Bell, Cake, Repeat2, Target } from "lucide-react";
 export const WEEKDAY_LABELS = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
 export const MONTH_LABELS = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 export const pad2 = n => String(n).padStart(2,"0");
+// Horários de um lembrete: guardados como "08:00,12:00,20:00" (um só horário continua "08:00").
+export function parseTimes(v){
+  const out=[];
+  String(v||"").split(/[,;\s]+/).forEach(t=>{
+    const m=/^(\d{1,2}):(\d{2})$/.exec(t);
+    if(m && +m[1]<24 && +m[2]<60){ const hm=pad2(m[1])+":"+m[2]; if(!out.includes(hm)) out.push(hm); }
+  });
+  return out.sort();
+}
+export const timesLabel = v => parseTimes(v).join(", ");
 
 // dd/mm ou dd/mm/aaaa -> Date. Sem ano informado, usa o ano atual (ou o próximo, se a data já passou este ano).
 export function parseReminderDate(dateStr){
@@ -179,7 +189,7 @@ export function getDayEvents(year, month, day, {specialDays, reminders, calendar
   reminders.forEach(r=>{
     if(reminderOccursOn(r, year, month, day)){
       const isBday = r.kind==="Aniversário";
-      items.push({id:"rem-"+r.id, title:r.title, subtitle:isBday?"Aniversário":((r.kind||"Lembrete")+(r.time?" · "+r.time:"")), type:isBday?"birthday":"reminder"});
+      items.push({id:"rem-"+r.id, title:r.title, subtitle:isBday?"Aniversário":((r.kind||"Lembrete")+(r.time?" · "+timesLabel(r.time):"")), type:isBday?"birthday":"reminder"});
     }
   });
   calendarEvents.forEach(e=>{

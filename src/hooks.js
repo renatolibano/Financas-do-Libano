@@ -12,13 +12,16 @@ import { isNative, setNativeOrientation } from "./lib/native";
 // Fullscreen API sozinha, que exige gesto do usuário) — é o mesmo efeito visual do quadro infinito.
 export function useFullscreen(ref, { native = true, startOpen = false } = {}) {
   const [fullscreen, setFullscreen] = useState(startOpen);
+  // nativeFs = tela cheia REAL do navegador (esconde abas/barra). Com startOpen, `fullscreen` (a classe CSS que ocupa
+  // a janela toda) nunca é derrubado por eventos de tela cheia do navegador — só a tela cheia real liga/desliga.
+  const [nativeFs, setNativeFs] = useState(false);
 
   useEffect(() => {
     if (!native) return;
-    const handler = () => setFullscreen(!!document.fullscreenElement);
+    const handler = () => { const on = !!document.fullscreenElement; setNativeFs(on); setFullscreen(on || startOpen); };
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
-  }, [native]);
+  }, [native, startOpen]);
 
   const toggleFullscreen = async () => {
     if (!native) { setFullscreen(f => !f); return; }
@@ -35,7 +38,7 @@ export function useFullscreen(ref, { native = true, startOpen = false } = {}) {
 
   useEffect(() => () => { if (native && document.fullscreenElement === ref.current) document.exitFullscreen?.().catch(()=>{}); }, [native]);
 
-  return [fullscreen, toggleFullscreen];
+  return [fullscreen, toggleFullscreen, nativeFs];
 }
 
 // Botão de girar a tela (celular): alterna entre horizontal travado e o comportamento normal.

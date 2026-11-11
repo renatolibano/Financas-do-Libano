@@ -85,6 +85,7 @@ import {
   daysUntilISO, urgencyClass, computeSpecialDays, reminderMatchesDay, studyGoalMatchesDay,
   calendarEventMatchesDate, formatWeekdaysLabel, reminderDaysUntil, recurrenceLabel, CAL_TYPE_META, getDayEvents, buildMonthGrid,
   sortByProximity,
+  parseTimes, timesLabel,
 } from "./lib/calendar";
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
@@ -1006,8 +1007,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         if(notifSettings.kinds[bday?"Aniversário":"Lembrete"]===false) return;
         const days = reminderDaysUntil(r);
         if(days===null) return;
-        const tm = bday ? null : /^(\d{1,2}):(\d{2})$/.exec(String(r.time||""));
-        const time = tm ? pad2(tm[1])+":"+tm[2] : null;
+        const times = bday ? [] : parseTimes(r.time);
         const label = bday ? "Aniversário" : "Lembrete · "+(r.kind||"Geral");
         const fire = (key, body)=>{
           if(fired.includes(r.id+key)) return;
@@ -1016,10 +1016,14 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
           fired.push(r.id+key);
           try{ localStorage.setItem(storageKey, JSON.stringify(fired)); }catch(e){}
         };
-        if(r.recurrence!=="daily" && days===1 && nowHM>="18:00") fire(":e", "Amanhã · "+label+(time?" · "+time:""));
+        if(r.recurrence!=="daily" && days===1 && nowHM>="18:00") fire(":e", "Amanhã · "+label+(times.length?" · "+times.join(", "):""));
         if(days!==0) return;
-        if(time && Number(tm[1])>=1 && nowHM>=pad2(Number(tm[1])-1)+":"+tm[2] && nowHM<time) fire(":h", "Em 1 hora · "+label+" · "+time);
-        if(nowHM>=(time||"09:00")) fire(":s", time ? label+" · "+time : (bday ? "Aniversário hoje" : "Hoje · "+label));
+        if(!times.length){ if(nowHM>="09:00") fire(":s", bday ? "Aniversário hoje" : "Hoje · "+label); return; }
+        times.forEach(time=>{
+          const h = Number(time.slice(0,2));
+          if(h>=1 && nowHM>=pad2(h-1)+time.slice(2) && nowHM<time) fire(":h"+time, "Em 1 hora · "+label+" · "+time);
+          if(nowHM>=time) fire(":s"+time, label+" · "+time);
+        });
       });
     };
     check();
@@ -1813,7 +1817,7 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
           key={r.id}
           icon={notifIcon(r.kind, 18)}
           title={r.title}
-          subtitle={(r.kind||"Geral")+" · "+(r.recurrence?recurrenceLabel(r):r.date)+(r.time?" às "+r.time:"")}
+          subtitle={(r.kind||"Geral")+" · "+(r.recurrence?recurrenceLabel(r):r.date)+(r.time?" às "+timesLabel(r.time):"")}
           days={reminderDaysUntil(r)}
         />)}
         {reminders.length===0 && <p className="emptyHint">Nenhum lembrete por aqui ainda.</p>}
@@ -2077,9 +2081,9 @@ const REM_REPEATS = [
 ];
 const remTodayISO = ()=>{ const d=new Date(); return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); };
 const remISOToBR = (iso, withYear)=>{ const [y,m,d]=String(iso||"").split("-"); return withYear ? d+"/"+m+"/"+y : d+"/"+m; };
-const remBlankForm = ()=>({id:null, title:"", description:"", kind:"Financeiro", repeat:"none", dateISO:remTodayISO(), monthDay:String(new Date().getDate()), weekdays:[], time:"", hadDescription:false});
+const remBlankForm = ()=>({id:null, title:"", description:"", kind:"Financeiro", repeat:"none", dateISO:remTodayISO(), monthDay:String(new Date().getDate()), weekdays:[], times:[], hadDescription:false});
 function remToForm(r){
-  const base = {...remBlankForm(), id:r.id, title:r.title||"", description:r.description||"", kind:r.kind||"Financeiro", time:r.time||"", hadDescription:r.description!==undefined && r.description!==null};
+  const base = {...remBlankForm(), id:r.id, title:r.title||"", description:r.description||"", kind:r.kind||"Financeiro", times:parseTimes(r.time), hadDescription:r.description!==undefined && r.description!==null};
   if(r.recurrence==="daily") return {...base, repeat:"daily"};
   if(r.recurrence==="weekly") return {...base, repeat:"weekly", weekdays:String(r.weekdays||"").split(",").filter(Boolean).map(Number).filter(n=>n>=0&&n<=6)};
   if(r.recurrence==="monthly") return {...base, repeat:"monthly", monthDay:String(parseInt(String(r.date||"").split("/")[0],10)||new Date().getDate())};
@@ -2089,7 +2093,7 @@ function remToForm(r){
 }
 function remFormToPayload(f){
   const p = {
-    title:f.title.trim(), kind:f.kind, time:f.time||null,
+    title:f.title.trim(), kind:f.kind, time:remCleanTimes(f.times).join(",")||null,
     recurrence:["daily","weekly","monthly"].includes(f.repeat)?f.repeat:null,
     weekdays:f.repeat==="weekly"?f.weekdays.join(","):null,
     date:f.repeat==="none"?remISOToBR(f.dateISO,true):f.repeat==="year"?remISOToBR(f.dateISO,false):f.repeat==="monthly"?String(parseInt(f.monthDay,10)):null,
@@ -2098,6 +2102,7 @@ function remFormToPayload(f){
   if(desc || f.hadDescription) p.description = desc || null;
   return p;
 }
+const remCleanTimes = (arr)=>parseTimes((arr||[]).join(","));
 function remFormValid(f){
   if(!f.title.trim()) return false;
   if(f.repeat==="weekly") return f.weekdays.length>0;
@@ -2109,7 +2114,7 @@ function remFormSummary(f){
   if(!remFormValid(f)) return "";
   const p = remFormToPayload(f);
   const when = p.recurrence ? recurrenceLabel(p) : (f.repeat==="year" ? "Todo ano em "+p.date : p.date);
-  return when + (p.time ? " às "+p.time : "");
+  return when + (p.time ? " às "+timesLabel(p.time) : "");
 }
 
 function CommonReminders({entity}){
@@ -2123,7 +2128,14 @@ function CommonReminders({entity}){
   const filtered = sortByProximity(all.filter(x=>filter==="all" ? true : filter==="rec" ? !!x.recurrence : x.kind===filter));
   const setF = (patch)=>setForm(f=>({...f,...patch}));
   const closeForm = ()=>{ setForm(null); setSaving(false); };
-  const toggleWeekday=(n)=>setForm(f=>({...f, weekdays:f.weekdays.includes(n)?f.weekdays.filter(x=>x!==n):[...f.weekdays,n].sort((a,b)=>a-b)}));
+  const ALL_DAYS=[0,1,2,3,4,5,6];
+  const effDays=(f)=>f.repeat==="daily"?ALL_DAYS:(f.repeat==="weekly"?f.weekdays:[]);
+  const setDays=(days)=>setForm(f=>({...f, weekdays:days, repeat:days.length===7?"daily":"weekly"}));
+  const toggleWeekday=(n)=>setForm(f=>{ const cur=effDays(f); const next=cur.includes(n)?cur.filter(x=>x!==n):[...cur,n].sort((a,b)=>a-b); return {...f, weekdays:next, repeat:next.length===7?"daily":"weekly"}; });
+  const setTimeAt=(i,v)=>setForm(f=>({...f, times:f.times.map((t,j)=>j===i?v:t)}));
+  const removeTime=(i)=>setForm(f=>({...f, times:f.times.filter((_,j)=>j!==i)}));
+  const addTime=()=>setForm(f=>{ const last=remCleanTimes(f.times).slice(-1)[0]; const next=last?pad2(Math.min(23,Number(last.slice(0,2))+1))+last.slice(2):"08:00"; return {...f, times:[...f.times, next]}; });
+  const genEvery=(h)=>setForm(f=>{ const first=remCleanTimes(f.times)[0]||"08:00"; const m=first.slice(2); const out=[]; for(let hh=Number(first.slice(0,2)); hh<=22 && out.length<12; hh+=h) out.push(pad2(hh)+m); return {...f, times:out}; });
   const valid = !!form && remFormValid(form);
   useEffect(()=>{
     if(!form) return;
@@ -2157,7 +2169,7 @@ function CommonReminders({entity}){
         key={x.id}
         icon={<Bell size={18}/>}
         title={x.title}
-        subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):(String(x.date||"").split("/").length===2?"Todo ano · ":"")+x.date)+(x.time?" às "+x.time:"")}
+        subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):(String(x.date||"").split("/").length===2?"Todo ano · ":"")+x.date)+(x.time?" às "+timesLabel(x.time):"")}
         days={reminderDaysUntil(x)}
         onClick={()=>openEdit(x)}
         menuOpen={openMenuId===x.id}
@@ -2193,29 +2205,39 @@ function CommonReminders({entity}){
         </div>
         <div className="remField"><span>Repetição</span>
           <div className="remChips">
-            {REM_REPEATS.map(o=><button type="button" key={o.key} className={"remChip"+(form.repeat===o.key?" active":"")} onClick={()=>setF({repeat:o.key})}>{o.label}</button>)}
+            {REM_REPEATS.map(o=><button type="button" key={o.key} className={"remChip"+(form.repeat===o.key?" active":"")} onClick={()=>setF(o.key==="daily"?{repeat:"daily",weekdays:ALL_DAYS}:{repeat:o.key})}>{o.label}</button>)}
           </div>
         </div>
-        {form.repeat==="weekly" && <div className="remField"><span>Dias da semana</span>
+        <div className="remField"><span>Dias da semana</span>
           <div className="remDays">
-            {WEEKDAY_LABELS.map((l,n)=><button type="button" key={n} className={form.weekdays.includes(n)?"active":""} onClick={()=>toggleWeekday(n)} aria-pressed={form.weekdays.includes(n)}>{l}</button>)}
+            {WEEKDAY_LABELS.map((l,n)=>{ const on=effDays(form).includes(n); return <button type="button" key={n} className={(on?"active":"")+(n===0?" sun":"")} onClick={()=>toggleWeekday(n)} aria-pressed={on} aria-label={["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"][n]}>{["D","S","T","Q","Q","S","S"][n]}</button>; })}
           </div>
           <div className="remChips" style={{marginTop:10}}>
-            {REM_PRESETS.map(p=><button type="button" key={p.label} className={"remChip small"+(form.weekdays.join(",")===p.days.join(",")?" active":"")} onClick={()=>setF({weekdays:p.days})}>{p.label}</button>)}
+            {REM_PRESETS.map(p=><button type="button" key={p.label} className={"remChip small"+(effDays(form).join(",")===p.days.join(",")?" active":"")} onClick={()=>setDays(p.days)}>{p.label}</button>)}
           </div>
-        </div>}
+        </div>
         {(form.repeat==="none" || form.repeat==="year") && <label className="remField"><span>{form.repeat==="year"?"Data (repete todo ano)":"Data"}</span>
           <input type="date" value={form.dateISO} onChange={e=>setF({dateISO:e.target.value})}/>
         </label>}
         {form.repeat==="monthly" && <label className="remField"><span>Dia do mês</span>
           <input type="number" inputMode="numeric" min={1} max={31} value={form.monthDay} onChange={e=>setF({monthDay:e.target.value})}/>
         </label>}
-        <div className="remField"><span>Hora <em>(opcional)</em></span>
-          <div className="remTimeRow">
-            <input type="time" value={form.time} onChange={e=>setF({time:e.target.value})}/>
-            {form.time && <button type="button" className="remChip small" onClick={()=>setF({time:""})}><X size={13}/> Sem horário</button>}
+        <div className="remField"><span>Horários <em>(opcional)</em></span>
+          <div className="remTimes">
+            {form.times.map((t,i)=><div className="remTimeRow" key={i}>
+              <input type="time" value={t} onChange={e=>setTimeAt(i,e.target.value)}/>
+              <button type="button" className="remIconBtn" onClick={()=>removeTime(i)} aria-label="Remover horário"><X size={16}/></button>
+            </div>)}
           </div>
-          <small className="remHint">Você é avisado 1 dia antes{form.time?", 1 hora antes e na hora marcada.":" e no dia (às 9h)."}</small>
+          <div className="remChips">
+            {form.times.length<12 && <button type="button" className="remChip small" onClick={addTime}><Plus size={13}/> {form.times.length?"Adicionar outro horário":"Adicionar horário"}</button>}
+          </div>
+          <small className="remHint">Repetir a cada (até 22:00):</small>
+          <div className="remChips">
+            {[2,3,4,6].map(h=><button type="button" key={h} className="remChip small" onClick={()=>genEvery(h)}>{h}h</button>)}
+            {form.times.length>0 && <button type="button" className="remChip small" onClick={()=>setF({times:[]})}><X size={13}/> Sem horário</button>}
+          </div>
+          <small className="remHint">Você é avisado 1 dia antes{form.times.length?", 1 hora antes de cada horário e na hora marcada.":" e no dia (às 9h)."}</small>
         </div>
         {valid && <div className="remSummary"><Bell size={15}/> {remFormSummary(form)}</div>}
       </div></div>
@@ -2411,7 +2433,7 @@ function CalendarSearchModal({reminders, calendarEvents, studyGoals, onJump, onC
       });
     });
     reminders.filter(r=>r.recurrence && r.title.toLowerCase().includes(query)).forEach(r=>{
-      out.push({id:"rem-"+r.id, title:r.title, subtitle:"Recorrente · "+recurrenceLabel(r)+(r.time?" · "+r.time:""), recurring:true});
+      out.push({id:"rem-"+r.id, title:r.title, subtitle:"Recorrente · "+recurrenceLabel(r)+(r.time?" · "+timesLabel(r.time):""), recurring:true});
     });
     reminders.filter(r=>!r.recurrence && r.title.toLowerCase().includes(query)).forEach(r=>{
       const parts = String(r.date||"").split("/").map(p=>parseInt(p,10));
@@ -4089,7 +4111,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const pinchAnchorRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
+  const [fullscreen, toggleFullscreen, nativeFs] = useFullscreen(modalRef, { startOpen: true });
   const [rotated, toggleRotate] = useScreenRotate(modalRef);
   const notesBodyRef = useRef(null);
   const notesSaveTimer = useRef(null);
@@ -4925,7 +4947,7 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
             <button title="Esconder as barras — só o livro" onClick={toggleUiHidden}><EyeOff size={16}/> <span>Só o livro</span></button>
             <button className={"rotateScreenBtn"+(rotated?" active":"")} title={rotated?"Voltar para vertical":"Girar a tela (horizontal)"} onClick={toggleRotate}><TabletSmartphone size={16}/></button>
-            <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+            <button title={nativeFs?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{nativeFs?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
         </div>
 
@@ -6446,7 +6468,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const modalRef = useRef(null);
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef, { startOpen: true });
+  const [fullscreen, toggleFullscreen, nativeFs] = useFullscreen(modalRef, { startOpen: true });
   const textLayerRef = useRef(null);
   const pageWrapRef = useRef(null);
   const notesBodyRef = useRef(null);
@@ -7713,7 +7735,7 @@ function StudyPdfReader({ pdfDoc, tempFile, onClose, onProgress, onNotesChange, 
             <button title={isFav?"Remover dos favoritos":"Favoritar esta página"} className={isFav?"active":""} onClick={toggleFavorite}><Star size={16} fill={isFav?"currentColor":"none"}/></button>
             <button title={isImp?"Desmarcar como importante":"Marcar página como importante"} className={isImp?"active":""} onClick={toggleImportant}><Flag size={16} fill={isImp?"currentColor":"none"}/></button>
             <button title={nightMode?"Desativar modo escuro do leitor":"Modo escuro do leitor"} className={nightMode?"active":""} onClick={()=>setNightMode(n=>!n)}>{nightMode?<Sun size={16}/>:<Moon size={16}/>}</button>
-            <button title={fullscreen?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
+            <button title={nativeFs?"Sair da tela cheia":"Tela cheia"} onClick={toggleFullscreen}>{nativeFs?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
           </div>
           {pastePulse && (
             <p className="pdfPasteHint flash">Imagem colada!</p>
@@ -20849,7 +20871,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const historyTimer = useRef(null);
   const HISTORY_LIMIT = 100;
   const HISTORY_DEBOUNCE_MS = 500;
-  const [fullscreen, toggleFullscreen] = useFullscreen(modalRef);
+  const [fullscreen, toggleFullscreen, nativeFs] = useFullscreen(modalRef, { startOpen: true });
 
   // Tooltip estilo Word: nome da ferramenta + mini descrição, aparecendo com
   // um pequeno atraso ao passar o mouse (igual ao comportamento do Word de verdade).
@@ -22237,16 +22259,53 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const openFileMenu = (section = "info") => { setFileMenuSection(section); setFileMenuOpen(true); };
 
   const fileMenuNew = () => { flushSave(); onNew?.(); closeFileMenu(); };
-  // "Abrir": seletor de arquivos do computador (.docx, .odt, .rtf, .html, .md, .txt, .tex) — importa e abre como novo documento.
+  // "Abrir": seletor de arquivos do computador (.docx, .odt, .rtf, .html, .md, .txt, .tex, .pdf) — o conteúdo entra no FIM do documento aberto.
   const openFileInputRef = useRef(null);
   const fileMenuOpenFile = () => openFileInputRef.current?.click();
+  // PDF aberto dentro de um documento: entra no FIM do mesmo documento, como novas páginas (em vez de abrir outro documento).
+  const [appendingPdf, setAppendingPdf] = useState(false);
+  const appendImportedFile = async (file) => {
+    setAppendingPdf(true);
+    try {
+      const imp = await importWordFile(file);
+      const el = bodyRef.current;
+      if (!el) return;
+      const frag = document.createRange().createContextualFragment(imp.html);
+      const firstNew = frag.firstElementChild;
+      const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+      const hasContent = !!el.querySelector(".pdf-import-page, img, table") || stripHtml(el.innerHTML).replace(/\s+/g, "").length > 0;
+      if (!hasContent) {
+        // documento em branco: o PDF vira o conteúdo e o documento assume o tamanho de página dele
+        Array.from(el.children).forEach(c => { if (!c.classList.contains("word-page-meta")) c.remove(); });
+        if (imp.page_size) setPageSize(imp.page_size);
+        if (imp.orientation) setOrientation(imp.orientation);
+        if (imp.margins) setMargins(imp.margins);
+        if (imp.title && (!title.trim() || title.trim() === "Documento sem título")) setTitle(imp.title);
+      } else if (!(isPdf && el.querySelector(":scope > .pdf-import-page"))) {
+        // já tem conteúdo (que não é só PDF): o arquivo novo começa numa página nova
+        const brk = document.createElement("div");
+        brk.className = "word-page-break";
+        brk.setAttribute("contenteditable", "false");
+        brk.innerHTML = "<span>Quebra de página</span>";
+        el.appendChild(brk);
+      }
+      el.appendChild(frag);
+      handleBodyInput();
+      flushSave();
+      firstNew?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    } catch (err) {
+      alert("Não foi possível inserir o arquivo: " + (err?.message || err));
+    } finally {
+      setAppendingPdf(false);
+    }
+  };
   const handleOpenFilePicked = (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     flushSave();
     closeFileMenu();
-    onOpenFile?.(file);
+    appendImportedFile(file); // qualquer formato entra neste mesmo documento, nunca cria outro
   };
   const fileMenuSave = () => { flushSave(); setJustSaved(true); clearTimeout(saveTimer.current); setTimeout(() => setJustSaved(false), 1800); };
   const fileMenuSaveAs = () => {
@@ -23351,7 +23410,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               )}
             </div>
             <button data-tip="Imprimir" data-tipdesc="Imprimir este documento ou salvá-lo como PDF pela caixa de impressão do navegador." onClick={() => window.print()}><Printer size={16}/></button>
-            <button data-tip={fullscreen ? "Sair da tela cheia" : "Tela cheia"} data-tipdesc={fullscreen ? "Retorna o editor ao tamanho normal da janela." : "Expande o editor para ocupar toda a tela, sem distrações."} onClick={toggleFullscreen}>{fullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
+            <button data-tip={nativeFs ? "Sair da tela cheia" : "Tela cheia"} data-tipdesc={nativeFs ? "Sai da tela cheia do navegador." : "Esconde as abas e a barra do navegador para ocupar o monitor todo."} onClick={toggleFullscreen}>{nativeFs ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
             <button onClick={handleClose}><X/></button>
           </div>
         </div>
@@ -23382,6 +23441,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           </>)}
         </div>
 
+        {appendingPdf && <div className="wordToast">Inserindo arquivo no documento…</div>}
         {fileMenuOpen && (
           <div className="wordBackstage">
             <div className="wordBackstageNav">
