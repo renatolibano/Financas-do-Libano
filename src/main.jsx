@@ -52,6 +52,8 @@ import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
 import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
+// Tipos aceitos ao importar notas (extensões + tipos MIME, para o seletor de arquivos do Android também mostrá-los).
+const NOTE_IMPORT_ACCEPT = ".pdf,.txt,.md,.markdown,.docx,.odt,.rtf,.html,.htm,.tex,application/pdf,text/plain,text/markdown,text/html,application/rtf,text/rtf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/x-tex";
 import { findExcerptRanges, excerptLineRects } from "./lib/excerptHighlight";
 import { runNoteAi } from "./lib/noteAi";
 import { AudiobookHost } from "./Audiobooks";
@@ -1032,6 +1034,20 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     const interval = setInterval(check, 20000);
     return ()=>clearInterval(interval);
   },[reminders.data,notifSettings]);
+
+  // Lembretes únicos (data dd/mm/aaaa, sem repetição) somem sozinhos assim que o dia marcado termina.
+  const expiredTried = useRef(new Set());
+  useEffect(()=>{
+    if(reminders.loading) return;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const expired = reminders.data.filter(r=>{
+      if(r.kind==="Aniversário" || r.recurrence) return false;
+      const p = String(r.date||"").split("/").map(n=>parseInt(n,10));
+      if(p.length!==3 || !(p[0]>=1) || !(p[1]>=1) || !(p[2]>=2000)) return false;
+      return new Date(p[2], p[1]-1, p[0]) < today && !expiredTried.current.has(r.id);
+    });
+    expired.forEach(r=>{ expiredTried.current.add(r.id); reminders.remove(r.id); });
+  },[reminders.data,reminders.loading]);
 
   // App Android: agenda no sistema os lembretes (1 dia antes, no dia e 1h antes) para tocarem com o app fechado.
   useEffect(()=>{
@@ -2075,7 +2091,7 @@ const REM_PRESETS = [
   {label:"Fim de semana", days:[0,6]},
 ];
 const REM_REPEATS = [
-  {key:"none", label:"Não repete"},
+  {key:"none", label:"Único"},
   {key:"year", label:"Todo ano"},
   {key:"monthly", label:"Todo mês"},
   {key:"weekly", label:"Dias da semana"},
@@ -2126,6 +2142,8 @@ function CommonReminders({entity}){
   const [saving,setSaving]=useState(false);
   const [openMenuId,setOpenMenuId]=useState(null);
   const [openDescId,setOpenDescId]=useState(null);
+  const [delTarget,setDelTarget]=useState(null);
+  const confirmDelete = async ()=>{ const t=delTarget; setDelTarget(null); if(t) await remove(t.id); };
   const all = data.filter(x=>x.kind!=="Aniversário");
   const filtered = sortByProximity(all.filter(x=>filter==="all" ? true : filter==="rec" ? !!x.recurrence : x.kind===filter));
   const setF = (patch)=>setForm(f=>({...f,...patch}));
@@ -2174,12 +2192,13 @@ function CommonReminders({entity}){
         subtitle={x.kind+" · "+(x.recurrence?recurrenceLabel(x):(String(x.date||"").split("/").length===2?"Todo ano · ":"")+x.date)+(x.time?" às "+timesLabel(x.time):"")}
         days={reminderDaysUntil(x)}
         onClick={()=>openEdit(x)}
+        onLongPress={()=>{ setOpenMenuId(null); setDelTarget(x); }}
         menuOpen={openMenuId===x.id}
         onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
         menuContent={<>
           <button onClick={()=>openEdit(x)}><Pencil size={13}/> Editar</button>
           <button onClick={()=>duplicate(x)}><Copy size={13}/> Duplicar</button>
-          <button className="danger" onClick={()=>{setOpenMenuId(null);remove(x.id);}}><Trash2 size={13}/> Excluir</button>
+          <button className="danger" onClick={()=>{setOpenMenuId(null);setDelTarget(x);}}><Trash2 size={13}/> Excluir</button>
         </>}
       >
         {x.description && <p className={"remDesc"+(openDescId===x.id?" open":"")} onClick={(e)=>{e.stopPropagation();setOpenDescId(id=>id===x.id?null:x.id);}}>{x.description}</p>}
@@ -2187,6 +2206,16 @@ function CommonReminders({entity}){
       {filtered.length===0 && <p className="emptyHint">{all.length===0 ? "Nenhum lembrete por aqui ainda. Toque em “Novo lembrete”." : "Nenhum lembrete neste filtro."}</p>}
     </div>
     <button type="button" className="remFab" onClick={openNew} aria-label="Novo lembrete"><Plus size={26}/></button>
+    {delTarget && createPortal(<div className="remConfirmBack" role="dialog" aria-modal="true" onClick={()=>setDelTarget(null)}>
+      <div className="remConfirm" onClick={e=>e.stopPropagation()}>
+        <h3>Apagar este lembrete?</h3>
+        <p><b>{delTarget.title}</b></p>
+        <div className="remConfirmBtns">
+          <button type="button" onClick={()=>setDelTarget(null)}>Cancelar</button>
+          <button type="button" className="danger" onClick={confirmDelete}><Trash2 size={15}/> Apagar</button>
+        </div>
+      </div>
+    </div>, document.body)}
     {form && createPortal(<div className="remScreen" role="dialog" aria-modal="true">
       <div className="remScreenHead">
         <button type="button" className="remIconBtn" onClick={closeForm} aria-label="Voltar"><ArrowLeft size={20}/></button>
@@ -2220,6 +2249,7 @@ function CommonReminders({entity}){
         </div>
         {(form.repeat==="none" || form.repeat==="year") && <label className="remField"><span>{form.repeat==="year"?"Data (repete todo ano)":"Data"}</span>
           <input type="date" value={form.dateISO} onChange={e=>setF({dateISO:e.target.value})}/>
+          {form.repeat==="none" && <small className="remHint">Lembrete único: é apagado sozinho quando o dia marcado terminar.</small>}
         </label>}
         {form.repeat==="monthly" && <label className="remField"><span>Dia do mês</span>
           <input type="number" inputMode="numeric" min={1} max={31} value={form.monthDay} onChange={e=>setF({monthDay:e.target.value})}/>
@@ -3805,6 +3835,32 @@ function useNoteFormatting(bodyRef, onChange) {
       left: Math.min(Math.max(rect.left + rect.width / 2 - 34, 8), window.innerWidth - 76),
     });
   };
+
+  // Celular (toque): selecionar com o dedo não dispara mouseup/keyup, então a barra de seleção (formatar/IA/copiar)
+  // nunca abria. Acompanha a seleção do documento enquanto o dedo arrasta as alças (com um pequeno atraso).
+  const updateLinkBarRef = useRef(updateLinkBar);
+  updateLinkBarRef.current = updateLinkBar;
+  useEffect(() => {
+    if (!window.matchMedia?.("(pointer:coarse)").matches) return undefined;
+    let t = null;
+    const onSel = () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const body = bodyRef.current;
+        if (!body) return;
+        const ae = document.activeElement;
+        if (ae && ae !== body && !body.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return; // digitando no campo "Editar com IA"
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const inBody = body.contains(sel.anchorNode);
+        if (sel.isCollapsed && !inBody) return; // seleção em outro lugar: não mexe
+        updateLinkBarRef.current();
+      }, 180);
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => { clearTimeout(t); document.removeEventListener("selectionchange", onSel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Abre a caixinha flutuante onde se digita/cola o link. Se a seleção
   // já estiver dentro de um link existente, entra em modo de edição
@@ -17674,7 +17730,7 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     }
   };
 
-  // Converte PDFs em notas (texto extraído localmente, sem egress extra).
+  // Converte PDFs e documentos de texto (.txt, .md, .docx, .odt, .rtf, .html, .tex) em notas (tudo local, sem egress extra).
   const handleImportPdf = async (e) => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
@@ -17684,7 +17740,9 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
     try {
       for (const file of files) {
         try {
-          const { title, content } = await pdfFileToNote(file);
+          let title, content;
+          if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") ({ title, content } = await pdfFileToNote(file));
+          else { const r = await importWordFile(file); title = r.title; content = r.html; }
           await add({ title, content, preview: stripHtml(content).trim().slice(0, 200), tags: [] });
         } catch (err) {
           console.error(err);
@@ -17827,9 +17885,9 @@ function Notes({entity, openNoteId, onConsumeOpenNote, onOpenChange, closeSignal
           </div>
           {view==="notas" && (
             <>
-              <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={handleImportPdf}/>
-              <button className="ghost" disabled={importingPdf} onClick={() => pdfInputRef.current?.click()}>
-                <Upload size={15}/> {importingPdf ? "Importando..." : "Importar PDF"}
+              <input ref={pdfInputRef} type="file" accept={NOTE_IMPORT_ACCEPT} multiple hidden onChange={handleImportPdf}/>
+              <button className="ghost" disabled={importingPdf} onClick={() => pdfInputRef.current?.click()} title="Importar PDF, .txt, .md, .docx, .odt, .rtf, .html ou .tex">
+                <Upload size={15}/> {importingPdf ? "Importando..." : "Importar"}
               </button>
             </>
           )}

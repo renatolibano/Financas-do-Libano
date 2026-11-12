@@ -4,7 +4,7 @@ import {
   Shuffle, Repeat, Repeat1, ListMusic, FileText, Search, Link2, Sparkles, Loader2, Check, RefreshCw, ArrowDownToLine, ListPlus,
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
-import { hasMediaSession, getMediaSession, makeMediaMetadata } from "./lib/native";
+import { hasMediaSession, getMediaSession, makeMediaMetadata, setPlaybackKeepAlive } from "./lib/native";
 import { usePersistentState } from "./lib/storage";
 import { fmtClock, fmtHuman } from "./lib/audiobooks";
 import { runNoteAi } from "./lib/noteAi";
@@ -83,7 +83,7 @@ export function MusicHost({ page, tracksEntity, playlistsEntity, session }) {
   const [shuffle, setShuffle] = usePersistentState("musicShuffle", false);
   const [repeat, setRepeat] = usePersistentState("musicRepeat", "off"); // off | all | one
 
-  const playerRef = useRef(null), boxRef = useRef(null), readyRef = useRef(false), creatingRef = useRef(false);
+  const playerRef = useRef(null), boxRef = useRef(null), readyRef = useRef(false), creatingRef = useRef(false), wantPlayRef = useRef(false), bgTriesRef = useRef(0);
   const pendingRef = useRef(null), queueRef = useRef([]), baseRef = useRef([]), qIdxRef = useRef(-1);
   const shuffleRef = useRef(shuffle); shuffleRef.current = shuffle;
   const repeatRef = useRef(repeat); repeatRef.current = repeat;
@@ -193,9 +193,10 @@ export function MusicHost({ page, tracksEntity, playlistsEntity, session }) {
     const p = playerRef.current;
     if (!p || !readyRef.current) return;
     const st = p.getPlayerState?.();
-    if (st === 1 || st === 3) p.pauseVideo(); else { pauseOtherAudio(); p.playVideo(); }
+    if (st === 1 || st === 3) { wantPlayRef.current = false; p.pauseVideo(); } else { wantPlayRef.current = true; pauseOtherAudio(); p.playVideo(); }
   };
   const closePlayer = () => {
+    wantPlayRef.current = false;
     errTokenRef.current++;
     try { playerRef.current?.stopVideo?.(); } catch { /* ignora */ }
     pendingRef.current = null;
@@ -212,6 +213,7 @@ export function MusicHost({ page, tracksEntity, playlistsEntity, session }) {
     onState: (e) => {
       const p = playerRef.current;
       if (e.data === 1) {
+        wantPlayRef.current = true; bgTriesRef.current = 0;
         setPlaying(true); setErr("");
         const d = p?.getDuration?.() || 0;
         if (d > 0) {
@@ -220,7 +222,13 @@ export function MusicHost({ page, tracksEntity, playlistsEntity, session }) {
           if (t && !t.duration && !durFixedRef.current.has(t.id)) { durFixedRef.current.add(t.id); tracksEntity.update(t.id, { duration: Math.round(d) }); }
         }
         pauseOtherAudio();
-      } else if (e.data === 2) setPlaying(false);
+      } else if (e.data === 2) {
+        // Fora do app o Android/YouTube pode pausar sozinho: se o usuário não pausou, tenta retomar (até 3 vezes).
+        if (wantPlayRef.current && document.hidden && bgTriesRef.current < 3) {
+          bgTriesRef.current++;
+          setTimeout(() => { try { if (wantPlayRef.current && playerRef.current?.getPlayerState?.() === 2) playerRef.current.playVideo(); } catch { /* ignora */ } }, 350);
+        } else setPlaying(false);
+      }
       else if (e.data === 0) {
         setPlaying(false);
         if (repeatRef.current === "one") { try { p.seekTo(0, true); p.playVideo(); } catch { /* ignora */ } }
@@ -274,6 +282,9 @@ export function MusicHost({ page, tracksEntity, playlistsEntity, session }) {
     if (!hasMediaSession() || !cur) return;
     try { getMediaSession().playbackState = playing ? "playing" : "paused"; } catch { /* ignora */ }
   }, [playing, cur?.id]);
+  // App Android: mantém o aparelho acordado (CPU/Wi-Fi) enquanto a música toca, mesmo fora do app.
+  useEffect(() => { setPlaybackKeepAlive(!!playing && !!cur); }, [playing, cur?.id]);
+  useEffect(() => () => setPlaybackKeepAlive(false), []);
 
   // ---- cadastro (músicas / playlists) ----
   const cloud = !!tracksEntity.cloud;

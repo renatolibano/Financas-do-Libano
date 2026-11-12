@@ -132,9 +132,23 @@ export function HandwritingPad({ onConvert, onCancel }) {
   );
 }
 
-export function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children, onClick}){
+export function ReminderCard({icon, title, subtitle, days, onToggleMenu, menuOpen, menuContent, children, onClick, onLongPress}){
   const cls = urgencyClass(days);
-  return <div className={"reminderCard "+cls+(onClick?" clickable":"")} onClick={onClick}>
+  // Segurar o dedo (~0,6 s) no cartão chama onLongPress (ex.: perguntar se quer apagar) e não abre o toque normal.
+  const press = React.useRef({ timer: null, fired: false, x: 0, y: 0 });
+  const clearPress = () => { clearTimeout(press.current.timer); press.current.timer = null; };
+  const startPress = (e) => {
+    if (!onLongPress || (e.pointerType === "mouse" && e.button !== 0)) return;
+    press.current.fired = false; press.current.x = e.clientX; press.current.y = e.clientY;
+    clearPress();
+    press.current.timer = setTimeout(() => { press.current.fired = true; try { navigator.vibrate?.(30); } catch { /* sem vibração */ } onLongPress(); }, 600);
+  };
+  const movePress = (e) => { if (press.current.timer && (Math.abs(e.clientX - press.current.x) > 10 || Math.abs(e.clientY - press.current.y) > 10)) clearPress(); };
+  const handleClick = (e) => { if (press.current.fired) { press.current.fired = false; e.stopPropagation(); return; } onClick?.(e); };
+  return <div className={"reminderCard "+cls+(onClick?" clickable":"")+(menuOpen?" menuOpen":"")} onClick={handleClick}
+    onPointerDown={onLongPress ? startPress : undefined} onPointerMove={onLongPress ? movePress : undefined}
+    onPointerUp={onLongPress ? clearPress : undefined} onPointerCancel={onLongPress ? clearPress : undefined} onPointerLeave={onLongPress ? clearPress : undefined}
+    onContextMenu={onLongPress ? (e) => e.preventDefault() : undefined}>
     <div className="reminderCardTop">
       <div className="reminderCardLeft">
         <div className="reminderCardIcon">{icon}</div>

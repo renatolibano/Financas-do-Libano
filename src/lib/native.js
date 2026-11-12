@@ -25,6 +25,15 @@ export function getMediaSession() {
   };
 }
 
+// Mantém CPU e Wi-Fi acordados enquanto toca áudio com o app em segundo plano (sem isso, com a tela apagada o
+// Android pode suspender o áudio do WebView). Só no app Android; no navegador não faz nada.
+let keepAliveOn = false;
+export function setPlaybackKeepAlive(on) {
+  if (!isNative || keepAliveOn === !!on) return;
+  keepAliveOn = !!on;
+  try { registerPlugin("Background").keepAwake({ on: !!on })?.catch?.(() => {}); } catch { /* ignora */ }
+}
+
 // ---------- Notificações locais ----------
 const CHANNEL = "libano-lembretes";
 const SMALL_ICON = "ic_stat_icon";
@@ -109,10 +118,12 @@ const hashId = (str) => { let h = 0; for (const c of String(str)) h = (h * 31 + 
 function reminderDates(r) {
   if (r.recurrence === "daily") return [{ k: "d" }];
   if (r.recurrence === "weekly") return String(r.weekdays || "").split(",").filter(Boolean).map(Number).filter(n => n >= 0 && n <= 6).map(n => ({ k: "w" + n, weekday: n }));
-  const [dd, mm] = String(r.date || "").split("/").map(n => parseInt(n, 10));
+  const [dd, mm, yy] = String(r.date || "").split("/").map(n => parseInt(n, 10));
   if (!(dd >= 1 && dd <= 31)) return [];
   if (r.recurrence === "monthly") return [{ k: "m", day: dd }];
-  return mm >= 1 && mm <= 12 ? [{ k: "y", month: mm, day: dd }] : []; // data dd/mm repete todo ano, como no app
+  if (!(mm >= 1 && mm <= 12)) return [];
+  if (yy >= 2000) return [{ k: "u", year: yy, month: mm, day: dd }]; // dd/mm/aaaa = lembrete único (não repete)
+  return [{ k: "y", month: mm, day: dd }]; // data dd/mm repete todo ano, como no app
 }
 // Dia anterior à ocorrência (null quando não dá pra expressar como repetição do Android)
 function dayBefore(o) {
@@ -162,6 +173,23 @@ export async function syncReminderNotifications(reminders, enabled = true, birth
       const withDsc = (b) => (dsc ? b + "\n" + dsc : b);
       const add = (o, suffix, hour, minute, body) => out.push({ id: hashId(r.id + ":" + o.k + suffix), title: r.title, body: withDsc(body), channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { on: onOf(o, hour, minute), repeats: true, allowWhileIdle: true } });
       for (const o of reminderDates(r)) {
+        // Lembrete único: agenda só as ocorrências futuras, sem repetição (some sozinho depois do dia).
+        if (o.k === "u") {
+          const at = (d, h, m) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m);
+          const base = new Date(o.year, o.month - 1, o.day);
+          const eveDay = new Date(o.year, o.month - 1, o.day - 1);
+          const one = (suffix, when, body) => { if (when.getTime() > Date.now() + 1000) out.push({ id: hashId(r.id + ":u" + suffix), title: r.title, body: withDsc(body), channelId: CHANNEL, smallIcon: SMALL_ICON, schedule: { at: when, allowWhileIdle: true } }); };
+          one("e", at(eveDay, EVE_HOUR, 0), "Amanhã · " + label + (times.length ? " · " + times.join(", ") : ""));
+          if (times.length) {
+            times.forEach((hm, i) => {
+              const [hh, mi] = hm.split(":").map(Number);
+              const t0 = at(base, hh, mi);
+              one("s" + i, t0, `${label} · ${hm}`);
+              one("h" + i, new Date(t0.getTime() - 3600000), `Em 1 hora · ${label} · ${hm}`);
+            });
+          } else one("s", at(base, MORNING_HOUR, 0), bday ? "Aniversário hoje" : "Hoje · " + label);
+          continue;
+        }
         // 1 dia antes
         if (o.k !== "d") {
           const eveBody = "Amanhã · " + label + (times.length ? " · " + times.join(", ") : "");

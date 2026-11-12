@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   Bold, Italic, Underline, Strikethrough, Code, RemoveFormatting, Link2, Palette, PaintBucket,
-  List, ListOrdered, Sparkles, SendHorizontal, Loader2, Undo2, Check, X,
+  List, ListOrdered, Sparkles, SendHorizontal, Loader2, Undo2, Check, X, Copy, Scissors, TextSelect,
 } from "lucide-react";
 import { runNoteAi } from "./lib/noteAi";
 
@@ -48,6 +48,30 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
     }
   };
   const exec = (cmd) => { restoreSelection(); fmt.exec(cmd); };
+
+  // Copiar / Recortar / Selecionar tudo — no celular o menu nativo do Android fica bloqueado, então ficam aqui.
+  const toast = (message) => window.dispatchEvent(new CustomEvent("app:toast", { detail: { message } }));
+  const copySelection = async () => {
+    restoreSelection();
+    const text = window.getSelection()?.toString() || "";
+    if (!text) return false;
+    try { await navigator.clipboard.writeText(text); }
+    catch { try { document.execCommand("copy"); } catch { toast("Não consegui copiar."); return false; } }
+    toast("Copiado");
+    return true;
+  };
+  const cutSelection = async () => { if (await copySelection()) { restoreSelection(); fmt.exec("delete"); } };
+  const selectAll = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const r = document.createRange();
+    r.selectNodeContents(body);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    lastRangeRef.current = r.cloneRange();
+    fmt.updateLinkBar();
+  };
 
   const finish = () => {
     setAi(null);
@@ -197,6 +221,11 @@ export default function NoteSelectionMenu({ fmt, bodyRef, onChange, textColors, 
             <button title="Código" onClick={toggleCode}><Code size={15}/></button>
             <button title="Lista com marcadores" onClick={() => exec("insertUnorderedList")}><List size={15}/></button>
             <button title="Lista numerada" onClick={() => exec("insertOrderedList")}><ListOrdered size={15}/></button>
+          </div>
+          <div className="noteSelRow">
+            <button title="Copiar" onClick={copySelection}><Copy size={15}/></button>
+            <button title="Recortar" onClick={cutSelection}><Scissors size={15}/></button>
+            <button title="Selecionar tudo" onClick={selectAll}><TextSelect size={15}/></button>
           </div>
           <div className="noteSelSep"/>
           <div className="noteSelLabel"><Sparkles size={12}/> Habilidades de IA</div>

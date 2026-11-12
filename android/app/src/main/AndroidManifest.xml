@@ -41,6 +41,8 @@
     <!-- Instalar a atualização do app (APK) baixada dentro do próprio app -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Áudio dos audiolivros com a tela apagada (serviço em primeiro plano de mídia) -->
+    <!-- Mantém CPU/Wi-Fi acordados com o áudio tocando em segundo plano -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Lembretes com hora no minuto certo (alarme exato) -->

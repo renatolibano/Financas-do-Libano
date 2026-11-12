@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import AudioTranscript from "./AudioTranscript";
 import QuoteEditor from "./QuoteEditor";
-import { hasMediaSession, getMediaSession, makeMediaMetadata } from "./lib/native";
+import { hasMediaSession, getMediaSession, makeMediaMetadata, setPlaybackKeepAlive } from "./lib/native";
 import { usePersistentState } from "./lib/storage";
 import { useScreenRotate } from "./hooks";
 import { bumpDailyGoals } from "./lib/notifications";
@@ -417,6 +417,10 @@ export function AudiobookHost({ page, setPage, entity, stats, studyGoals, genera
       if (dur > 0) ms.setPositionState({ duration: dur, playbackRate: rate, position: Math.min(pos, dur) });
     } catch (e) { /* ignora */ }
   }, [playing, dur, rate, Math.floor(pos / 5)]);
+
+  // App Android: mantém o aparelho acordado (CPU/Wi-Fi) enquanto o audiolivro toca, mesmo fora do app.
+  useEffect(() => { setPlaybackKeepAlive(!!playing); }, [playing]);
+  useEffect(() => () => setPlaybackKeepAlive(false), []);
 
   // ---- eventos do <audio> ----
   const onLoadedMetadata = () => {
