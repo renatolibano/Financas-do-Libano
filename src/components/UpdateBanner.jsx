@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Download, Sparkles, X } from "lucide-react";
-import { isNative, APP_VERSION, checkForUpdate, openExternal, installUpdate, notifyUpdateAvailable, clearUpdateNotifications, onUpdateNotificationTap } from "../lib/native";
+import { isNative, APP_VERSION, checkForUpdate, openExternal, installUpdate, notifyUpdateAvailable, clearUpdateNotifications, onUpdateNotificationTap, scheduleBackgroundUpdateCheck } from "../lib/native";
 
 // Notas da versão (corpo do release no GitHub) -> até 6 linhas de texto simples.
 const noteLines = (notes) => String(notes || "").split(/\r?\n/).map(l => l.replace(/^\s*(#{1,6}|[-*+]|\d+[.)])\s*/, "").replace(/[*_`]/g, "").trim()).filter(Boolean).slice(0, 6);
@@ -17,6 +17,7 @@ export default function UpdateBanner() {
   useEffect(() => {
     if (!isNative) return;
     let alive = true, removeTap = () => {};
+    scheduleBackgroundUpdateCheck();
     const load = () => checkForUpdate();
     load().then(r => {
       if (!alive) return;

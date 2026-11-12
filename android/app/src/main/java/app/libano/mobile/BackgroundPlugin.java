@@ -7,6 +7,12 @@ import android.os.Build;
 import android.net.wifi.WifiManager;
 import android.os.PowerManager;
 import android.provider.Settings;
+import androidx.work.Constraints;
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+import java.util.concurrent.TimeUnit;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -31,6 +37,23 @@ public class BackgroundPlugin extends Plugin {
             } else r.put("asked", false);
         } catch (Exception e) { r.put("asked", false); }
         call.resolve(r);
+    }
+
+    // Agenda a conferência periódica (~12 h) de nova versão do APK, mesmo com o app fechado. Repo/APK vêm do JS (app-config.json).
+    @PluginMethod
+    public void scheduleUpdateCheck(PluginCall call) {
+        try {
+            Context ctx = getContext().getApplicationContext();
+            ctx.getSharedPreferences(UpdateCheckWorker.PREFS, Context.MODE_PRIVATE).edit()
+                .putString("repo", call.getString("repo", ""))
+                .putString("apkName", call.getString("apkName", "libano.apk"))
+                .apply();
+            PeriodicWorkRequest req = new PeriodicWorkRequest.Builder(UpdateCheckWorker.class, 12, TimeUnit.HOURS)
+                .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build();
+            WorkManager.getInstance(ctx).enqueueUniquePeriodicWork("libano-update-check", ExistingPeriodicWorkPolicy.KEEP, req);
+        } catch (Exception ignored) { /* sem WorkManager: só confere ao abrir o app */ }
+        call.resolve();
     }
 
     private PowerManager.WakeLock wakeLock;

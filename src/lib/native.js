@@ -265,6 +265,11 @@ export async function notifyUpdateAvailable(version) {
     await ln.schedule({ notifications: list });
   } catch (err) { console.log("[atualização] não foi possível notificar", err); }
 }
+// Liga a conferência de nova versão em segundo plano (WorkManager, ~12 h) para avisar mesmo com o app fechado.
+export function scheduleBackgroundUpdateCheck() {
+  if (!isNative || !CONFIG.repo || /^SEU-/i.test(CONFIG.repo)) return;
+  try { registerPlugin("Background").scheduleUpdateCheck({ repo: CONFIG.repo, apkName: CONFIG.apkName || "libano.apk" })?.catch?.(() => {}); } catch { /* ignora */ }
+}
 export async function clearUpdateNotifications() {
   if (!isNative) return;
   try { const ln = await LN(); await ln.cancel({ notifications: [{ id: UPDATE_NOTIF_NOW }, { id: UPDATE_NOTIF_DAILY }] }); } catch { /* ignora */ }
