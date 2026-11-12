@@ -3095,3 +3095,30 @@ body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px
 .wordSymGrid button:hover,.wordSymGrid button.active{background:var(--bg-surface-3);border-color:var(--accent)}
 .wordSymRecent{max-height:none}
 .wordSymPreview{display:inline-block;min-width:34px;text-align:center;font-size:26px;vertical-align:middle}
+
+/* Galeria de estilos de tabela */
+.wordTableStyleBtn{padding:2px 3px;border:1px solid transparent;border-radius:4px;background:none;cursor:pointer;line-height:0}
+.wordTableStyleBtn:hover,.wordTableStyleBtn.active{border-color:var(--accent);background:var(--bg-surface-3)}
+
+/* Estilos de numeração extras (Numeração › biblioteca) */
+@counter-style decimal-paren{system:extends decimal;suffix:") "}
+@counter-style lower-alpha-paren{system:extends lower-alpha;suffix:") "}
+
+/* WordArt extra */
+.wordRichBody .word-wordart-green{color:#16a34a;text-shadow:2px 2px 0 #bbf7d0}
+.wordRichBody .word-wordart-purple{color:#7c3aed;text-shadow:2px 2px 0 #ddd6fe}
+.wordRichBody .word-wordart-neon{color:#0ea5e9;text-shadow:0 0 4px #7dd3fc,0 0 10px #38bdf8,0 0 20px #0ea5e9}
+.wordRichBody .word-wordart-retro{color:#f59e0b;text-shadow:1px 1px 0 #b45309,2px 2px 0 #b45309,3px 3px 0 #92400e,4px 4px 0 #92400e}
+.wordRichBody .word-wordart-gradient{background:linear-gradient(90deg,#7c3aed,#ec4899);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.wordRichBody .word-wordart-emboss{color:#9ca3af;text-shadow:-1px -1px 0 #fff,1px 1px 0 #4b5563}
+
+/* Estilos extras da galeria */
+.rbStyle-h4 .rbStylePrev{font-size:13px;font-weight:700;font-style:italic;color:var(--text-2)}
+.rbStyle-quoteintense .rbStylePrev{font-style:italic;color:var(--accent);border-top:1.5px solid var(--accent);border-bottom:1.5px solid var(--accent);padding:1px 3px}
+.rbStyle-emphsubtle .rbStylePrev{font-style:italic;color:var(--text-3)}
+.rbStyle-emph .rbStylePrev{font-style:italic}
+.rbStyle-strong .rbStylePrev{font-weight:700}
+.rbStyle-refintense .rbStylePrev{font-weight:700;font-variant:small-caps;color:var(--accent)}
+.rbStyle-code .rbStylePrev{font-family:Consolas,"Courier New",monospace;font-size:12px;background:var(--bg-surface-3);padding:1px 3px;border-radius:3px}
+.rbStyle-caption .rbStylePrev{font-size:11px;font-style:italic;color:var(--text-3)}
+.rbStyle-listpara .rbStylePrev{font-size:13px;padding-left:8px}

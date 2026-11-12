@@ -18282,6 +18282,119 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
 
 const WORD_TEXT_COLORS = ["#1a1a1a", "#f5f7fb", "#ff5c5c", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
 
+// Galeria de formas extra (Inserir › Formas). Cada svg(f, s) recebe preenchimento e contorno;
+// elementos com data-stk são "tinta" (cabeça de seta etc.) e seguem a cor do contorno.
+const starPts = (n, ro, ri) => Array.from({ length: n * 2 }, (_, i) => { const a = -Math.PI / 2 + i * Math.PI / n; const r = i % 2 ? ri : ro; return `${(50 + r * Math.cos(a)).toFixed(1)},${(50 + r * Math.sin(a)).toFixed(1)}`; }).join(" ");
+const shPoly = (pts, f, s, w = 3) => `<polygon points="${pts}" fill="${f}" stroke="${s}" stroke-width="${w}" stroke-linejoin="round"/>`;
+const shPath = (d, f, s, w = 3, extra = "") => `<path d="${d}" fill="${f}" stroke="${s}" stroke-width="${w}" stroke-linejoin="round" ${extra}/>`;
+const shLine = (d, s, w = 4, extra = "") => `<path d="${d}" fill="none" stroke="${s}" stroke-width="${w}" stroke-linecap="round" ${extra}/>`;
+const SHAPE_EXTRA = [
+  // Linhas e conectores
+  { id: "linearrow", cat: "Linhas", label: "Seta de Linha", box: [160, 40], viewBox: "0 0 100 70", svg: (f, s) => `<line x1="2" y1="35" x2="84" y2="35" stroke="${s}" stroke-width="4" stroke-linecap="round"/><polygon data-stk="1" points="82,23 100,35 82,47" fill="${s}" stroke="${s}" stroke-width="2"/>` },
+  { id: "dblarrow", cat: "Linhas", label: "Seta Dupla de Linha", box: [160, 40], viewBox: "0 0 100 70", svg: (f, s) => `<line x1="16" y1="35" x2="84" y2="35" stroke="${s}" stroke-width="4"/><polygon data-stk="1" points="82,23 100,35 82,47" fill="${s}" stroke="${s}" stroke-width="2"/><polygon data-stk="1" points="18,23 0,35 18,47" fill="${s}" stroke="${s}" stroke-width="2"/>` },
+  { id: "dashline", cat: "Linhas", label: "Linha Tracejada", box: [160, 40], viewBox: "0 0 100 70", svg: (f, s) => `<line x1="2" y1="35" x2="98" y2="35" stroke="${s}" stroke-width="4" stroke-dasharray="10 7"/>` },
+  { id: "elbow", cat: "Linhas", label: "Conector em Cotovelo", box: [160, 70], viewBox: "0 0 100 70", svg: (f, s) => `<polyline points="2,64 50,64 50,6 98,6" fill="none" stroke="${s}" stroke-width="4" stroke-linejoin="round"/>` },
+  { id: "curve", cat: "Linhas", label: "Curva", box: [160, 70], viewBox: "0 0 100 70", svg: (f, s) => shLine("M2,64 C45,64 55,6 98,6", s) },
+  // Formas básicas
+  { id: "diamond", cat: "Formas Básicas", label: "Losango", box: [110, 110], svg: (f, s) => shPoly("50,2 98,50 50,98 2,50", f, s) },
+  { id: "pentagon", cat: "Formas Básicas", label: "Pentágono", box: [110, 105], svg: (f, s) => shPoly("50,4 97,38 79,95 21,95 3,38", f, s) },
+  { id: "hexagon", cat: "Formas Básicas", label: "Hexágono", box: [120, 100], svg: (f, s) => shPoly("25,5 75,5 98,50 75,95 25,95 2,50", f, s) },
+  { id: "octagon", cat: "Formas Básicas", label: "Octógono", box: [110, 110], svg: (f, s) => shPoly("30,3 70,3 97,30 97,70 70,97 30,97 3,70 3,30", f, s) },
+  { id: "parallelogram", cat: "Formas Básicas", label: "Paralelogramo", box: [140, 80], svg: (f, s) => shPoly("25,10 98,10 75,90 2,90", f, s) },
+  { id: "trapezoid", cat: "Formas Básicas", label: "Trapézio", box: [140, 80], svg: (f, s) => shPoly("22,10 78,10 98,90 2,90", f, s) },
+  { id: "rtriangle", cat: "Formas Básicas", label: "Triângulo Retângulo", box: [110, 110], svg: (f, s) => shPoly("4,4 4,96 96,96", f, s) },
+  { id: "cross", cat: "Formas Básicas", label: "Cruz", box: [100, 100], svg: (f, s) => shPoly("35,4 65,4 65,35 96,35 96,65 65,65 65,96 35,96 35,65 4,65 4,35 35,35", f, s) },
+  { id: "heart", cat: "Formas Básicas", label: "Coração", box: [110, 100], svg: (f, s) => shPath("M50,92 C8,62 2,30 24,15 C38,6 48,14 50,26 C52,14 62,6 76,15 C98,30 92,62 50,92 Z", f, s) },
+  { id: "moon", cat: "Formas Básicas", label: "Lua", box: [80, 110], svg: (f, s) => shPath("M62,4 A46,46 0 1 0 96,70 A38,38 0 0 1 62,4 Z", f, s) },
+  { id: "lightning", cat: "Formas Básicas", label: "Raio", box: [90, 110], svg: (f, s) => shPoly("58,2 18,56 46,56 38,98 84,40 54,40", f, s) },
+  { id: "cloud", cat: "Formas Básicas", label: "Nuvem", box: [140, 90], svg: (f, s) => shPath("M28,80 C8,80 2,56 22,50 C20,30 42,20 54,34 C62,18 88,24 84,46 C100,50 98,80 76,80 Z", f, s) },
+  { id: "donut", cat: "Formas Básicas", label: "Rosca", box: [110, 110], svg: (f, s) => shPath("M50,4 A46,46 0 1 1 49.99,4 Z M50,26 A24,24 0 1 0 50.01,26 Z", f, s, 3, 'fill-rule="evenodd"') },
+  { id: "frame", cat: "Formas Básicas", label: "Moldura", box: [120, 100], svg: (f, s) => shPath("M4,4 H96 V96 H4 Z M22,22 V78 H78 V22 Z", f, s, 3, 'fill-rule="evenodd"') },
+  { id: "cylinder", cat: "Formas Básicas", label: "Cilindro", box: [100, 120], svg: (f, s) => shPath("M4,18 A46,14 0 0 1 96,18 V82 A46,14 0 0 1 4,82 Z", f, s) + `<ellipse cx="50" cy="18" rx="46" ry="14" fill="${f}" stroke="${s}" stroke-width="3"/>` },
+  { id: "cube", cat: "Formas Básicas", label: "Cubo", box: [110, 110], svg: (f, s) => shPoly("4,30 70,30 70,96 4,96", f, s) + shPoly("4,30 30,4 96,4 70,30", f, s) + shPoly("70,30 96,4 96,70 70,96", f, s) },
+  { id: "nosign", cat: "Formas Básicas", label: "Símbolo Proibido", box: [100, 100], svg: (f, s) => `<circle cx="50" cy="50" r="44" fill="${f}" stroke="${s}" stroke-width="3"/><path data-stk="1" d="M19,81 L81,19" fill="none" stroke="${s}" stroke-width="8" stroke-linecap="round"/>` },
+  { id: "checkmark", cat: "Formas Básicas", label: "Marca de Verificação", box: [100, 100], svg: (f, s) => shLine("M10,55 L38,84 L92,18", s, 10, 'stroke-linejoin="round"') },
+  { id: "xmark", cat: "Formas Básicas", label: "Marca X", box: [100, 100], svg: (f, s) => shLine("M12,12 L88,88 M88,12 L12,88", s, 10) },
+  // Setas largas
+  { id: "leftarrow", cat: "Setas", label: "Seta para a Esquerda", box: [160, 60], viewBox: "0 0 100 70", svg: (f, s) => shPoly("100,20 40,20 40,0 0,35 40,70 40,50 100,50", f, s, 2) },
+  { id: "uparrow", cat: "Setas", label: "Seta para Cima", box: [60, 160], viewBox: "0 0 70 100", svg: (f, s) => shPoly("20,100 20,40 0,40 35,0 70,40 50,40 50,100", f, s, 2) },
+  { id: "downarrow", cat: "Setas", label: "Seta para Baixo", box: [60, 160], viewBox: "0 0 70 100", svg: (f, s) => shPoly("20,0 50,0 50,60 70,60 35,100 0,60 20,60", f, s, 2) },
+  { id: "leftrightarrow", cat: "Setas", label: "Seta Dupla", box: [160, 60], viewBox: "0 0 100 70", svg: (f, s) => shPoly("0,35 30,5 30,25 70,25 70,5 100,35 70,65 70,45 30,45 30,65", f, s, 2) },
+  { id: "chevron", cat: "Setas", label: "Divisa", box: [110, 100], svg: (f, s) => shPoly("4,4 60,4 96,50 60,96 4,96 40,50", f, s) },
+  { id: "homeplate", cat: "Setas", label: "Pentágono (Seta)", box: [140, 90], svg: (f, s) => shPoly("4,10 70,10 96,50 70,90 4,90", f, s) },
+  // Estrelas
+  { id: "star4", cat: "Estrelas e Faixas", label: "Estrela de 4 Pontas", box: [110, 110], svg: (f, s) => shPoly("50,2 62,38 98,50 62,62 50,98 38,62 2,50 38,38", f, s, 2) },
+  { id: "star6", cat: "Estrelas e Faixas", label: "Estrela de 6 Pontas", box: [110, 110], svg: (f, s) => shPoly(starPts(6, 48, 28), f, s, 2) },
+  { id: "star8", cat: "Estrelas e Faixas", label: "Estrela de 8 Pontas", box: [110, 110], svg: (f, s) => shPoly(starPts(8, 48, 30), f, s, 2) },
+  { id: "burst", cat: "Estrelas e Faixas", label: "Explosão", box: [120, 120], svg: (f, s) => shPoly(starPts(12, 48, 34), f, s, 2) },
+  // Textos explicativos
+  { id: "callout", cat: "Textos Explicativos", label: "Balão Retangular", box: [140, 100], svg: (f, s) => shPoly("6,8 94,8 94,66 46,66 26,94 30,66 6,66", f, s) },
+  { id: "speech", cat: "Textos Explicativos", label: "Balão de Fala", box: [140, 100], svg: (f, s) => shPath("M50,6 C22,6 4,20 4,38 C4,54 18,66 34,70 L26,94 L52,72 C78,70 96,56 96,38 C96,20 78,6 50,6 Z", f, s) },
+];
+const SHAPE_CATS = { rect: "Formas Básicas", roundrect: "Formas Básicas", ellipse: "Formas Básicas", triangle: "Formas Básicas", arrow: "Setas", line: "Linhas", star: "Estrelas e Faixas" };
+
+// Estilos de Tabela (Design da Tabela): aplicados como formatação direta nas células, então o que se vê é o que
+// é salvo (e o sombreamento segue para .docx/PDF). head = cabeçalho, band = linhas em faixas, border = grade.
+const TABLE_STYLES = [
+  { id: "grid", label: "Grade Simples", border: "#b9bec7" },
+  { id: "gridhead", label: "Grade com Cabeçalho", border: "#b9bec7", head: { bg: "#e5e7eb" } },
+  { id: "gray", label: "Listrada Cinza", border: "#d1d5db", head: { bg: "#e5e7eb" }, band: "#f3f4f6" },
+  { id: "blue", label: "Azul", border: "#8eaadb", head: { bg: "#4472c4", color: "#ffffff" }, band: "#d9e2f3" },
+  { id: "orange", label: "Laranja", border: "#f4b183", head: { bg: "#ed7d31", color: "#ffffff" }, band: "#fbe5d6" },
+  { id: "green", label: "Verde", border: "#a9d18e", head: { bg: "#70ad47", color: "#ffffff" }, band: "#e2f0d9" },
+  { id: "gold", label: "Ouro", border: "#ffd966", head: { bg: "#ffc000", color: "#1a1a1a" }, band: "#fff2cc" },
+  { id: "slate", label: "Cinza Azulado", border: "#8497b0", head: { bg: "#44546a", color: "#ffffff" }, band: "#d6dce5" },
+  { id: "rows", label: "Só Linhas Horizontais", border: "#b9bec7", rowsOnly: true, head: { bg: "", rule: "#1a1a1a" } },
+  { id: "dark", label: "Cabeçalho Escuro", border: "#d1d5db", rowsOnly: true, head: { bg: "#1a1a1a", color: "#ffffff" }, band: "#f3f4f6" },
+  { id: "strong", label: "Grade Forte", border: "#6b7280", width: 2, head: { bg: "#e5e7eb" } },
+  { id: "none", label: "Sem Bordas", border: null, head: { bg: "" } },
+];
+const tableStyleThumb = (st) => (
+  <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden="true">
+    <rect x=".5" y=".5" width="39" height="27" fill="#fff" stroke={st.border || "#e5e7eb"} strokeDasharray={st.border ? undefined : "2 2"}/>
+    <rect x="1" y="1" width="38" height="7" fill={st.head?.bg || "#fff"}/>
+    {[0, 1, 2].map(i => <rect key={i} x="1" y={9 + i * 6.3} width="38" height="6" fill={st.band && i % 2 === 0 ? st.band : "#fff"}/>)}
+    {st.border && [8, 14.3, 20.6].map(y => <line key={y} x1="1" x2="39" y1={y} y2={y} stroke={st.border} strokeWidth=".7"/>)}
+  </svg>
+);
+
+// Data e Hora (Inserir): formatos como na caixa de diálogo do Word.
+const DATE_FORMATS = [
+  ["Data curta", (d) => d.toLocaleDateString("pt-BR")],
+  ["Data por extenso", (d) => d.toLocaleDateString("pt-BR", { dateStyle: "long" })],
+  ["Data com dia da semana", (d) => d.toLocaleDateString("pt-BR", { dateStyle: "full" })],
+  ["Dia, mês abreviado e ano", (d) => d.toLocaleDateString("pt-BR", { day: "numeric", month: "short", year: "numeric" })],
+  ["Mês e ano", (d) => d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })],
+  ["Data ISO", (d) => d.toLocaleDateString("sv-SE")],
+  ["Data e hora", (d) => d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })],
+  ["Hora", (d) => d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })],
+  ["Hora com segundos", (d) => d.toLocaleTimeString("pt-BR")],
+];
+// Folhas de rosto (Inserir › Folha de Rosto). Todas têm um .word-title antes da quebra de página,
+// que é o que "Remover Folha de Rosto Atual" procura.
+const COVER_STYLES = [
+  ["classic", "Clássica"], ["modern", "Moderna"], ["band", "Faixa Colorida"], ["minimal", "Minimalista"], ["report", "Relatório"], ["academic", "Acadêmica"],
+];
+const coverHtml = (kind, date) => {
+  const br = '<div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>';
+  const gap = (px) => `<div style="height:${px}px"><br></div>`;
+  switch (kind) {
+    case "modern": return `${gap(120)}<div style="border-left:8px solid #4472c4;padding-left:18px"><div class="word-title" style="text-align:left">[Título do Documento]</div><div class="word-subtitle" style="text-align:left">[Subtítulo]</div></div>${gap(260)}<div>[Autor]</div><div>${date}</div>${br}`;
+    case "band": return `<div style="background:#4472c4;color:#fff;padding:70px 36px 50px"><div class="word-title" style="text-align:left;color:#fff">[Título do Documento]</div><div class="word-subtitle" style="text-align:left;color:#dbe5f7">[Subtítulo]</div></div>${gap(300)}<div style="text-align:right">[Autor]</div><div style="text-align:right">${date}</div>${br}`;
+    case "minimal": return `${gap(200)}<div class="word-title" style="text-align:left">[Título do Documento]</div>${gap(380)}<div style="text-align:left;color:#6b7280">${date}</div>${br}`;
+    case "report": return `${gap(100)}<div class="word-title" style="text-align:center">[Título do Relatório]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div>${gap(160)}<div style="text-align:center">Autor: [Nome]</div><div style="text-align:center">Organização: [Nome da organização]</div><div style="text-align:center">Versão: 1.0</div><div style="text-align:center">${date}</div>${br}`;
+    case "academic": return `<div style="text-align:center;font-weight:700">[INSTITUIÇÃO]</div><div style="text-align:center">[Curso / Departamento]</div>${gap(60)}<div style="text-align:center">[Autor]</div>${gap(150)}<div class="word-title" style="text-align:center">[Título do Trabalho]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div>${gap(150)}<div style="text-align:center">Orientador(a): [Nome]</div>${gap(100)}<div style="text-align:center">[Cidade]</div><div style="text-align:center">${new Date().getFullYear()}</div>${br}`;
+    default: return `${gap(140)}<div class="word-title" style="text-align:center">[Título do Documento]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div><div style="text-align:center"><br></div><div style="text-align:center"><br></div><div style="text-align:center">${date}</div>${br}`;
+  }
+};
+// Estilos de Cabeçalho/Rodapé (Inserir › Cabeçalho / Rodapé). Cada um é só texto alinhado, para sair igual no .docx/PDF.
+const HF_STYLES = [
+  ["blank", "Em Branco", (label) => `<div>${label}</div>`],
+  ["center", "Centralizado", () => `<div style="text-align:center">[Digite aqui]</div>`],
+  ["right", "Alinhado à Direita", () => `<div style="text-align:right">[Digite aqui]</div>`],
+  ["titledate", "Título e Data", () => `<div>[Título do documento]</div><div style="text-align:right">${new Date().toLocaleDateString("pt-BR")}</div>`],
+  ["author", "Autor e Página", () => `<div>[Autor]</div><div style="text-align:right">Página [n]</div>`],
+];
 // Seletor de cores no padrão do Word: Cores do Tema (base + 5 variações), Cores Padrão, Recentes,
 // "Sem cor" (opcional) e "Mais Cores…" (seletor completo do sistema, com qualquer cor/hex).
 const OFFICE_THEME_COLORS = ["#ffffff", "#000000", "#e7e6e6", "#44546a", "#4472c4", "#ed7d31", "#a5a5a5", "#ffc000", "#5b9bd5", "#70ad47"];
@@ -18349,6 +18462,8 @@ const WORD_BORDER_PRESETS = [
   { key: "top", label: "Borda superior" },
   { key: "all", label: "Todas as bordas" },
   { key: "hr", label: "Linha horizontal" },
+  { key: "left", label: "Borda esquerda" },
+  { key: "right", label: "Borda direita" },
 ];
 // Símbolos especiais — equivalente simplificado do botão "Símbolo" do
 // Word (Inserir > Símbolos), com foco em matemática/grego já que é comum
@@ -18372,6 +18487,14 @@ const WORD_THEMES = [
   { key: "verde", label: "Verde", accent: "#1f9d55" },
   { key: "grafite", label: "Grafite", accent: "#3a3f4b" },
   { key: "vinho", label: "Vinho", accent: "#8a1f3d" },
+  { key: "marinho", label: "Marinho", accent: "#1e3a8a" },
+  { key: "turquesa", label: "Turquesa", accent: "#0e9aa7" },
+  { key: "roxo", label: "Roxo", accent: "#7c3aed" },
+  { key: "rosa", label: "Rosa", accent: "#d6336c" },
+  { key: "laranja", label: "Laranja", accent: "#ea6a1f" },
+  { key: "dourado", label: "Dourado", accent: "#b8860b" },
+  { key: "vermelho", label: "Vermelho", accent: "#c92a2a" },
+  { key: "oliva", label: "Oliva", accent: "#6b7a1f" },
 ];
 const WORD_PAGE_COLORS = ["", "#fdf6e3", "#eef6ff", "#eafaf0", "#fff6e8", "#f7ecff"];
 const WORD_PAGE_BORDERS = [
@@ -18379,8 +18502,13 @@ const WORD_PAGE_BORDERS = [
   { key: "simples", label: "Simples" },
   { key: "dupla", label: "Dupla" },
   { key: "sombreada", label: "Sombreada" },
+  { key: "tracejada", label: "Tracejada" },
+  { key: "pontilhada", label: "Pontilhada" },
+  { key: "grossa", label: "Grossa" },
+  { key: "preta", label: "Preta simples" },
+  { key: "pretadupla", label: "Preta dupla" },
 ];
-const WORD_WATERMARK_PRESETS = ["CONFIDENCIAL", "RASCUNHO", "URGENTE"];
+const WORD_WATERMARK_PRESETS = ["CONFIDENCIAL", "RASCUNHO", "URGENTE", "CÓPIA", "NÃO COPIAR", "NÃO DISTRIBUIR", "AMOSTRA", "ORIGINAL", "PRIORITÁRIO"];
 
 function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const [colorOpen, setColorOpen] = useState(false);
@@ -18604,11 +18732,14 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   // "-first" é a versão só da primeira página — ter uma dessas presente no
   // documento É o que significa "primeira página diferente" (sem precisar
   // de uma marcação extra pra isso).
-  const insertHeaderFooterBand = (kind, variant) => {
+  const insertHeaderFooterBand = (kind, variant, styleId) => {
     const el = bodyRef.current;
     if (!el) return;
     const cls = (kind === "header" ? "word-header-band" : "word-footer-band") + (variant === "first" ? "-first" : "");
     let band = el.querySelector("." + cls);
+    const hfStyle = HF_STYLES.find(x => x[0] === styleId);
+    const labelFor = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : (kind === "header" ? "Cabeçalho" : "Rodapé");
+    if (band && hfStyle) { band.innerHTML = hfStyle[2](labelFor); onChange(); }
     if (band) {
       const r = document.createRange();
       r.selectNodeContents(band);
@@ -18623,7 +18754,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     band = document.createElement("div");
     band.className = cls;
     const label = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : (kind === "header" ? "Cabeçalho" : "Rodapé");
-    band.innerHTML = `<div>${label}</div>`;
+    band.innerHTML = hfStyle ? hfStyle[2](label) : `<div>${label}</div>`;
     if (kind === "header") el.insertBefore(band, el.firstChild);
     else el.appendChild(band);
     onChange();
@@ -18901,16 +19032,34 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     if (block) { block.style.backgroundColor = color === "transparent" ? "" : color; onChange(); }
     setShadingOpen(false);
   };
+  // Bordas e Sombreamento…: lados, estilo, espessura e cor livres no parágrafo atual.
+  const applyBorderCustom = (o) => {
+    bodyRef.current?.focus();
+    const block = currentBlock();
+    if (!block) return;
+    block.style.border = ""; block.style.borderTop = ""; block.style.borderBottom = ""; block.style.borderLeft = ""; block.style.borderRight = "";
+    const line = `${o.width}px ${o.style} ${o.color}`;
+    if (o.top) block.style.borderTop = line;
+    if (o.bottom) block.style.borderBottom = line;
+    if (o.left) block.style.borderLeft = line;
+    if (o.right) block.style.borderRight = line;
+    block.style.padding = (o.top || o.bottom || o.left || o.right) ? `${o.top ? o.pad : 0}px ${o.right ? o.pad : 0}px ${o.bottom ? o.pad : 0}px ${o.left ? o.pad : 0}px` : "";
+    block.style.backgroundColor = o.fill || "";
+    onChange();
+  };
+
   const applyBorder = (kind) => {
     bodyRef.current?.focus();
     const block = currentBlock();
     if (block) {
-      block.style.border = ""; block.style.borderTop = ""; block.style.borderBottom = "";
+      block.style.border = ""; block.style.borderTop = ""; block.style.borderBottom = ""; block.style.borderLeft = ""; block.style.borderRight = "";
       block.style.padding = "";
       if (kind === "bottom") { block.style.borderBottom = "1px solid #1a1a1a"; block.style.padding = "0 0 4px"; }
       else if (kind === "top") { block.style.borderTop = "1px solid #1a1a1a"; block.style.padding = "4px 0 0"; }
       else if (kind === "all") { block.style.border = "1px solid #1a1a1a"; block.style.padding = "4px 8px"; }
       else if (kind === "hr") { block.style.borderBottom = "2px solid #1a1a1a"; block.style.padding = "0 0 4px"; }
+      else if (kind === "left") { block.style.borderLeft = "1px solid #1a1a1a"; block.style.padding = "0 0 0 8px"; }
+      else if (kind === "right") { block.style.borderRight = "1px solid #1a1a1a"; block.style.padding = "0 8px 0 0"; }
       onChange();
     }
     setBorderOpen(false);
@@ -18943,10 +19092,10 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     onChange();
   };
 
-  const insertDateTime = () => {
+  const insertDateTime = (fmtIdx) => {
     const now = new Date();
-    const text = now.toLocaleDateString("pt-BR") + " " + now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    exec("insertText", text);
+    const f = DATE_FORMATS[Number.isInteger(fmtIdx) ? fmtIdx : 6];
+    exec("insertText", f[1](now));
   };
 
   const insertPageBreak = () => {
@@ -20282,7 +20431,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     painting, pickPaintFormat, applyPaintFormat, growShrinkFont,
     caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber, togglePrimeiraPaginaDiferente,
     columnsOpen, setColumnsOpen, applyColumns, setParagraphIndent, setParagraphIndentRight, setParagraphSpacing, setParagraphSpacingBefore,
-    applyShading, applyBorder,
+    applyShading, applyBorder, applyBorderCustom,
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
     dictating, dictationSupported, toggleDictation,
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
@@ -21426,21 +21575,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     handleBodyInput();
   };
   // ---- Capa e Página em Branco (Inserir > Páginas) -----------------------
-  const insertCoverPage = () => {
+  const insertCoverPage = (kind = "classic") => {
     const el = bodyRef.current;
     if (!el) return;
     el.focus();
     const meta = el.querySelector(":scope > .word-page-meta");
     const anchor = meta ? meta.nextSibling : el.firstChild;
-    const html = `
-      <div style="height:140px"><br></div>
-      <div class="word-title" style="text-align:center">[Título do Documento]</div>
-      <div class="word-subtitle" style="text-align:center">[Subtítulo]</div>
-      <div style="text-align:center"><br></div>
-      <div style="text-align:center"><br></div>
-      <div style="text-align:center">${new Date().toLocaleDateString("pt-BR")}</div>
-      <div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>
-    `;
+    const html = coverHtml(kind, new Date().toLocaleDateString("pt-BR"));
     const frag = document.createRange().createContextualFragment(html);
     el.insertBefore(frag, anchor);
     handleBodyInput();
@@ -21916,7 +22057,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     { id: "arrow", label: "Seta", box: [160, 60], viewBox: "0 0 100 70", svg: (f, s) => `<polygon points="0,20 60,20 60,0 100,35 60,70 60,50 0,50" fill="${f}" stroke="${s}" stroke-width="2"/>` },
     { id: "line", label: "Linha", box: [160, 40], viewBox: "0 0 100 70", svg: (f, s) => `<line x1="2" y1="35" x2="98" y2="35" stroke="${s}" stroke-width="4"/>` },
     { id: "star", label: "Estrela", box: [120, 110], svg: (f, s) => `<polygon points="50,2 61,37 98,37 68,59 79,95 50,73 21,95 32,59 2,37 39,37" fill="${f}" stroke="${s}" stroke-width="2"/>` },
-  ];
+    ...SHAPE_EXTRA,
+  ].map(p => ({ ...p, cat: p.cat || SHAPE_CATS[p.id] || "Formas Básicas" }));
   const insertShape = (id) => {
     const preset = SHAPE_PRESETS.find(p => p.id === id);
     const el = bodyRef.current;
@@ -21943,17 +22085,18 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     setShapesOpen(false);
     handleBodyInput();
   };
-  const shapeFillableEl = () => selectedShape?.querySelector("rect, ellipse, polygon");
+  const SHAPE_NODES = "rect, ellipse, polygon, path, circle, line, polyline";
   const shapeSetFill = (color) => {
     if (!selectedShape) return;
     selectedShape.dataset.fill = color;
-    shapeFillableEl()?.setAttribute("fill", color);
+    // preenche só o que já tinha preenchimento (linhas/conectores ficam sem) e não é "tinta" (data-stk)
+    selectedShape.querySelectorAll(SHAPE_NODES).forEach(n => { if (!n.hasAttribute("data-stk") && n.getAttribute("fill") !== "none" && n.tagName !== "line") n.setAttribute("fill", color); });
     handleBodyInput();
   };
   const shapeSetStroke = (color) => {
     if (!selectedShape) return;
     selectedShape.dataset.stroke = color;
-    selectedShape.querySelectorAll("rect, ellipse, polygon, line").forEach(n => n.setAttribute("stroke", color));
+    selectedShape.querySelectorAll(SHAPE_NODES).forEach(n => { n.setAttribute("stroke", color); if (n.hasAttribute("data-stk")) n.setAttribute("fill", n.tagName === "path" ? "none" : color); });
     handleBodyInput();
   };
   const shapeSetWrap = (mode) => {
@@ -21992,6 +22135,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     { id: "shadow", label: "Sombra", color: "#1a1a1a" },
     { id: "gold", label: "Dourado", color: "#b45309" },
     { id: "red", label: "Vermelho", color: "#dc2626" },
+    { id: "green", label: "Verde", color: "#16a34a" },
+    { id: "purple", label: "Roxo", color: "#7c3aed" },
+    { id: "neon", label: "Neon", color: "#0ea5e9" },
+    { id: "retro", label: "Retrô", color: "#f59e0b" },
+    { id: "gradient", label: "Degradê", color: "#7c3aed" },
+    { id: "emboss", label: "Relevo", color: "#6b7280" },
   ];
   const insertWordArt = (styleId) => {
     const text = prompt("Texto do WordArt:", "SEU TEXTO");
@@ -22122,11 +22271,40 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     handleBodyInput();
   };
   const tableSetVAlign = (v) => { if (activeCell) { activeCell.style.verticalAlign = v; handleBodyInput(); } };
+  // Aplica o estilo (TABLE_STYLES) + as opções da tabela (cabeçalho, faixas, primeira coluna) em todas as células.
+  // Refaz o visual das células: sombreamento/bordas manuais anteriores são substituídos pelo estilo.
+  const paintTable = (table) => {
+    const st = TABLE_STYLES.find(x => x.id === (table.dataset.tstyle || "grid")) || TABLE_STYLES[0];
+    const hdr = table.dataset.theader !== "0" && !!st.head;
+    const bands = table.dataset.tbands !== "0" && !!st.band;
+    const firstCol = table.dataset.tfirstcol === "1";
+    const w = st.width || 1;
+    table.classList.remove("word-table-noborder");
+    Array.from(table.rows).forEach((tr, ri) => Array.from(tr.cells).forEach((c, ci) => {
+      const isH = hdr && ri === 0;
+      const di = ri - (hdr ? 1 : 0);
+      c.style.backgroundColor = isH ? (st.head.bg || "") : (bands && di % 2 === 0 ? st.band : "");
+      c.style.color = isH && st.head.color ? st.head.color : "";
+      c.style.fontWeight = isH || (firstCol && ci === 0) ? "700" : "";
+      c.style.border = ""; c.style.borderTop = ""; c.style.borderBottom = ""; c.style.borderLeft = ""; c.style.borderRight = "";
+      if (!st.border) c.style.border = "none";
+      else if (st.rowsOnly) { c.style.borderLeft = "none"; c.style.borderRight = "none"; c.style.borderTop = `${w}px solid ${st.border}`; c.style.borderBottom = `${w}px solid ${isH && st.head.rule ? st.head.rule : st.border}`; if (isH && st.head.rule) c.style.borderBottomWidth = "2px"; }
+      else c.style.border = `${w}px solid ${st.border}`;
+    }));
+  };
   const tableSetStyle = (style) => {
     const table = activeCell?.closest("table");
     if (!table) return;
-    table.classList.remove("word-table-style-plain", "word-table-style-striped", "word-table-style-strong");
-    table.classList.add("word-table-style-" + style);
+    table.dataset.tstyle = style;
+    paintTable(table);
+    handleBodyInput();
+  };
+  const tableToggleOpt = (key) => {
+    const table = activeCell?.closest("table");
+    if (!table) return;
+    const def = key === "tfirstcol" ? "0" : "1";
+    table.dataset[key] = (table.dataset[key] ?? def) === "1" ? "0" : "1";
+    paintTable(table);
     handleBodyInput();
   };
   const tableToggleBorders = () => {
@@ -22296,11 +22474,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!commentPopover) { alert("Abra um comentário (clique nele no texto) para excluí-lo."); return; }
     deleteComment(commentPopover.id);
   };
-  const currentTheme = WORD_THEMES.find(t => t.key === themeKey) || WORD_THEMES[0];
+  const currentTheme = WORD_THEMES.find(t => t.key === themeKey) || (/^#[0-9a-f]{6}$/i.test(themeKey) ? { key: themeKey, label: "Personalizado", accent: themeKey } : WORD_THEMES[0]);
   const pageBorderStyle = (key) => {
     if (key === "simples") return { border: "1.5px solid var(--accent)" };
     if (key === "dupla") return { border: "5px double var(--accent)" };
     if (key === "sombreada") return { border: "1.5px solid var(--accent)", boxShadow: "0 0 0 6px var(--accent-soft-bg, rgba(0,0,0,.06))" };
+    if (key === "tracejada") return { border: "2px dashed var(--accent)" };
+    if (key === "pontilhada") return { border: "3px dotted var(--accent)" };
+    if (key === "grossa") return { border: "8px solid var(--accent)" };
+    if (key === "preta") return { border: "1.5px solid #1a1a1a" };
+    if (key === "pretadupla") return { border: "5px double #1a1a1a" };
     return {};
   };
 
@@ -22601,6 +22784,72 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!list) { document.execCommand(ordered ? "insertOrderedList" : "insertUnorderedList"); list = find(); }
     if (list && type) list.style.listStyleType = type;
     handleBodyInput();
+  };
+
+  // Estilos extras da galeria (Página Inicial › Estilos). Tudo como formatação direta (inline), para exportar igual.
+  const applyCharStyle = (css) => {
+    const el = bodyRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || !sel.rangeCount || sel.isCollapsed || !el.contains(sel.anchorNode)) { alert("Selecione o texto a formatar."); return; }
+    el.focus();
+    const range = sel.getRangeAt(0);
+    const span = document.createElement("span");
+    Object.assign(span.style, css);
+    span.appendChild(range.extractContents());
+    range.insertNode(span);
+    handleBodyInput();
+  };
+  const BLOCK_STYLES = {
+    quoteintense: { tag: "BLOCKQUOTE", css: { borderTop: "2px solid var(--word-theme-accent, #2f6fed)", borderBottom: "2px solid var(--word-theme-accent, #2f6fed)", borderLeft: "none", padding: "10px 24px", textAlign: "center", fontStyle: "italic", color: "var(--word-theme-accent, #2f6fed)", margin: "14px 24px" } },
+    code: { tag: "P", css: { fontFamily: "Consolas, 'Courier New', monospace", background: "#f3f4f6", padding: "6px 10px", borderRadius: "4px", fontSize: "10pt", whiteSpace: "pre-wrap" } },
+    caption: { tag: "P", css: { fontStyle: "italic", fontSize: "9pt", color: "#44546a" } },
+    listpara: { tag: "P", css: { marginLeft: "36px" } },
+  };
+  const applyBlockStyle = (key) => {
+    const el = bodyRef.current;
+    const st = BLOCK_STYLES[key];
+    if (!el || !st) return;
+    el.focus();
+    document.execCommand("formatBlock", false, st.tag);
+    const sel = window.getSelection();
+    let n = sel?.rangeCount ? sel.getRangeAt(0).startContainer : null;
+    if (n && n.nodeType === 3) n = n.parentElement;
+    const block = n?.closest?.(st.tag.toLowerCase() + ",p,div");
+    if (block && el.contains(block)) {
+      ["fontFamily", "background", "padding", "borderRadius", "fontSize", "whiteSpace", "fontStyle", "color", "borderTop", "borderBottom", "borderLeft", "textAlign", "margin", "marginLeft"].forEach(k => { block.style[k] = ""; });
+      Object.assign(block.style, st.css);
+    }
+    handleBodyInput();
+  };
+
+  // Lista atual (ol/ul) sob o cursor.
+  const currentList = (ordered) => {
+    const el = bodyRef.current;
+    let n = window.getSelection()?.anchorNode;
+    if (n && n.nodeType === 3) n = n.parentElement;
+    const l = n?.closest?.(ordered ? "ol" : "ul");
+    return l && el?.contains(l) ? l : null;
+  };
+  // "Definir Valor de Numeração…": muda o número inicial da lista atual (1 = reiniciar).
+  const setListStart = (n) => {
+    bodyRef.current?.focus();
+    const l = currentList(true);
+    if (!l) return;
+    if (n === 1) l.removeAttribute("start"); else l.setAttribute("start", String(n));
+    handleBodyInput();
+  };
+  const askListStart = () => {
+    const l = currentList(true);
+    if (!l) { alert("Coloque o cursor dentro de uma lista numerada."); return; }
+    const v = parseInt(prompt("Começar a numeração em:", l.getAttribute("start") || "1"), 10);
+    if (Number.isFinite(v) && v >= 0 && v <= 9999) setListStart(v);
+  };
+  // "Definir Novo Marcador…": qualquer símbolo ou emoji como marcador da lista atual.
+  const askListBullet = () => {
+    const v = prompt("Símbolo do marcador (um caractere ou emoji):", "➤");
+    const sym = (v || "").trim();
+    if (!sym || sym.length > 4) return;
+    applyListStyle(false, `"${sym.replace(/["\\]/g, "")}  "`);
   };
 
   const setParaDir = (dir) => {
@@ -22994,8 +23243,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const listObjects = () => Array.from(bodyRef.current?.querySelectorAll("img, .word-textbox, .word-chart, .word-shape, .word-smartart") || []);
 
   // ---- Design: formatação do documento ----
-  const WORD_THEME_FONTS = [["Office (Calibri)", "Calibri"], ["Clássica (Times New Roman)", "Times New Roman"], ["Moderna (Arial)", "Arial"], ["Elegante (Georgia)", "Georgia"], ["Técnica (Courier New)", "Courier New"], ["Humanista (Verdana)", "Verdana"]];
-  const WORD_PARA_SPACINGS = [["Padrão", 0, 8], ["Compacto", 0, 0], ["Aberto", 4, 10], ["Relaxado", 6, 14]];
+  const WORD_THEME_FONTS = [["Office (Calibri)", "Calibri"], ["Clássica (Times New Roman)", "Times New Roman"], ["Moderna (Arial)", "Arial"], ["Elegante (Georgia)", "Georgia"], ["Técnica (Courier New)", "Courier New"], ["Humanista (Verdana)", "Verdana"], ["Livro (Cambria)", "Cambria"], ["Editorial (Garamond)", "Garamond"], ["Palatino (Palatino Linotype)", "Palatino Linotype"], ["Limpa (Segoe UI)", "Segoe UI"], ["Código (Consolas)", "Consolas"], ["Neutra (Helvetica)", "Helvetica"]];
+  const WORD_PARA_SPACINGS = [["Padrão", 0, 8], ["Compacto", 0, 0], ["Aberto", 4, 10], ["Relaxado", 6, 14], ["Duplo", 12, 12], ["Só depois (6 pt)", 0, 6], ["Só depois (12 pt)", 0, 12]];
   const eachBlock = (fn) => { Array.from(bodyRef.current?.children || []).forEach(b => { if (!b.classList.contains("word-page-meta")) fn(b); }); };
   const applyThemeFont = (font) => { eachBlock(b => { b.style.fontFamily = font; }); try { localStorage.setItem("libano.word.defaultFont", font); } catch {} handleBodyInput(); };
   const applyParaSpacing = (before, after) => { eachBlock(b => { if (/^(P|DIV|UL|OL|H[1-6]|BLOCKQUOTE)$/.test(b.tagName)) { b.style.marginTop = before + "pt"; b.style.marginBottom = after + "pt"; } }); handleBodyInput(); };
@@ -23779,6 +24028,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                       <button onClick={() => applyListStyle(false, "disc")}>• Círculo cheio</button>
                       <button onClick={() => applyListStyle(false, "circle")}>○ Círculo vazio</button>
                       <button onClick={() => applyListStyle(false, "square")}>▪ Quadrado</button>
+                      <button onClick={() => applyListStyle(false, '"➤  "')}>➤ Seta</button>
+                      <button onClick={() => applyListStyle(false, '"✓  "')}>✓ Marca de seleção</button>
+                      <button onClick={() => applyListStyle(false, '"◆  "')}>◆ Losango</button>
+                      <button onClick={() => applyListStyle(false, '"★  "')}>★ Estrela</button>
+                      <button onClick={() => applyListStyle(false, '"–  "')}>– Travessão</button>
+                      <button onClick={askListBullet}>Definir Novo Marcador…</button>
                       <button onClick={() => applyListStyle(false, "none")}>Nenhum</button>
                     </div>}
                   </div>
@@ -23790,6 +24045,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                       <button onClick={() => applyListStyle(true, "upper-alpha")}>A. B. C.</button>
                       <button onClick={() => applyListStyle(true, "lower-alpha")}>a. b. c.</button>
                       <button onClick={() => applyListStyle(true, "lower-roman")}>i. ii. iii.</button>
+                      <button onClick={() => applyListStyle(true, "decimal-paren")}>1) 2) 3)</button>
+                      <button onClick={() => applyListStyle(true, "lower-alpha-paren")}>a) b) c)</button>
+                      <button onClick={() => applyListStyle(true, "decimal-leading-zero")}>01. 02. 03.</button>
+                      <button onClick={() => applyListStyle(true, "lower-greek")}>α. β. γ.</button>
+                      <button onClick={askListStart}>Definir Valor de Numeração…</button>
+                      <button onClick={() => setListStart(1)}>Reiniciar em 1</button>
                       <button onClick={() => applyListStyle(true, "none")}>Nenhum</button>
                     </div>}
                   </div>
@@ -23816,7 +24077,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   <button type="button" className={"rbIco" + (fmtState.dir === "rtl" ? " active" : "")} data-tip="Direção do Texto: Direita para a Esquerda" data-tipdesc="Define a direção do parágrafo atual como direita para a esquerda." onClick={() => setParaDir("rtl")}><PilcrowLeft size={15}/></button>
                   {rbm("linespacing", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Espaçamento entre Linhas e Parágrafos" data-tipdesc="Controla a distância vertical entre as linhas de texto." onClick={t}><WrapText size={14}/><ChevronDown size={9}/></button>, <>
                     {WORD_LINE_HEIGHTS.map(v => <button key={v} onClick={() => fmt.applyLineHeight(v)}>{v}</button>)}
+                    <button onClick={() => { const v = parseFloat(String(prompt("Espaçamento entre linhas (múltiplo, ex.: 1,25):", "1.15") || "").replace(",", ".")); if (v >= 0.5 && v <= 10) fmt.applyLineHeight(String(v)); setRbMenu(null); }}>Outro espaçamento…</button>
                     <button onClick={() => fmt.setParagraphSpacingBefore(12)}>Adicionar Espaço Antes do Parágrafo</button>
+                    <button onClick={() => fmt.setParagraphSpacing(10)}>Adicionar Espaço Após o Parágrafo</button>
                     <button onClick={() => fmt.setParagraphSpacing(0)}>Remover Espaço Após o Parágrafo</button>
                   </>)}
                   <div className="wordDropdownWrap">
@@ -23825,6 +24088,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   </div>
                   {rbm("borders", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Bordas" data-tipdesc="Adiciona ou remove bordas ao redor do texto ou parágrafo selecionado." onClick={t}><Frame size={14}/><ChevronDown size={9}/></button>, <>
                     {WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}
+                    <button onClick={() => openDlg("borders", { top: false, bottom: true, left: false, right: false, style: "solid", width: 1, color: "#1a1a1a", pad: 4, fill: "" })}>Bordas e Sombreamento…</button>
                   </>)}
                 </div>
               </div>
@@ -23839,7 +24103,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   ["Título 3", "h3", () => fmt.applyHeading("H3"), "Aplica o estilo de título de nível 3, usado para subdivisões menores."],
                   ["Título", "title", () => fmt.applyParagraphStyle("title"), "Aplica o estilo de título principal do documento, com destaque visual maior."],
                   ["Subtítulo", "subtitle", () => fmt.applyParagraphStyle("subtitle"), "Aplica o estilo de subtítulo, usado logo abaixo do título principal."],
+                  ["Título 4", "h4", () => fmt.applyHeading("H4"), "Aplica o estilo de título de nível 4."],
                   ["Citação", "quote", () => fmt.applyHeading("BLOCKQUOTE"), "Aplica o estilo de citação em bloco, destacando o trecho selecionado do restante do texto."],
+                  ["Citação Intensa", "quoteintense", () => applyBlockStyle("quoteintense"), "Citação em destaque: centralizada, em itálico, com linhas acima e abaixo na cor do tema."],
+                  ["Ênfase Sutil", "emphsubtle", () => applyCharStyle({ fontStyle: "italic", color: "#6b7280" }), "Itálico em cinza, para destacar um trecho sem chamar muita atenção. Aplica ao texto selecionado."],
+                  ["Ênfase", "emph", () => applyCharStyle({ fontStyle: "italic" }), "Itálico no texto selecionado."],
+                  ["Forte", "strong", () => applyCharStyle({ fontWeight: "700" }), "Negrito no texto selecionado."],
+                  ["Referência Intensa", "refintense", () => applyCharStyle({ fontWeight: "700", fontVariant: "small-caps", letterSpacing: "0.5px", color: "var(--word-theme-accent, #2f6fed)" }), "Versalete em negrito na cor do tema. Aplica ao texto selecionado."],
+                  ["Código", "code", () => applyBlockStyle("code"), "Parágrafo em fonte monoespaçada com fundo cinza, para trechos de código."],
+                  ["Legenda", "caption", () => applyBlockStyle("caption"), "Texto pequeno em itálico, usado sob figuras e tabelas."],
+                  ["Parágrafo da Lista", "listpara", () => applyBlockStyle("listpara"), "Parágrafo recuado, como item de uma lista sem marcador."],
                 ].map(([label, cls, fn, desc]) => (
                   <button key={label} type="button" className={"rbStyleTile rbStyle-" + cls} data-tip={label} data-tipdesc={desc} onClick={fn}>
                     <span className="rbStylePrev">AaBbCc</span>
@@ -23896,7 +24169,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <RbGroup label="Páginas">
               <div className="rbStack">
                 {rbm("cover", (t) => <RbSm icon={BookOpen} label="Folha de Rosto" chevron tip="Folha de Rosto" desc="Insere uma página de rosto no início do documento, com título, subtítulo e data." onClick={t}/>, <>
-                  <button onClick={insertCoverPage}>Inserir Folha de Rosto</button>
+                  {COVER_STYLES.map(([k, l]) => <button key={k} onClick={() => insertCoverPage(k)}>{l}</button>)}
                   <button onClick={removeCoverPage}>Remover Folha de Rosto Atual</button>
                 </>)}
                 <RbSm icon={FileText} label="Página em Branco" tip="Página em Branco" desc="Insere uma página vazia no ponto onde está o cursor." onClick={insertBlankPage}/>
@@ -23924,8 +24197,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={ImageIcon} label="Imagens" tip="Imagem" desc="Insere uma imagem do seu computador no ponto onde está o cursor." onClick={() => imageInputRef.current?.click()}/>
               <div className="rbStack">
                 {rbm("shapes", (t) => <RbSm icon={Square} label="Formas" chevron tip="Formas" desc="Insere uma forma (retângulo, elipse, seta...) que pode ser redimensionada e recolorida." onClick={t}/>, <>
-                  {SHAPE_PRESETS.map(p => <button key={p.id} onClick={() => insertShape(p.id)}>{p.label}</button>)}
-                </>)}
+                  {[...new Set(SHAPE_PRESETS.map(p => p.cat))].map(cat => (
+                    <React.Fragment key={cat}>
+                      <div className="wordDropdownEmpty" style={{ gridColumn: "1 / -1" }}>{cat}</div>
+                      {SHAPE_PRESETS.filter(p => p.cat === cat).map(p => (
+                        <button key={p.id} className="emojiBtn wordShapeBtn" title={p.label} onClick={() => insertShape(p.id)}>
+                          <svg viewBox={p.viewBox || "0 0 100 100"} width="26" height="26" dangerouslySetInnerHTML={{ __html: p.svg("#5b9dff", "currentColor") }}/>
+                        </button>
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </>, "emojiPopover rbPop")}
                 {rbm("icons", (t) => <RbSm icon={Star} label="Ícones" chevron tip="Ícones" desc="Insere um ícone ou pictograma, que pode ser aumentado como qualquer texto." onClick={t}/>, <>
                   {WORD_ICON_GLYPHS.map(g => <button key={g} className="emojiBtn" onClick={() => fmt.insertIcon(g)}>{g}</button>)}
                 </>, "emojiPopover rbPop")}
@@ -23962,11 +24244,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <RbGroup label="Cabeçalho e Rodapé">
               <div className="rbStack">
                 {rbm("header", (t) => <RbSm icon={PanelTop} label="Cabeçalho" chevron tip="Cabeçalho" desc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={t}/>, <>
-                  <button onClick={() => fmt.insertHeaderFooterBand("header")}>Inserir Cabeçalho</button>
+                  {HF_STYLES.map(([k, l]) => <button key={k} onClick={() => fmt.insertHeaderFooterBand("header", undefined, k)}>{l}</button>)}
                   <button className={bodyRef.current?.querySelector(".word-header-band-first, .word-footer-band-first") ? "active" : ""} onClick={fmt.togglePrimeiraPaginaDiferente}>Primeira Página Diferente</button>
                 </>)}
                 {rbm("footer", (t) => <RbSm icon={PanelBottom} label="Rodapé" chevron tip="Rodapé" desc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={t}/>, <>
-                  <button onClick={() => fmt.insertHeaderFooterBand("footer")}>Inserir Rodapé</button>
+                  {HF_STYLES.map(([k, l]) => <button key={k} onClick={() => fmt.insertHeaderFooterBand("footer", undefined, k)}>{l}</button>)}
                 </>)}
                 {rbm("pagenum", (t) => <RbSm icon={FileDigit} label="Número de Página" chevron tip="Número de Página" desc="Insere a numeração automática das páginas no cabeçalho ou no rodapé." onClick={t}/>, <>
                   <div className="wordDropdownEmpty">No cabeçalho</div>
@@ -23997,7 +24279,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               </div>
               <div className="rbStack">
                 <RbSm icon={PenLine} label="Linha de Assinatura" tip="Linha de Assinatura" desc="Insere uma linha para assinatura, com um X ao lado." onClick={fmt.insertSignatureLine}/>
-                <RbSm icon={CalendarDays} label="Data e Hora" tip="Data e Hora" desc="Insere a data e a hora atuais no ponto onde está o cursor." onClick={fmt.insertDateTime}/>
+                {rbm("datetime", (t) => <RbSm icon={CalendarDays} label="Data e Hora" chevron tip="Data e Hora" desc="Insere a data ou a hora atuais no ponto onde está o cursor, no formato escolhido." onClick={t}/>, <>
+                  {DATE_FORMATS.map(([label, f], i) => <button key={label} onClick={() => fmt.insertDateTime(i)}><span style={{ color: "var(--text-3)", fontSize: 11 }}>{label}</span><br/>{f(new Date())}</button>)}
+                </>)}
                 <RbSm icon={FileInput} label="Objeto" tip="Texto de Arquivo" desc="Insere no documento o texto de um arquivo (.txt, .md, .csv, .html)." onClick={fmt.insertTextFromFile}/>
               </div>
             </RbGroup>
@@ -24072,6 +24356,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                       <span className="wordThemeSwatch" style={{ background: t.accent }}/> {t.label}
                     </button>
                   ))}
+                  <ColorMore label="Cor personalizada…" current={/^#/.test(themeKey) ? themeKey : undefined} onPick={applyTheme}/>
                 </div>}
               </div>
             </RbGroup>
@@ -24079,6 +24364,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <div className="rbStack">
                 {rbm("themecolors", (t) => <RbSm icon={Palette} label="Cores" chevron tip="Cores do Tema" desc="Troca o conjunto de cores usado nos títulos e destaques do documento." onClick={t}/>, <>
                   {WORD_THEMES.map(th => <button key={th.key} className={themeKey === th.key ? "active" : ""} onClick={() => applyTheme(th.key)}><span className="wordThemeSwatch" style={{ background: th.accent }}/> {th.label}</button>)}
+                  <ColorMore label="Cor personalizada…" current={/^#/.test(themeKey) ? themeKey : undefined} onPick={applyTheme}/>
                 </>)}
                 {rbm("themefonts", (t) => <RbSm icon={CaseSensitive} label="Fontes" chevron tip="Fontes do Tema" desc="Aplica uma mesma fonte a todos os blocos do documento." onClick={t}/>, <>
                   {WORD_THEME_FONTS.map(([n, f]) => <button key={f} style={{ fontFamily: f }} onClick={() => applyThemeFont(f)}>{n}</button>)}
@@ -24673,9 +24959,15 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           {ribbonTab === "tabledesign" && activeCell && (<>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button className="wordTextBtn" onClick={() => tableSetStyle("plain")}>Simples</button>
-                <button className="wordTextBtn" onClick={() => tableSetStyle("striped")}>Listrada</button>
-                <button className="wordTextBtn" onClick={() => tableSetStyle("strong")}>Grade Forte</button>
+                {(() => { const tb = activeCell.closest("table"); const cur = tb?.dataset.tstyle || ""; const opt = (k, def) => (tb?.dataset[k] ?? def) === "1"; return (<>
+                  {TABLE_STYLES.slice(0, 5).map(st => <button key={st.id} type="button" className={"wordTableStyleBtn" + (cur === st.id ? " active" : "")} data-tip={st.label} data-tipdesc="Aplica este estilo à tabela inteira (substitui o sombreamento e as bordas das células)." onClick={() => tableSetStyle(st.id)}>{tableStyleThumb(st)}</button>)}
+                  {rbm("tstyles", (t) => <button type="button" className="wordTextBtn" data-tip="Mais Estilos" data-tipdesc="Mostra todos os estilos de tabela." onClick={t}>Mais <ChevronDown size={11}/></button>, <>
+                    {TABLE_STYLES.map(st => <button key={st.id} className={cur === st.id ? "active" : ""} onClick={() => tableSetStyle(st.id)} style={{ display: "flex", alignItems: "center", gap: 8 }}>{tableStyleThumb(st)} {st.label}</button>)}
+                  </>)}
+                  <button type="button" className={"wordTextBtn" + (opt("theader", "1") ? " active" : "")} data-tip="Linha de Cabeçalho" data-tipdesc="Destaca a primeira linha como cabeçalho (conforme o estilo)." onClick={() => tableToggleOpt("theader")}>Cabeçalho</button>
+                  <button type="button" className={"wordTextBtn" + (opt("tbands", "1") ? " active" : "")} data-tip="Linhas em Faixas" data-tipdesc="Alterna a cor de fundo das linhas (conforme o estilo)." onClick={() => tableToggleOpt("tbands")}>Faixas</button>
+                  <button type="button" className={"wordTextBtn" + (opt("tfirstcol", "0") ? " active" : "")} data-tip="Primeira Coluna" data-tipdesc="Coloca a primeira coluna em negrito." onClick={() => tableToggleOpt("tfirstcol")}>1ª Coluna</button>
+                </>); })()}
               </div>
               <span className="wordRibbonGroupLabel">Estilos de Tabela</span>
             </div>
@@ -25355,6 +25647,18 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           </WordModal>
         )}
 
+        {dlg === "borders" && (
+          <WordModal title="Bordas e Sombreamento" onClose={closeDlg} actions={<><button className="ghost" onClick={closeDlg}>Cancelar</button><button onClick={() => { restoreRange(); fmt.applyBorderCustom({ ...dlgForm, width: Number(dlgForm.width) || 1, pad: Number(dlgForm.pad) || 0 }); closeDlg(); }}>OK</button></>}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              {[["top", "Superior"], ["bottom", "Inferior"], ["left", "Esquerda"], ["right", "Direita"]].map(([k, l]) => <label key={k}><input type="checkbox" checked={!!dlgForm[k]} onChange={e => setF(k, e.target.checked)}/> {l}</label>)}
+            </div>
+            <label>Estilo <select value={dlgForm.style || "solid"} onChange={e => setF("style", e.target.value)}><option value="solid">Contínua</option><option value="dashed">Tracejada</option><option value="dotted">Pontilhada</option><option value="double">Dupla</option><option value="groove">Sulcada</option><option value="ridge">Em relevo</option></select></label>
+            <label>Espessura (px) <input type="number" min="0.5" max="12" step="0.5" value={dlgForm.width ?? 1} onChange={e => setF("width", e.target.value)} style={{ width: 70 }}/></label>
+            <label>Cor <input type="color" value={dlgForm.color || "#1a1a1a"} onChange={e => setF("color", e.target.value)}/></label>
+            <label>Distância do texto (px) <input type="number" min="0" max="48" value={dlgForm.pad ?? 4} onChange={e => setF("pad", e.target.value)} style={{ width: 70 }}/></label>
+            <label>Sombreamento <input type="color" value={dlgForm.fill || "#ffffff"} onChange={e => setF("fill", e.target.value)}/> <button type="button" className="ghost" onClick={() => setF("fill", "")}>Sem cor</button></label>
+          </WordModal>
+        )}
         {dlg === "symbols" && <WordSymbolDialog onClose={closeDlg} onInsert={(ch) => { restoreRange(); fmt.insertSymbol(ch); saveRange(); }}/>}
         {dlg === "emojis" && <WordSymbolDialog emoji onClose={closeDlg} onInsert={(ch) => { restoreRange(); fmt.insertEmoji(ch); saveRange(); }}/>}
 

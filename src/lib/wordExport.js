@@ -226,7 +226,7 @@ function parseBlocks(html) {
         valign: td.style.verticalAlign || null,
       }))
     );
-    if (rows.length) blocks.push({ type: "table", rows, repeatHeader: tableEl.classList.contains("word-table-repeatheader"), noBorder: tableEl.classList.contains("word-table-noborder") });
+    if (rows.length) blocks.push({ type: "table", rows, repeatHeader: tableEl.classList.contains("word-table-repeatheader"), noBorder: tableEl.classList.contains("word-table-noborder") || tableEl.dataset.tstyle === "none" });
   };
 
   Array.from(container.children).forEach((el) => {
