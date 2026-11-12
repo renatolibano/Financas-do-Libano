@@ -8,6 +8,7 @@ import {
   SimpleField,
 } from "docx";
 import { parseEquation, toLinear } from "./wordMath";
+import { PAGE_SIZES } from "./wordPageSizes";
 
 // ---------------------------------------------------------------------------
 // Exportação do "Word" (Área de Estudos) como .docx de verdade (preserva
@@ -484,7 +485,7 @@ export async function downloadWordDocx(doc) {
     sections: [{
       properties: {
         page: {
-          size: { orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+          size: { ...(PAGE_SIZES[doc.page_size] ? { width: cmToTwips(PAGE_SIZES[doc.page_size].cm[0]), height: cmToTwips(PAGE_SIZES[doc.page_size].cm[1]) } : {}), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
           margin: { top: marginTwips, bottom: marginTwips, left: leftTwips, right: rightTwips },
         },
         titlePage: hasFirstPage,
@@ -512,7 +513,7 @@ function blockToLines(b) {
 
 export async function downloadWordPdf(doc) {
   const landscape = doc.orientation === "paisagem";
-  const format = doc.page_size === "carta" ? "letter" : "a4";
+  const format = PAGE_SIZES[doc.page_size]?.pdf || "a4";
   const marginPt = doc.margins === "estreita" ? 36 : doc.margins === "larga" ? 72 : 54;
   const cmToPt = (cm) => cm * 28.3464567;
   const marginLeftPt = doc.margin_left != null ? cmToPt(doc.margin_left) : marginPt;

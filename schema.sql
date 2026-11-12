@@ -941,13 +941,18 @@ create table if not exists word_documents (
   title text not null default 'Documento sem título',
   content text not null default '',
   preview text not null default '',
-  page_size text not null default 'a4' check (page_size in ('a4','carta')),
+  page_size text not null default 'a4' check (page_size in ('a4','carta','oficio','tabloide','executivo','a3','a5','b5')),
   orientation text not null default 'retrato' check (orientation in ('retrato','paisagem')),
-  margins text not null default 'normal' check (margins in ('estreita','normal','larga')),
+  margins text not null default 'normal' check (margins in ('estreita','moderada','normal','larga')),
   sort_order int,
   updated_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
+-- Bancos já criados: amplia os valores aceitos (novos tamanhos de papel e margem Moderada).
+alter table word_documents drop constraint if exists word_documents_page_size_check;
+alter table word_documents add constraint word_documents_page_size_check check (page_size in ('a4','carta','oficio','tabloide','executivo','a3','a5','b5'));
+alter table word_documents drop constraint if exists word_documents_margins_check;
+alter table word_documents add constraint word_documents_margins_check check (margins in ('estreita','moderada','normal','larga'));
 alter table word_documents enable row level security;
 -- Margem esquerda/direita personalizadas (em cm), definidas arrastando a
 -- régua do editor. Nulo = segue o valor do preset em `margins` acima.

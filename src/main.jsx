@@ -90,6 +90,8 @@ import {
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
+import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
+import { PAGE_SIZES, pageSizeLabel, pageSizeCmText } from "./lib/wordPageSizes";
 import WordRuler from "./components/WordRuler";
 import { compileFind, findAll, parseReplace, expandReplace, expandRegexReplace, replaceNeedsClipboard, DEFAULT_FIND_OPTS } from "./lib/wordFindPattern";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
@@ -18279,9 +18281,64 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
 // <NoteLinkFloatingUI/> sem duplicar aquele componente.
 
 const WORD_TEXT_COLORS = ["#1a1a1a", "#f5f7fb", "#ff5c5c", "#ff8a80", "#ffb74a", "#ffe066", "#69db7c", "#5b9dff", "#c084fc"];
-const WORD_FONTS = ["Calibri", "Arial", "Georgia", "Times New Roman", "Courier New", "Verdana", "Trebuchet MS"];
-const WORD_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 72];
-const WORD_LINE_HEIGHTS = ["1", "1.15", "1.5", "2", "2.5"];
+
+// Seletor de cores no padrão do Word: Cores do Tema (base + 5 variações), Cores Padrão, Recentes,
+// "Sem cor" (opcional) e "Mais Cores…" (seletor completo do sistema, com qualquer cor/hex).
+const OFFICE_THEME_COLORS = ["#ffffff", "#000000", "#e7e6e6", "#44546a", "#4472c4", "#ed7d31", "#a5a5a5", "#ffc000", "#5b9bd5", "#70ad47"];
+const OFFICE_STD_COLORS = ["#c00000", "#ff0000", "#ffc000", "#ffff00", "#92d050", "#00b050", "#00b0f0", "#0070c0", "#002060", "#7030a0"];
+const mixHex = (hex, p, toward) => {
+  const n = parseInt(hex.slice(1), 16);
+  return "#" + [n >> 16 & 255, n >> 8 & 255, n & 255].map(v => Math.round(v + (toward - v) * p).toString(16).padStart(2, "0")).join("");
+};
+const themeShade = (hex, row) => { // row 1..5
+  if (hex === "#ffffff") return mixHex(hex, [0.05, 0.15, 0.25, 0.35, 0.5][row - 1], 0);
+  if (hex === "#000000") return mixHex(hex, [0.5, 0.35, 0.25, 0.15, 0.05][row - 1], 255);
+  return row <= 3 ? mixHex(hex, [0.8, 0.6, 0.4][row - 1], 255) : mixHex(hex, [0.25, 0.5][row - 4], 0);
+};
+const RECENT_COLORS_KEY = "libano-word-recent-colors";
+const loadRecentColors = () => { try { const a = JSON.parse(localStorage.getItem(RECENT_COLORS_KEY) || "[]"); return Array.isArray(a) ? a.filter(c => /^#[0-9a-f]{6}$/i.test(c)).slice(0, 10) : []; } catch { return []; } };
+const pushRecentColor = (c) => { try { const l = [c, ...loadRecentColors().filter(x => x.toLowerCase() !== c.toLowerCase())].slice(0, 10); localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(l)); } catch { /* armazenamento indisponível */ } };
+
+function ColorMore({ onPick, current, label }) {
+  const ref = useRef(null);
+  const cb = useRef(onPick);
+  cb.current = onPick;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const h = () => cb.current(el.value);
+    el.addEventListener("change", h);
+    return () => el.removeEventListener("change", h);
+  }, []);
+  return (
+    <button type="button" className={label ? "wcpMore" : "colorSwatch colorSwatchMore"} title="Mais Cores…" onClick={() => ref.current?.click()}>
+      {label || "+"}
+      <input ref={ref} type="color" tabIndex={-1} aria-hidden="true" defaultValue={/^#[0-9a-f]{6}$/i.test(current || "") ? current : "#4f8cff"} className="wcpNative"/>
+    </button>
+  );
+}
+
+function WordColorPicker({ onPick, noneLabel, noneValue = "", current }) {
+  const [recents] = useState(loadRecentColors);
+  const pick = (c) => { pushRecentColor(c); onPick(c); };
+  const sw = (c, key, title) => <button key={key || c} type="button" className={"wcpSwatch" + (current && c.toLowerCase() === current.toLowerCase() ? " wcpActive" : "")} style={{ background: c }} title={title || c} onClick={() => pick(c)}/>;
+  return (
+    <div className="colorPopover rbPop wcpPop" onClick={e => e.stopPropagation()}>
+      {noneLabel && <button type="button" className="wcpNone" onClick={() => onPick(noneValue)}><span className="wcpNoneBox"/>{noneLabel}</button>}
+      <div className="wcpTitle">Cores do Tema</div>
+      <div className="wcpGrid">
+        {[0, 1, 2, 3, 4, 5].flatMap(row => OFFICE_THEME_COLORS.map((c, i) => { const col = row === 0 ? c : themeShade(c, row); return sw(col, row + "-" + i); }))}
+      </div>
+      <div className="wcpTitle">Cores Padrão</div>
+      <div className="wcpGrid">{OFFICE_STD_COLORS.map(c => sw(c))}</div>
+      {recents.length > 0 && <><div className="wcpTitle">Cores Recentes</div><div className="wcpGrid">{recents.map(c => sw(c, "r" + c))}</div></>}
+      <ColorMore label="Mais Cores…" current={current} onPick={pick}/>
+    </div>
+  );
+}
+const WORD_FONTS = ["Calibri", "Cambria", "Arial", "Arial Black", "Book Antiqua", "Century Gothic", "Comic Sans MS", "Consolas", "Courier New", "Garamond", "Georgia", "Helvetica", "Impact", "Lucida Console", "Palatino Linotype", "Segoe UI", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana"];
+const WORD_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32, 36, 48, 72];
+const WORD_LINE_HEIGHTS = ["1", "1.15", "1.5", "2", "2.5", "3"];
 // Sombreamento (cor de fundo do parágrafo/bloco) — grupo separado do
 // realce de texto: no Word real, "Sombreamento" fica no fim da linha de
 // alinhamento do grupo Parágrafo, ao lado de "Bordas".
@@ -20565,6 +20622,7 @@ function WordDrawDialog({ onClose, onInsert, defaultTool = "pen", defaultColor =
           {WORD_TEXT_COLORS.map(c => (
             <button key={c} className={"colorSwatch" + (color === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => setColor(c)}/>
           ))}
+          <ColorMore current={color} onPick={setColor}/>
           <input type="range" min="1" max="12" value={size} onChange={e => setSize(Number(e.target.value))} data-tip="Espessura"/>
           {selectedId && <button className="ghost" onClick={deleteSelected}><Trash2 size={14}/> Excluir traço</button>}
           <button className="ghost" onClick={clearCanvas}><Eraser size={14}/> Limpar tudo</button>
@@ -20602,6 +20660,58 @@ const WORD_TEMPLATES = [
   { name: "Ata de Reunião", html: "<h1>Ata de Reunião</h1><p><b>Data:</b> [data] &nbsp; <b>Local:</b> [local]</p><p><b>Participantes:</b> [nomes]</p><h2>Pauta</h2><ol><li>[Item]</li></ol><h2>Decisões</h2><ul><li>[Decisão]</li></ul><h2>Próximos passos</h2><ul><li>[Responsável] — [prazo]</li></ul>" },
   { name: "Contrato Simples", html: "<h1 style=\"text-align:center\">CONTRATO DE PRESTAÇÃO DE SERVIÇOS</h1><p><b>CONTRATANTE:</b> [nome, documento, endereço]</p><p><b>CONTRATADO:</b> [nome, documento, endereço]</p><h2>Cláusula 1ª — Do objeto</h2><p>[Descrição]</p><h2>Cláusula 2ª — Do valor</h2><p>[Valor e forma de pagamento]</p><h2>Cláusula 3ª — Do prazo</h2><p>[Prazo]</p><p><br></p><p>[Cidade], [data]</p><p><br></p><p>______________________ &nbsp;&nbsp;&nbsp; ______________________<br>Contratante &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Contratado</p>" },
 ];
+
+// Símbolos e Emojis (como o diálogo Símbolo do Word): subconjuntos Unicode, código do caractere em hexadecimal e recentes.
+const SYMBOL_SUBSETS = [
+  ["Latim Básico", 0x20, 0x7e], ["Latim-1 Suplemento", 0xa0, 0xff], ["Latim Estendido-A", 0x100, 0x17f], ["Latim Estendido-B", 0x180, 0x24f],
+  ["Grego e Copta", 0x370, 0x3ff], ["Cirílico", 0x400, 0x4ff], ["Pontuação Geral", 0x2000, 0x206f], ["Sobrescritos e Subscritos", 0x2070, 0x209f],
+  ["Símbolos de Moeda", 0x20a0, 0x20cf], ["Símbolos Tipo Letra", 0x2100, 0x214f], ["Formas Numéricas", 0x2150, 0x218f], ["Setas", 0x2190, 0x21ff],
+  ["Operadores Matemáticos", 0x2200, 0x22ff], ["Técnicos Diversos", 0x2300, 0x23ff], ["Desenho de Caixas", 0x2500, 0x257f], ["Formas Geométricas", 0x25a0, 0x25ff],
+  ["Símbolos Diversos", 0x2600, 0x26ff], ["Dingbats", 0x2700, 0x27bf],
+];
+const EMOJI_SUBSETS = [
+  ["Rostos", 0x1f600, 0x1f64f], ["Símbolos e Pictogramas", 0x1f300, 0x1f5ff], ["Transporte e Mapas", 0x1f680, 0x1f6ff], ["Suplementares", 0x1f900, 0x1f9ff],
+];
+const RECENT_SYMBOLS_KEY = "libano-word-recent-symbols";
+const loadRecentSymbols = () => { try { const a = JSON.parse(localStorage.getItem(RECENT_SYMBOLS_KEY) || "[]"); return Array.isArray(a) ? a.slice(0, 16) : []; } catch { return []; } };
+const subsetChars = (a, b, emoji) => {
+  const re = emoji ? /\p{Emoji_Presentation}/u : /[\p{L}\p{N}\p{S}\p{P}\p{M}]/u;
+  const out = [];
+  for (let c = a; c <= b; c++) { const ch = String.fromCodePoint(c); if (re.test(ch)) out.push(ch); }
+  return out;
+};
+
+function WordSymbolDialog({ emoji, onInsert, onClose }) {
+  const subsets = emoji ? EMOJI_SUBSETS : SYMBOL_SUBSETS;
+  const [idx, setIdx] = useState(emoji ? 0 : 12);
+  const [picked, setPicked] = useState("");
+  const [code, setCode] = useState("");
+  const [recents, setRecents] = useState(loadRecentSymbols);
+  const chars = useMemo(() => subsetChars(subsets[idx][1], subsets[idx][2], emoji), [idx, emoji]);
+  const insert = (ch) => {
+    if (!ch) return;
+    onInsert(ch);
+    const next = [ch, ...recents.filter(x => x !== ch)].slice(0, 16);
+    setRecents(next);
+    try { localStorage.setItem(RECENT_SYMBOLS_KEY, JSON.stringify(next)); } catch { /* sem armazenamento */ }
+  };
+  const fromCode = (v) => {
+    setCode(v);
+    const n = parseInt(v.replace(/^u\+?/i, ""), 16);
+    setPicked(Number.isFinite(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : "");
+  };
+  const pick = (ch) => { setPicked(ch); setCode(ch.codePointAt(0).toString(16).toUpperCase()); };
+  return (
+    <WordModal title={emoji ? "Emoji" : "Símbolo"} onClose={onClose} wide actions={<><button className="ghost" onClick={onClose}>Fechar</button><button disabled={!picked} onClick={() => insert(picked)}>Inserir</button></>}>
+      <label>Subconjunto <select value={idx} onChange={e => { setIdx(Number(e.target.value)); setPicked(""); setCode(""); }}>{subsets.map((s2, i) => <option key={s2[0]} value={i}>{s2[0]}</option>)}</select></label>
+      <div className="wordSymGrid">
+        {chars.map(ch => <button key={ch} type="button" className={picked === ch ? "active" : ""} title={"U+" + ch.codePointAt(0).toString(16).toUpperCase()} onClick={() => pick(ch)} onDoubleClick={() => insert(ch)}>{ch}</button>)}
+      </div>
+      {recents.length > 0 && <><div className="wcpTitle">Usados recentemente</div><div className="wordSymGrid wordSymRecent">{recents.map(ch => <button key={ch} type="button" onClick={() => pick(ch)} onDoubleClick={() => insert(ch)}>{ch}</button>)}</div></>}
+      <label>Código do caractere (hex) <input value={code} onChange={e => fromCode(e.target.value)} placeholder="ex.: 20AC" style={{ width: 110 }}/> <span className="wordSymPreview">{picked}</span></label>
+    </WordModal>
+  );
+}
 
 function WordModal({ title, onClose, children, actions, wide }) {
   return (
@@ -21090,6 +21200,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     return () => { el.removeEventListener("beforeinput", onBefore); el.removeEventListener("input", onIn); };
   }, []);
 
+  // Edição livre de páginas importadas de PDF: selecionar, mover, redimensionar, apagar e escrever em qualquer ponto.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return undefined;
+    return attachPdfFreeEdit(el, { before: () => acLive.current.before(), after: () => acLive.current.after() });
+  }, []);
+
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (e.altKey && !mod && (e.key === "=" || e.code === "Equal")) { e.preventDefault(); insertEquationInline(); return; }
@@ -21133,6 +21250,24 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const applyPageColor = (hex) => { setPageColor(hex); persistPageMeta({ pagecolor: hex }); setPageColorOpen(false); };
   const applyPageBorder = (key) => { setPageBorder(key); persistPageMeta({ pageborder: key }); setPageBorderOpen(false); };
   const applyWatermark = (text) => { setWatermarkText(text); persistPageMeta({ watermark: text }); setWatermarkOpen(false); };
+  // Fonte, tamanho e espessura livres (o Word aceita digitar qualquer valor nessas caixas).
+  const askCustomFont = () => {
+    const v = prompt("Nome da fonte (instalada no dispositivo):", fmtState.font || "");
+    if (v && v.trim()) fmt.applyFont(v.trim());
+    setRbMenu(null);
+  };
+  const askCustomSize = () => {
+    const v = prompt("Tamanho da fonte (pt, de 1 a 1638):", String(fmtState.size || 11));
+    const n = parseFloat(String(v || "").replace(",", "."));
+    if (Number.isFinite(n) && n >= 1 && n <= 1638) fmt.applyFontSize(n);
+    setRbMenu(null);
+  };
+  const askCustomPenSize = () => {
+    const v = prompt("Espessura (pt, de 0,25 a 72):", String(drawSize));
+    const n = parseFloat(String(v || "").replace(",", "."));
+    if (Number.isFinite(n) && n >= 0.25 && n <= 72) setDrawSize(n);
+    setRbMenu(null);
+  };
   const applyCustomWatermark = () => {
     const v = prompt("Texto da marca d'água:", watermarkText || "");
     if (v === null) return;
@@ -22169,12 +22304,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     return {};
   };
 
-  const PAGE_DIMS = {
-    a4: { w: 794, h: 1123 }, carta: { w: 816, h: 1056 },
-  };
-  const PAGE_DIMS_CM = {
-    a4: { w: 21, h: 29.7 }, carta: { w: 21.6, h: 27.9 },
-  };
+  const PAGE_DIMS = Object.fromEntries(Object.entries(PAGE_SIZES).map(([k, v]) => [k, { w: v.px[0], h: v.px[1] }]));
+  const PAGE_DIMS_CM = Object.fromEntries(Object.entries(PAGE_SIZES).map(([k, v]) => [k, { w: v.cm[0], h: v.cm[1] }]));
   const currentPageDims = () => {
     const base = PAGE_DIMS[pageSize] || PAGE_DIMS.a4;
     return orientation === "paisagem" ? { w: base.h, h: base.w } : base;
@@ -23137,9 +23268,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       <div className="rbRow">
         {rbm("mini-font", (t) => <button type="button" className="rbCombo rbComboFont" data-tip="Fonte" onClick={t}><span style={{ fontFamily: fmtState.font }}>{fmtState.font}</span><ChevronDown size={11}/></button>, <>
           {WORD_FONTS.map(f => <button key={f} className={fmtState.font === f ? "active" : ""} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}
+<button onClick={askCustomFont}>Outra fonte…</button>
         </>)}
         {rbm("mini-size", (t) => <button type="button" className="rbCombo rbComboSize" data-tip="Tamanho da Fonte" onClick={t}><span>{fmtState.size}</span><ChevronDown size={11}/></button>, <>
           {WORD_SIZES.map(s => <button key={s} className={fmtState.size === s ? "active" : ""} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}
+<button onClick={askCustomSize}>Outro tamanho…</button>
         </>)}
         <button type="button" className="rbIco" data-tip="Aumentar Fonte" onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
         <button type="button" className="rbIco" data-tip="Diminuir Fonte" onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
@@ -23156,7 +23289,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
         </div>
         <div className="wordDropdownWrap">
           <RbSplit icon={Palette} tip="Cor da Fonte" color={lastFontColor} onMain={() => fmt.applyTextColor(lastFontColor)} onArrow={() => setRbMenu(m => (m === "mini-fc" ? null : "mini-fc"))}/>
-          {rbMenu === "mini-fc" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>)}</div>}
+          {rbMenu === "mini-fc" && <WordColorPicker current={lastFontColor} onPick={(c) => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>}
         </div>
         <span className="rbMiniSep"/>
         <button type="button" className={"rbIco" + (fmtState.align === "left" ? " active" : "")} data-tip="Alinhar à Esquerda" onClick={() => fmt.exec("justifyLeft")}><AlignLeft size={15}/></button>
@@ -23358,6 +23491,58 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     return out;
   };
 
+  // Inspecionar Documento (port de file.inspect do wordcraft): lista o que o documento carrega além do
+  // texto visível, para conferir antes de compartilhar. Só leitura — não altera nada.
+  const getInspectReport = () => {
+    const el = bodyRef.current;
+    if (!el) return [];
+    const q = (sel) => el.querySelectorAll(sel).length;
+    const bandText = (sel) => Array.from(el.querySelectorAll(sel)).some(n => (n.textContent || "").trim());
+    const imgs = Array.from(el.querySelectorAll("img"));
+    const imgBytes = imgs.reduce((n, i) => n + (i.src?.startsWith("data:") ? i.src.length * 0.75 : 0), 0);
+    const rows = [];
+    const add = (label, n, hint) => { if (n) rows.push({ label, n, hint }); };
+    add("Comentários", Math.max(q(".word-comment-anchor"), comments.length), "Podem conter conversas internas.");
+    add("Inserções controladas", q(".word-ins"), "Texto novo ainda marcado como revisão.");
+    add("Exclusões controladas", q(".word-del"), "Texto apagado que continua guardado no documento.");
+    add("Notas de rodapé", q(".word-footnote-ref"));
+    add("Notas de fim", q(".word-endnote-ref"));
+    add("Campos", q(".word-field") + q(".word-mergefield"));
+    add("Controles de conteúdo", q(".word-cc"));
+    add("Indicadores", q(".word-bookmark"));
+    add("Imagens", imgs.length, imgBytes > 0 ? `≈ ${(imgBytes / 1048576).toFixed(1)} MB embutidos no documento.` : undefined);
+    if (bandText(".word-header-band, .word-header-band-first")) rows.push({ label: "Texto no cabeçalho", n: "sim" });
+    if (bandText(".word-footer-band, .word-footer-band-first")) rows.push({ label: "Texto no rodapé", n: "sim" });
+    if (watermarkText) rows.push({ label: "Marca d'água", n: "sim", hint: watermarkText });
+    if (docProtected) rows.push({ label: "Documento protegido", n: "sim" });
+    return rows;
+  };
+
+  // Verificar Compatibilidade (port de file.compatibility do wordcraft): recursos presentes no documento
+  // que o exportador .docx do Libano não grava como recurso nativo do Word (ver lib/wordExport.js).
+  const getCompatReport = () => {
+    const el = bodyRef.current;
+    if (!el) return [];
+    const checks = [
+      [".word-comment-anchor", "Comentários", "não são gravados no .docx"],
+      [".word-ins, .word-del", "Alterações controladas", "não são gravadas como revisões do Word"],
+      [".word-chart", "Gráficos", "podem não manter o gráfico editável"],
+      [".word-textbox", "Caixas de texto", "podem virar parágrafo comum"],
+      [".word-cc", "Controles de conteúdo", "podem virar texto comum"],
+      [".word-mergefield", "Campos de mala direta", "podem virar texto comum"],
+      [".word-endnote-ref", "Notas de fim", "podem não manter a numeração"],
+      [".word-columns", "Colunas", "podem não manter o layout"],
+      [".word-dropcap", "Letra capitular", "pode virar letra comum"],
+      [".word-bookmark", "Indicadores", "podem não ser gravados"],
+      [".word-signature", "Linha de assinatura", "pode virar texto comum"],
+      [".word-citation, .word-bib", "Citações e bibliografia", "podem virar texto comum"],
+      [".word-video-embed", "Vídeos", "não são gravados no .docx"],
+    ];
+    const out = [];
+    checks.forEach(([sel, label, note]) => { const n = el.querySelectorAll(sel).length; if (n) out.push({ label, n, note }); });
+    return out;
+  };
+
   return (
     <div className="readerBack">
       <div
@@ -23447,6 +23632,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <div className="wordBackstageNav">
               <button className="wordBackstageBack" onClick={closeFileMenu}><ArrowLeft size={16}/> Voltar</button>
               <button className={fileMenuSection === "info" ? "active" : ""} onClick={() => setFileMenuSection("info")}><Info size={15}/> Informações</button>
+              <button className={fileMenuSection === "check" ? "active" : ""} onClick={() => setFileMenuSection("check")}><MonitorCheck size={15}/> Verificar problemas</button>
               <button onClick={fileMenuNew}><Plus size={15}/> Novo</button>
               <button onClick={fileMenuOpenFile}><Folder size={15}/> Abrir</button>
               <input ref={openFileInputRef} type="file" accept={IMPORT_ACCEPT} hidden onChange={handleOpenFilePicked}/>
@@ -23460,7 +23646,23 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <button className="danger" onClick={handleClose}><X size={15}/> Fechar documento</button>
             </div>
             <div className="wordBackstagePanel">
-              {fileMenuSection === "export" ? (<>
+              {fileMenuSection === "check" ? (() => {
+                const inspect = getInspectReport(), compat = getCompatReport(), a11y = getA11yIssues();
+                return (<>
+                  <h3>Verificar problemas</h3>
+                  <p className="wordBackstageHint">Confira o que o documento carrega antes de compartilhar ou exportar. Só leitura: nada é alterado.</p>
+                  <h4>Inspecionar documento</h4>
+                  {inspect.length === 0 ? <p className="wordBackstageSavedTip"><Check size={14}/> Nada além do texto foi encontrado.</p> : inspect.map(r => (
+                    <div key={r.label} className="wordBackstageInfoRow"><span>{r.label}{r.hint ? ` — ${r.hint}` : ""}</span><b>{r.n}</b></div>
+                  ))}
+                  <h4>Acessibilidade</h4>
+                  {a11y.length === 0 ? <p className="wordBackstageSavedTip"><Check size={14}/> Nenhum problema encontrado.</p> : a11y.map(t => <div key={t} className="wordBackstageInfoRow"><span>{t}</span></div>)}
+                  <h4>Compatibilidade com .docx</h4>
+                  {compat.length === 0 ? <p className="wordBackstageSavedTip"><Check size={14}/> Todos os recursos usados são gravados no .docx.</p> : compat.map(r => (
+                    <div key={r.label} className="wordBackstageInfoRow"><span>{r.label} — {r.note}</span><b>{r.n}</b></div>
+                  ))}
+                </>);
+              })() : fileMenuSection === "export" ? (<>
                 <h3>Exportar</h3>
                 <p className="wordBackstageHint">Baixa uma cópia deste documento no formato escolhido.</p>
                 <button className="wordBackstageBig" onClick={() => fileMenuExport("docx")}><FileType2 size={20}/> <div><b>Word (.docx)</b><span>Mantém formatação, tabelas e imagens.</span></div></button>
@@ -23473,8 +23675,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <div className="wordBackstageInfoRow"><span>Título</span><b>{title.trim() || "Documento sem título"}</b></div>
                 <div className="wordBackstageInfoRow"><span>Palavras</span><b>{wordCount.words}</b></div>
                 <div className="wordBackstageInfoRow"><span>Caracteres</span><b>{wordCount.chars}</b></div>
-                <div className="wordBackstageInfoRow"><span>Tamanho da página</span><b>{pageSize === "carta" ? "Carta" : "A4"} · {orientation === "paisagem" ? "Paisagem" : "Retrato"}</b></div>
-                <div className="wordBackstageInfoRow"><span>Margens</span><b>{margins === "estreita" ? "Estreita" : margins === "larga" ? "Larga" : "Normal"}</b></div>
+                <div className="wordBackstageInfoRow"><span>Tamanho da página</span><b>{pageSizeLabel(pageSize)} · {orientation === "paisagem" ? "Paisagem" : "Retrato"}</b></div>
+                <div className="wordBackstageInfoRow"><span>Margens</span><b>{margins === "estreita" ? "Estreita" : margins === "moderada" ? "Moderada" : margins === "larga" ? "Larga" : "Normal"}</b></div>
                 {doc.created_at && <div className="wordBackstageInfoRow"><span>Criado em</span><b>{new Date(doc.created_at).toLocaleString("pt-BR")}</b></div>}
                 {doc.updated_at && <div className="wordBackstageInfoRow"><span>Modificado em</span><b>{new Date(doc.updated_at).toLocaleString("pt-BR")}</b></div>}
                 {justSaved && <p className="wordBackstageSavedTip"><Check size={14}/> Documento salvo.</p>}
@@ -23506,9 +23708,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <div className="rbRow">
                   {rbm("font", (t) => <button type="button" className="rbCombo rbComboFont" data-tip="Fonte" data-tipdesc="Escolha a família tipográfica aplicada ao texto selecionado." onClick={t}><span style={{ fontFamily: fmtState.font }}>{fmtState.font}</span><ChevronDown size={11}/></button>, <>
                     {WORD_FONTS.map(f => <button key={f} className={fmtState.font === f ? "active" : ""} style={{ fontFamily: f }} onClick={() => fmt.applyFont(f)}>{f}</button>)}
+<button onClick={askCustomFont}>Outra fonte…</button>
                   </>)}
                   {rbm("size", (t) => <button type="button" className="rbCombo rbComboSize" data-tip="Tamanho da Fonte" data-tipdesc="Define o tamanho do texto selecionado, em pontos." onClick={t}><span>{fmtState.size}</span><ChevronDown size={11}/></button>, <>
                     {WORD_SIZES.map(s => <button key={s} className={fmtState.size === s ? "active" : ""} onClick={() => fmt.applyFontSize(s)}>{s}</button>)}
+<button onClick={askCustomSize}>Outro tamanho…</button>
                   </>)}
                   <button type="button" className="rbIco" data-tip="Aumentar Fonte (Ctrl+Shift+>)" data-tipdesc="Aumenta o tamanho do texto selecionado em um passo." onClick={() => fmt.growShrinkFont(1)}>A<sup>+</sup></button>
                   <button type="button" className="rbIco" data-tip="Diminuir Fonte (Ctrl+Shift+<)" data-tipdesc="Diminui o tamanho do texto selecionado em um passo." onClick={() => fmt.growShrinkFont(-1)}>A<sub>-</sub></button>
@@ -23560,7 +23764,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   </div>
                   <div className="wordDropdownWrap">
                     <RbSplit icon={Palette} tip="Cor da Fonte" desc="Altera a cor do texto selecionado. Clique na seta para escolher outra cor." color={lastFontColor} onMain={() => fmt.applyTextColor(lastFontColor)} onArrow={() => setRbMenu(m => (m === "fcolor" ? null : "fcolor"))}/>
-                    {rbMenu === "fcolor" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>)}</div>}
+                    {rbMenu === "fcolor" && <WordColorPicker current={lastFontColor} onPick={(c) => { setLastFontColor(c); fmt.applyTextColor(c); setRbMenu(null); }}/>}
                   </div>
                 </div>
               </div>
@@ -23617,7 +23821,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   </>)}
                   <div className="wordDropdownWrap">
                     <RbSplit icon={PaintRoller} tip="Sombreamento" desc="Pinta o fundo do parágrafo ou da célula selecionada com uma cor." color={lastShading} onMain={() => fmt.applyShading(lastShading)} onArrow={() => setRbMenu(m => (m === "shading" ? null : "shading"))}/>
-                    {rbMenu === "shading" && <div className="colorPopover rbPop">{WORD_SHADING_COLORS.map(c => <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => { setLastShading(c); fmt.applyShading(c); setRbMenu(null); }}/>)}</div>}
+                    {rbMenu === "shading" && <WordColorPicker current={lastShading} noneLabel="Sem Cor" noneValue="transparent" onPick={(c) => { setLastShading(c); fmt.applyShading(c); setRbMenu(null); }}/>}
                   </div>
                   {rbm("borders", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Bordas" data-tipdesc="Adiciona ou remove bordas ao redor do texto ou parágrafo selecionado." onClick={t}><Frame size={14}/><ChevronDown size={9}/></button>, <>
                     {WORD_BORDER_PRESETS.map(b => <button key={b.key} onClick={() => fmt.applyBorder(b.key)}>{b.label}</button>)}
@@ -23801,11 +24005,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={Omega} label="Equação" tip="Equação" desc="Abre o editor de equações: estruturas (frações, raízes, somatórios, matrizes…), símbolos e equações prontas, em formato linear ou LaTeX." onClick={() => openEquationDialog()}/>
               {rbm("symbol", (t) => <RbBig icon={Sigma} label="Símbolo" chevron tip="Símbolo" desc="Insere caracteres especiais e símbolos matemáticos que não estão no teclado." onClick={t}/>, <>
                 {WORD_SYMBOLS.map(sym => <button key={sym} className="emojiBtn" onClick={() => fmt.insertSymbol(sym)}>{sym}</button>)}
+                <button className="wcpMore" onClick={() => openDlg("symbols")}>Mais Símbolos…</button>
               </>, "emojiPopover rbPop")}
             </RbGroup>
             <RbGroup label="Emojis">
               {rbm("emoji", (t) => <RbBig icon={Smile} label="Emoji" chevron tip="Emoji" desc="Insere um emoji no ponto onde está o cursor." onClick={t}/>, <>
                 {EMOJIS.map(em => <button key={em} className="emojiBtn" onClick={() => fmt.insertEmoji(em)}>{em}</button>)}
+                <button className="wcpMore" onClick={() => openDlg("emojis")}>Mais Emojis…</button>
               </>, "emojiPopover rbPop")}
             </RbGroup>
           </>)}
@@ -23834,10 +24040,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <div className="rbCol">
                 <div className="wordDropdownWrap">
                   <RbSplit icon={Palette} tip="Cor" desc={inkSelCount ? "Muda a cor da tinta selecionada no laço." : "Escolhe a cor da caneta em uso."} color={drawColor} onMain={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))} onArrow={() => setRbMenu(m => (m === "pencolor" ? null : "pencolor"))}/>
-                  {rbMenu === "pencolor" && <div className="colorPopover rbPop">{WORD_TEXT_COLORS.map(c => <button key={c} className="colorSwatch" style={{ background: c }} onClick={() => { setDrawColor(c); setRbMenu(null); }}/>)}</div>}
+                  {rbMenu === "pencolor" && <WordColorPicker current={drawColor} onPick={(c) => { setDrawColor(c); setRbMenu(null); }}/>}
                 </div>
                 {rbm("pensize", (t) => <RbSm icon={SlidersHorizontal} label={`${drawSize} pt`} chevron tip="Espessura" desc="Define a espessura do traço da caneta em uso." onClick={t}/>, <>
                   {INK_WIDTHS[inkKind].map(n => <button key={n} className={Math.abs(drawSize - n) < 0.01 ? "active" : ""} onClick={() => { setDrawSize(n); setRbMenu(null); }}>{n} pt</button>)}
+<button onClick={askCustomPenSize}>Outra espessura…</button>
                 </>)}
               </div>
             </RbGroup>
@@ -23900,7 +24107,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </div>
                 <div className="wordDropdownWrap">
                   <RbSm icon={PaintBucket} label="Cor da Página" chevron tip="Cor da Página" desc="Preenche o fundo da página com uma cor." onClick={() => { setPageColorOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageBorderOpen(false); }}/>
-                  {pageColorOpen && <div className="colorPopover rbPop">{WORD_PAGE_COLORS.map(c => <button key={c || "none"} className={"colorSwatch" + (!c ? " colorSwatchNone" : "")} style={{ background: c || undefined }} onClick={() => applyPageColor(c)}/>)}</div>}
+                  {pageColorOpen && <WordColorPicker current={pageColor} noneLabel="Sem Cor" noneValue="" onPick={applyPageColor}/>}
                 </div>
                 <div className="wordDropdownWrap">
                   <RbSm icon={Frame} label="Bordas de Página" chevron tip="Bordas de Página" desc="Adiciona uma borda decorativa ao redor de toda a página." onClick={() => { setPageBorderOpen(o => !o); setThemeOpen(false); setWatermarkOpen(false); setPageColorOpen(false); }}/>
@@ -23919,7 +24126,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <button className={textDir === "vertical" ? "active" : ""} onClick={() => applyTextDir("vertical")}>Vertical</button>
               </>)}
               {rbm("margins", (t) => <RbBig icon={Frame} label="Margens" chevron tip="Margens" desc="Define o espaço em branco entre o texto e a borda da página." onClick={t}/>, <>
-                {["estreita", "normal", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => changePageSetting("margins", m)}>{m[0].toUpperCase() + m.slice(1)}</button>)}
+                {["normal", "estreita", "moderada", "larga"].map(m => <button key={m} className={margins === m ? "active" : ""} onClick={() => changePageSetting("margins", m)}>{m[0].toUpperCase() + m.slice(1)}</button>)}
                 <button onClick={() => openDlg("pagesetup", { left: effMarginLeft, right: effMarginRight })}>Margens Personalizadas…</button>
               </>)}
               {rbm("orientation", (t) => <RbBig icon={orientation === "paisagem" ? RectangleHorizontal : RectangleVertical} label="Orientação" chevron tip="Orientação" desc="Orienta a página na vertical (retrato) ou na horizontal (paisagem)." onClick={t}/>, <>
@@ -23927,13 +24134,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <button className={orientation === "paisagem" ? "active" : ""} onClick={() => changePageSetting("orientation", "paisagem")}>Paisagem</button>
               </>)}
               {rbm("pagesize", (t) => <RbBig icon={FileText} label="Tamanho" chevron tip="Tamanho" desc="Define o tamanho do papel da página." onClick={t}/>, <>
-                <button className={pageSize === "a4" ? "active" : ""} onClick={() => changePageSetting("page_size", "a4")}>A4 (21 x 29,7 cm)</button>
-                <button className={pageSize === "carta" ? "active" : ""} onClick={() => changePageSetting("page_size", "carta")}>Carta (21,6 x 27,9 cm)</button>
+                {Object.keys(PAGE_SIZES).map(k => <button key={k} className={pageSize === k ? "active" : ""} onClick={() => changePageSetting("page_size", k)}>{pageSizeLabel(k)} ({pageSizeCmText(k)})</button>)}
               </>)}
               {rbm("columns", (t) => <RbBig icon={Columns2} label="Colunas" chevron tip="Colunas" desc="Divide o texto do documento em duas ou mais colunas, como em um jornal." onClick={t}/>, <>
                 <button onClick={() => fmt.applyColumns(1)}>Uma</button>
                 <button onClick={() => fmt.applyColumns(2)}>Duas</button>
                 <button onClick={() => fmt.applyColumns(3)}>Três</button>
+                <button onClick={() => { const v = parseInt(prompt("Número de colunas (1 a 6):", "2"), 10); if (v >= 1 && v <= 6) fmt.applyColumns(v); setRbMenu(null); }}>Mais Colunas…</button>
               </>)}
               {rbm("breaks", (t) => <RbBig icon={Layers} label="Quebras" chevron tip="Quebras" desc="Insere uma quebra de página ou de seção (próxima página, contínua, página par ou ímpar)." onClick={t}/>, <>
                 <div className="wordDropdownEmpty">Quebras de Página</div>
@@ -24417,6 +24624,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 {WORD_TEXT_COLORS.map(c => (
                   <button key={c} className={"colorSwatch" + (selectedShape.dataset.fill === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => shapeSetFill(c)}/>
                 ))}
+                <ColorMore current={selectedShape.dataset.fill} onPick={shapeSetFill}/>
               </div>
               <span className="wordRibbonGroupLabel">Preenchimento</span>
             </div>
@@ -24426,6 +24634,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 {["#1a1a1a", "#ffffff", "#5b9dff", "#ff5c5c", "#69db7c"].map(c => (
                   <button key={c} className={"colorSwatch" + (selectedShape.dataset.stroke === c ? " colorSwatchActive" : "")} style={{ background: c }} onClick={() => shapeSetStroke(c)}/>
                 ))}
+                <ColorMore current={selectedShape.dataset.stroke} onPick={shapeSetStroke}/>
               </div>
               <span className="wordRibbonGroupLabel">Contorno</span>
             </div>
@@ -24496,6 +24705,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 {WORD_SHADING_COLORS.map(c => (
                   <button key={c} className={"colorSwatch" + (c === "transparent" ? " colorSwatchNone" : "")} style={{ background: c === "transparent" ? undefined : c }} onClick={() => tableSetShading(c === "transparent" ? "" : c)} data-tip="Sombreamento" data-tipdesc="Aplica esta cor de fundo à célula atual."/>
                 ))}
+                <ColorMore onPick={tableSetShading}/>
               </div>
               <span className="wordRibbonGroupLabel">Sombreamento da Célula</span>
             </div>
@@ -24883,9 +25093,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           </>}>
             <label>Margem esquerda (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.left ?? 2} onChange={e => { setF("left", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("left", Number(e.target.value)); }}/></label>
             <label>Margem direita (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.right ?? 2} onChange={e => { setF("right", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("right", Number(e.target.value)); }}/></label>
-            <label>Predefinição <select value={margins} onChange={e => changePageSetting("margins", e.target.value)}><option value="estreita">Estreita</option><option value="normal">Normal</option><option value="larga">Larga</option></select></label>
+            <label>Predefinição <select value={margins} onChange={e => changePageSetting("margins", e.target.value)}><option value="normal">Normal</option><option value="estreita">Estreita</option><option value="moderada">Moderada</option><option value="larga">Larga</option></select></label>
             <label>Orientação <select value={orientation} onChange={e => changePageSetting("orientation", e.target.value)}><option value="retrato">Retrato</option><option value="paisagem">Paisagem</option></select></label>
-            <label>Papel <select value={pageSize} onChange={e => changePageSetting("page_size", e.target.value)}><option value="a4">A4</option><option value="carta">Carta</option></select></label>
+            <label>Papel <select value={pageSize} onChange={e => changePageSetting("page_size", e.target.value)}>{Object.keys(PAGE_SIZES).map(k => <option key={k} value={k}>{pageSizeLabel(k)}</option>)}</select></label>
           </WordModal>
         )}
 
@@ -25144,6 +25354,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             </div>
           </WordModal>
         )}
+
+        {dlg === "symbols" && <WordSymbolDialog onClose={closeDlg} onInsert={(ch) => { restoreRange(); fmt.insertSymbol(ch); saveRange(); }}/>}
+        {dlg === "emojis" && <WordSymbolDialog emoji onClose={closeDlg} onInsert={(ch) => { restoreRange(); fmt.insertEmoji(ch); saveRange(); }}/>}
 
         {dlg === "about" && (
           <WordModal title="Ajuda" onClose={closeDlg} actions={<button className="ghost" onClick={closeDlg}>Fechar</button>}>
