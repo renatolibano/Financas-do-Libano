@@ -1441,3 +1441,35 @@ alter table study_goals add column if not exists prog_start numeric;
 
 -- Atualização: meta de evolução só em dias úteis (sábado e domingo = descanso, sem lembrete).
 alter table study_goals add column if not exists prog_weekdays_only boolean not null default false;
+
+
+-- Atualização: saldos, cartões e investimentos vindos do banco (Pluggy).
+-- Preenchida pela função pluggy-sync; type = BANK (conta), CREDIT (cartão) ou INVESTMENT.
+create table if not exists bank_accounts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  bank_connection_id uuid references bank_connections(id) on delete cascade,
+  pluggy_account_id text not null unique,
+  institution_name text,
+  name text,
+  type text,
+  subtype text,
+  balance numeric,
+  credit_limit numeric,
+  available_credit numeric,
+  bill_due_date date,
+  minimum_payment numeric,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+alter table bank_accounts enable row level security;
+do $$ declare t text; begin foreach t in array array['bank_accounts'] loop
+ execute format('drop policy if exists "select_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "insert_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "update_own_%1$s" on %1$s',t);
+ execute format('drop policy if exists "delete_own_%1$s" on %1$s',t);
+ execute format('create policy "select_own_%1$s" on %1$s for select using(auth.uid()=user_id)',t);
+ execute format('create policy "insert_own_%1$s" on %1$s for insert with check(auth.uid()=user_id)',t);
+ execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
+ execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
+end loop; end $$;

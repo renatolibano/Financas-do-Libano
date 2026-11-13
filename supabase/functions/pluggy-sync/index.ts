@@ -1,8 +1,8 @@
 // Edge Function: pluggy-sync
 // Depois que o usuário conecta o banco pelo widget Pluggy Connect (que devolve
 // um itemId), esta função busca as contas e as transações desse item na API
-// da Pluggy e grava/atualiza tudo nas tabelas do Libano (bank_connections e
-// transactions), evitando duplicar movimentações já importadas.
+// da Pluggy e grava/atualiza tudo nas tabelas do Libano (bank_connections,
+// bank_accounts — saldos, cartões e investimentos — e transactions), evitando duplicar movimentações já importadas.
 //
 // Deploy: supabase functions deploy pluggy-sync
 // Usa os mesmos segredos da pluggy-connect-token:
@@ -108,6 +108,61 @@ Deno.serve(async (req) => {
     }
     const { results: accounts } = await accountsRes.json();
 
+    // 4.1) Saldos: guarda cada conta (corrente/poupança), cartão (fatura, limite, vencimento)
+    // e investimento em bank_accounts — é isso que alimenta saldo atual, cartões e investimentos no app.
+    const nowIso = new Date().toISOString();
+    const accountRows: Record<string, unknown>[] = (accounts || []).map((a: any) => ({
+      user_id: user.id,
+      bank_connection_id: connection.id,
+      pluggy_account_id: a.id,
+      institution_name: institutionName,
+      name: a.marketingName || a.name || null,
+      type: a.type || null,
+      subtype: a.subtype || null,
+      balance: a.balance ?? null,
+      credit_limit: a.creditData?.creditLimit ?? null,
+      available_credit: a.creditData?.availableCreditLimit ?? null,
+      bill_due_date: a.creditData?.balanceDueDate ? String(a.creditData.balanceDueDate).slice(0, 10) : null,
+      minimum_payment: a.creditData?.minimumPayment ?? null,
+      updated_at: nowIso,
+    }));
+    try {
+      const invRes = await fetch(`https://api.pluggy.ai/investments?itemId=${itemId}&pageSize=500`, { headers: pluggyHeaders });
+      if (invRes.ok) {
+        const { results: investments } = await invRes.json();
+        for (const inv of investments || []) {
+          accountRows.push({
+            user_id: user.id,
+            bank_connection_id: connection.id,
+            pluggy_account_id: inv.id,
+            institution_name: institutionName,
+            name: inv.name || "Investimento",
+            type: "INVESTMENT",
+            subtype: inv.type || null,
+            balance: inv.balance ?? null,
+            updated_at: nowIso,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Pluggy investments error:", err); // investimentos são opcionais: não derruba a sincronização
+    }
+    let balances = 0;
+    if (accountRows.length > 0) {
+      const { error: accErr } = await supabaseClient
+        .from("bank_accounts")
+        .upsert(accountRows, { onConflict: "pluggy_account_id" });
+      if (accErr) console.error("Erro ao salvar bank_accounts:", accErr);
+      else balances = accountRows.length;
+      // Remove contas/investimentos que não vieram mais nesta conexão.
+      const keepIds = accountRows.map((r) => r.pluggy_account_id as string);
+      await supabaseClient
+        .from("bank_accounts")
+        .delete()
+        .eq("bank_connection_id", connection.id)
+        .not("pluggy_account_id", "in", `(${keepIds.join(",")})`);
+    }
+
     const fromDate = new Date(Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     let imported = 0;
@@ -160,7 +215,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    return json({ ok: true, institutionName, accounts: (accounts || []).length, imported, skipped });
+    return json({ ok: true, institutionName, accounts: (accounts || []).length, balances, imported, skipped });
   } catch (err) {
     console.error(err);
     return json({ error: "Erro inesperado no servidor." }, 500);

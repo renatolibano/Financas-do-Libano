@@ -20,3 +20,16 @@ export async function syncPluggyItem(itemId) {
   if (data?.error) throw new Error(data.error);
   return data; // { institutionName, accounts, imported, skipped }
 }
+
+// Relê todas as conexões bancárias do usuário na Pluggy e atualiza saldos, cartões, investimentos e movimentações.
+export async function syncAllBankConnections() {
+  const { data, error } = await supabase.from("bank_connections").select("item_id");
+  if (error) throw error;
+  let imported = 0, balances = 0;
+  for (const c of data || []) {
+    const r = await syncPluggyItem(c.item_id);
+    imported += r.imported || 0;
+    balances += r.balances || 0;
+  }
+  return { connections: (data || []).length, imported, balances };
+}

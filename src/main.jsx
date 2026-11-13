@@ -38,7 +38,7 @@ import { WordInkCapture, WordInkReplay } from "./components/WordInk";
 import { INK_DEFAULTS, INK_TOOLS, INK_WIDTHS, MAX_PENS, PT as INK_PT, inkItems, rasterizeItems, removeItems as removeInkItems } from "./lib/wordInk";
 import "./styles.css";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
-import { getPluggyConnectToken, syncPluggyItem } from "./lib/bank";
+import { getPluggyConnectToken, syncPluggyItem, syncAllBankConnections } from "./lib/bank";
 import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partners";
 import { useEntity } from "./lib/useEntity";
 import { useTransactions } from "./lib/useTransactions";
@@ -635,6 +635,8 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const notes = useEntity("notes", initialNotes, session, "asc", {orderable:true, listSelect: "id,title,tags,preview,locked,sort_order,updated_at,deleted_at,created_at"});
   const reminders = useEntity("reminders", initialReminders, session);
   const cardPurchases = useEntity("card_purchases", initialCardPurchases, session);
+  // Saldos, cartões e investimentos trazidos do banco (preenchida pela função pluggy-sync).
+  const bankAccounts = useEntity("bank_accounts", [], session);
   // Livros e PDFs de estudo carregam cover_thumb (capa em JPEG base64) pra
   // cada item já na listagem — então, igual Treino/Filmes/Jogos, adiamos a
   // primeira busca até a pessoa entrar numa aba que realmente usa esses
@@ -905,10 +907,13 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   const [overview, setOverview] = usePersistentState("overview_overrides", {
     balance: null, income: null, expense: null, cardBill: null,
   });
-  const effectiveBalance = overview.balance ?? displayedBalance;
+  const bankSum = (t)=>bankAccounts.data.filter(a=>a.type===t).reduce((x,a)=>x+(Number(a.balance)||0),0);
+  const hasBankAccounts = bankAccounts.data.some(a=>a.type==="BANK");
+  const hasBankCards = bankAccounts.data.some(a=>a.type==="CREDIT");
+  const effectiveBalance = overview.balance ?? (hasBankAccounts ? bankSum("BANK") : displayedBalance);
   const effectiveIncome = overview.income ?? income;
   const effectiveExpense = overview.expense ?? expense;
-  const effectiveCardBill = overview.cardBill ?? cardBill;
+  const effectiveCardBill = overview.cardBill ?? (hasBankCards ? bankSum("CREDIT") : cardBill);
 
   // Mostrar/ocultar valores na Visão Geral (ícone de olho no celular).
   const [hideValues, setHideValues] = usePersistentState("overview_hide_values", false);
@@ -1354,11 +1359,11 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
     <main onClick={()=>{ if(mobileOpen && window.innerWidth<=760) setMobileOpen(false); }}>
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><span className="headerQuoteMark headerQuoteMarkOpen">&ldquo;</span><span className="headerQuoteText">{currentHeaderQuote}</span><span className="headerQuoteMark headerQuoteMarkClose">&rdquo;</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
-      {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length}/>}
-      {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={transactions.refresh}/>}
+      {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length} transactions={monthTransactions} bankAccounts={bankAccounts.data}/>}
+      {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={()=>{ transactions.refresh(); bankAccounts.refresh(); }}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
-      {page==="Cartões" && <Cards entity={cardPurchases} bill={cardBill}/>}
+      {page==="Cartões" && <Cards entity={cardPurchases} bill={hasBankCards ? bankSum("CREDIT") : cardBill} bankCards={bankAccounts.data.filter(a=>a.type==="CREDIT")}/>}
       {page==="Orçamento" && <Budgets entity={budgets} transactions={monthTransactions} month={selectedMonth}/>}
       {page==="Metas" && <Goals entity={goals} session={session}/>}
       {page==="Recorrentes" && <Recurring entity={recurring} transactions={transactions}/>}
@@ -1720,7 +1725,39 @@ function MobileMenuOverlay({navTree,page,goTo,onClose}){
   </div>;
 }
 
-function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals,hideValues,setHideValues,budgetAvailable,shoppingItems,fixedCount,debtsCount}){
+// Contas, cartões e investimentos trazidos do banco (Pluggy) — saldo atual, limite, vencimento da fatura.
+function BankAccountsPanel({accounts, hideValues}){
+  if(!accounts.length) return null;
+  const banks = accounts.filter(a=>a.type==="BANK"), cards = accounts.filter(a=>a.type==="CREDIT"), inv = accounts.filter(a=>a.type==="INVESTMENT");
+  const invTotal = inv.reduce((x,a)=>x+(Number(a.balance)||0),0);
+  const last = accounts.map(a=>a.updated_at).filter(Boolean).sort().slice(-1)[0];
+  return <div className="panel bankPanel">
+    <div className="panelTitle"><h2>Contas conectadas</h2><span>{last ? "Atualizado "+timeAgo(last) : ""}</span></div>
+    {banks.map(a=><div className="bankRow" key={a.id}><span className="txDot in"><Landmark size={15}/></span><div className="bankRowInfo"><b>{a.name||"Conta"}</b><small>{a.institution_name}</small></div><strong>{maskMoney(Number(a.balance)||0,hideValues)}</strong></div>)}
+    {cards.map(a=><div className="bankRow" key={a.id}><span className="txDot out"><CreditCard size={15}/></span><div className="bankRowInfo"><b>{a.name||"Cartão"}</b><small>{a.available_credit!=null ? `Disponível ${maskMoney(Number(a.available_credit)||0,hideValues)}` : a.institution_name}{a.bill_due_date ? ` · vence ${formatTxDate(a.bill_due_date).slice(0,5)}` : ""}</small></div><strong>{maskMoney(Number(a.balance)||0,hideValues)}</strong></div>)}
+    {inv.length>0 && <div className="bankRow"><span className="txDot in"><TrendingUp size={15}/></span><div className="bankRowInfo"><b>Investimentos</b><small>{inv.length} aplicaç{inv.length===1?"ão":"ões"}</small></div><strong>{maskMoney(invTotal,hideValues)}</strong></div>}
+  </div>;
+}
+const FIN_COLORS = ["#ff6b6b","#f0b429","#4ade80","#60a5fa","#a06bff","#f472b6"];
+// Cor do consumo de um orçamento: verde até 75%, amarelo até 100%, vermelho acima.
+const budgetTone = (pct)=> pct>100 ? "#ff5c5c" : pct>=75 ? "#f0b429" : "#3ecf6a";
+function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,fixedTotal,reminders,notes,setPage,openNote,askAI,aiInsight,aiLoading,aiError,aiAvailable,month,setMonth,budgets,goals,hideValues,setHideValues,budgetAvailable,shoppingItems,fixedCount,debtsCount,transactions=[],bankAccounts=[]}){
+ // Dados reais do mês analisado: entradas/saídas por dia, gastos por categoria e nota de saúde financeira.
+ const [yy,mm] = month.split("-").map(Number);
+ const daysInMonth = new Date(yy,mm,0).getDate();
+ const txDay = (x)=>{ const d=String(x.date||""); return /^\d{4}-\d{2}-\d{2}/.test(d) ? parseInt(d.slice(8,10),10) : parseInt(d.split("/")[0],10); };
+ const daily = Array.from({length:daysInMonth},()=>({in:0,out:0}));
+ transactions.forEach(x=>{ const dd=txDay(x); if(dd>=1 && dd<=daysInMonth) daily[dd-1][x.type==="in"?"in":"out"] += Number(x.value)||0; });
+ const dailyMax = Math.max(1,...daily.map(d=>Math.max(d.in,d.out)));
+ const byCat = {};
+ transactions.filter(x=>x.type==="out").forEach(x=>{ const k=String(x.cat||"").trim()||"Sem categoria"; byCat[k]=(byCat[k]||0)+(Number(x.value)||0); });
+ const catList = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
+ const catTotal = Object.values(byCat).reduce((a,b)=>a+b,0) || 1;
+ const spentIn = (c)=>transactions.filter(x=>x.type==="out" && x.cat===c).reduce((a,b)=>a+(Number(b.value)||0),0);
+ const hasData = income>0 || expense>0;
+ const saveRate = income>0 ? (income-expense)/income : (expense>0 ? -1 : 0);
+ const score = Math.round(Math.max(0,Math.min(100, 50 + saveRate*50 - (budgetAvailable<0?10:0) - (income>0 && cardBill>income*0.5?5:0))));
+ const scoreMeta = score>=75 ? {c:"#3ecf6a", t:"Ótima! Você está guardando bem este mês."} : score>=55 ? {c:"#8bd450", t:"Boa! Seus gastos estão sob controle."} : score>=35 ? {c:"#f0b429", t:"Atenção: gastos próximos das entradas."} : {c:"#ff5c5c", t:"Cuidado: gastos acima das entradas."};
  const overdue = reminders.filter(r=>{const d=reminderDaysUntil(r); return d!==null && d<0;});
  const dueToday = reminders.filter(r=>reminderDaysUntil(r)===0);
  const dueNext7 = reminders.filter(r=>{const d=reminderDaysUntil(r); return d!==null && d>0 && d<=7;});
@@ -1747,6 +1784,8 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
          <div className="mobileMetric right"><div><small>Gasto</small><b className="positive">{maskMoney(expense,hideValues)}</b></div><div className="mobileMetricIcon green"><TrendingDown size={15}/></div></div>
        </div>
      </div>
+
+     <BankAccountsPanel accounts={bankAccounts} hideValues={hideValues}/>
 
      <div className="mobileListCard">
        <div className="mobileListRow" onClick={()=>setPage("Lembretes Comuns")}>
@@ -1813,19 +1852,30 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
    </section>
    <section className="grid2">
     <div className="panel"><div className="panelTitle"><h2>Resumo do mês</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div>
-      <div className="chart"><div className="bars">{[45,60,35,72,55,83,65,91,58,76,48,68].map((h,i)=><div key={i} className="barWrap"><div className="bar" style={{height:h+"%"}}></div><small>{i+1}</small></div>)}</div></div>
+      <div className="chart"><div className="bars">{daily.map((d,i)=><div key={i} className="barWrap" title={`Dia ${i+1} · entradas ${money(d.in)} · saídas ${money(d.out)}`}><div className="barPair"><div className="bar in" style={{height:(d.in/dailyMax*100)+"%"}}/><div className="bar out" style={{height:(d.out/dailyMax*100)+"%"}}/></div><small>{(i===0 || (i+1)%5===0) ? i+1 : "\u00a0"}</small></div>)}</div></div>
       <div className="legend"><span className="in"><i/>Entradas <b>{money(income)}</b></span><span className="out"><i/>Saídas <b>{money(expense)}</b></span></div>
     </div>
     <div className="panel ai"><div className="aiHead"><div className="aiIcon"><Bot/></div><div><h2>Análise da IA</h2><small>{aiAvailable?"Assistente financeiro":"Disponível com sincronização ativa"}</small></div></div>
       {aiInsight
         ? <p className="aiText">{aiInsight}</p>
         : <>
-            <p>Seu saldo está positivo. A fatura do cartão representa <b>{Math.round(cardBill/Math.max(income,1)*100)}%</b> das suas entradas deste mês.</p>
+            <p>Seu saldo está {balance>=0?"positivo":"negativo"}. A fatura do cartão representa <b>{Math.round(cardBill/Math.max(income,1)*100)}%</b> das suas entradas deste mês.</p>
             <p className="tip">💡 Você tem <b>{money(fixedTotal)}</b> em pagamentos fixos previstos e <b>{money(debtRemaining)}</b> em dívidas restantes.</p>
           </>
       }
       {aiError && <p className="aiErrorMsg">{aiError}</p>}
       <button className="ghost" onClick={askAI} disabled={aiLoading}>{aiLoading?"Analisando...":(aiInsight?"Analisar de novo →":"Perguntar à IA →")}</button>
+    </div>
+   </section>
+   {bankAccounts.length>0 && <section style={{marginBottom:16}}><BankAccountsPanel accounts={bankAccounts} hideValues={hideValues}/></section>}
+   <section className="grid2">
+    <div className="panel"><div className="panelTitle"><h2>Gastos por categoria</h2><button onClick={()=>setPage("Movimentações")}>Ver extrato</button></div>
+      {catList.map(([k,v],i)=><div className="catRow" key={k}><div className="catRowHead"><span><i style={{background:FIN_COLORS[i%FIN_COLORS.length]}}/>{k}</span><b>{money(v)} <small>{Math.round(v/catTotal*100)}%</small></b></div><div className="progress"><i style={{width:(v/catTotal*100)+"%", background:FIN_COLORS[i%FIN_COLORS.length]}}/></div></div>)}
+      {catList.length===0 && <p className="emptyHint">Nenhum gasto registrado neste mês.</p>}
+    </div>
+    <div className="panel"><div className="panelTitle"><h2>Orçamento do mês</h2><button onClick={()=>setPage("Orçamento")}>Ver todos</button></div>
+      {budgets.slice(0,5).map(b=>{ const sp=spentIn(b.cat), pct=b.limit_value?Math.round(sp/b.limit_value*100):0; return <div className="catRow" key={b.id}><div className="catRowHead"><span>{b.cat}</span><b>{money(sp)} <small>/ {money(b.limit_value)}</small></b></div><div className="progress"><i style={{width:Math.min(100,pct)+"%", background:budgetTone(pct)}}/></div></div>; })}
+      {budgets.length===0 && <p className="emptyHint">Cadastre limites por categoria para acompanhar aqui.</p>}
     </div>
    </section>
    <section className="grid3">
@@ -1842,7 +1892,7 @@ function Dashboard({balance,income,expense,cardBill,manualFields,debtRemaining,f
       </div>
     </div>
     <div className="panel"><div className="panelTitle"><h2>Notas</h2><button onClick={()=>setPage("Notas")}>Ver todas</button></div>{notes.slice(0,3).map(n=><div className="row rowClickable" key={n.id} onClick={()=>openNote(n.id)}><div className="rowIcon"><StickyNote size={17}/></div><div><b>{n.title}</b><small>{n.locked ? "🔒 Nota protegida" : (stripHtml(n.content)?.slice(0,40)||"Nota vazia")}</small></div></div>)}{notes.length===0 && <p className="emptyHint">Nenhuma nota ainda.</p>}</div>
-    <div className="panel mini"><h2>Saúde financeira</h2><div className="score">82<span>/100</span></div><div className="progress"><i style={{width:"82%"}}/></div><p>Boa! Seus gastos estão sob controle.</p></div>
+    <div className="panel mini"><h2>Saúde financeira</h2>{hasData ? <><div className="score" style={{color:scoreMeta.c}}>{score}<span>/100</span></div><div className="progress"><i style={{width:score+"%", background:scoreMeta.c}}/></div><p>{scoreMeta.t}</p>{income>0 && <small>{saveRate>=0 ? `Sobrou ${Math.round(saveRate*100)}% das entradas` : `Gastou ${Math.round(-saveRate*100)}% a mais que entrou`}</small>}</> : <p className="emptyHint">Registre movimentações neste mês para ver sua nota.</p>}</div>
    </section>
    </div>
  </div>
@@ -1882,6 +1932,14 @@ function OverviewEditModal({overview, auto, onSave, onClose}){
 function Transactions({entity,session,bankAvailable,onImported}){
   const { data, add: onAdd, remove: onDelete, loadMonth, loadedMonths, loadingAny, cloud } = entity;
   const [desc,setDesc]=useState(""); const [cat,setCat]=useState(""); const [value,setValue]=useState(""); const [type,setType]=useState("out");
+  const [q,setQ]=useState(""); const [flt,setFlt]=useState("all");
+  const cats = Array.from(new Set(data.map(x=>String(x.cat||"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"pt-BR"));
+  const term = q.trim().toLowerCase();
+  const shown = data.filter(x=>(flt==="all"||x.type===flt) && (!term || (String(x.desc||"")+" "+String(x.cat||"")).toLowerCase().includes(term)));
+  const sumIn = shown.filter(x=>x.type==="in").reduce((a,b)=>a+(Number(b.value)||0),0);
+  const sumOut = shown.filter(x=>x.type==="out").reduce((a,b)=>a+(Number(b.value)||0),0);
+  const todayK = todayIsoDate(), yestK = isoAddDays(todayK,-1);
+  const dayLabel = (d)=>{ const k=String(d||"").slice(0,10); return k===todayK ? "Hoje" : k===yestK ? "Ontem" : (formatTxDate(d)||"Sem data"); };
   const submit=()=>{
     if(!desc.trim()||!value) return;
     onAdd({desc,cat,value:Number(value),type,date:todayIsoDate()});
@@ -1908,15 +1966,35 @@ function Transactions({entity,session,bankAvailable,onImported}){
     {bankAvailable && <BankConnect onImported={onImported}/>}
     <div className="panel">
       <div className="inlineAdd">
-        <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Descrição"/>
-        <input value={cat} onChange={e=>setCat(e.target.value)} placeholder="Categoria"/>
-        <input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/>
+        <input value={desc} onChange={e=>setDesc(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }} placeholder="Descrição"/>
+        <input value={cat} onChange={e=>setCat(e.target.value)} list="txCatList" placeholder="Categoria"/>
+        <datalist id="txCatList">{cats.map(c=><option key={c} value={c}/>)}</datalist>
+        <input value={value} onChange={e=>setValue(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }} type="number" step="0.01" min="0" placeholder="Valor"/>
         <select value={type} onChange={e=>setType(e.target.value)}><option value="out">Saída</option><option value="in">Entrada</option></select>
         <button onClick={submit}><Plus/></button>
       </div>
     </div>
-    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{data.length} movimentações</span></div>{data.map(x=><div className="transaction" key={x.id}><div><b>{x.desc}</b><small>{x.cat} · {formatTxDate(x.date)}{x.source==="pluggy" && " · importado do banco"}</small></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>)}
-    {data.length===0 && <p className="emptyHint">Nenhuma movimentação por aqui ainda.</p>}
+    <div className="panel"><div className="panelTitle"><h2>Extrato</h2><span>{shown.length}{shown.length!==data.length ? ` de ${data.length}` : ""} movimentações</span></div>
+    <div className="txSummary">
+      <div><small>Entradas</small><b className="positive">{money(sumIn)}</b></div>
+      <div><small>Saídas</small><b className="negative">{money(sumOut)}</b></div>
+      <div><small>Saldo</small><b className={sumIn-sumOut>=0?"positive":"negative"}>{money(sumIn-sumOut)}</b></div>
+    </div>
+    <div className="txTools">
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por descrição ou categoria"/>
+      <div className="modeToggle">
+        <button type="button" className={flt==="all"?"active":""} onClick={()=>setFlt("all")}>Todas</button>
+        <button type="button" className={flt==="in"?"active":""} onClick={()=>setFlt("in")}>Entradas</button>
+        <button type="button" className={flt==="out"?"active":""} onClick={()=>setFlt("out")}>Saídas</button>
+      </div>
+    </div>
+    {(()=>{ let prev=null; return shown.map(x=>{
+      const k=String(x.date||"").slice(0,10);
+      const head = k!==prev ? <div className="txDayHead" key={"h"+x.id}>{dayLabel(x.date)}</div> : null;
+      prev=k;
+      return [head, <div className="transaction" key={x.id}><div className="txMain"><span className={"txDot "+(x.type==="in"?"in":"out")}>{x.type==="in"?<ArrowUp size={15}/>:<ArrowDown size={15}/>}</span><div><b>{x.desc}</b><small>{x.cat||"Sem categoria"} · {formatTxDate(x.date)}{x.source==="pluggy" && " · importado do banco"}</small></div></div><strong className={x.type==="in"?"positive":"negative"}>{x.type==="in"?"+":"-"} {money(x.value)}</strong><button onClick={()=>onDelete(x.id)}><Trash2 size={16}/></button></div>];
+    }); })()}
+    {shown.length===0 && <p className="emptyHint">{data.length===0 ? "Nenhuma movimentação por aqui ainda." : "Nada encontrado com esse filtro."}</p>}
     {cloud && <button className="ghost" style={{marginTop:10}} disabled={loadingAny} onClick={loadOlder}>{loadingAny ? "Carregando..." : `Carregar ${olderLabel}`}</button>}
     </div>
   </div>
@@ -1972,10 +2050,25 @@ function BankConnect({onImported}){
     try{
       const itemId = itemData?.item?.id;
       const result = await syncPluggyItem(itemId);
-      setMessage({type:"success", text: `${result.institutionName}: ${result.imported} movimentações importadas.`});
+      setMessage({type:"success", text: `${result.institutionName}: ${result.imported} movimentações e ${result.balances||0} saldos/contas atualizados.`});
       onImported && onImported();
     }catch(err){
       setMessage({type:"error", text: err.message || "Banco conectado, mas a importação falhou."});
+    }finally{
+      setSyncing(false);
+    }
+  };
+
+  // Relê tudo que já está conectado (saldos, cartões, investimentos e movimentações novas).
+  const refreshAll = async ()=>{
+    setMessage(null);
+    setSyncing(true);
+    try{
+      const r = await syncAllBankConnections();
+      setMessage(r.connections===0 ? {type:"error", text:"Nenhum banco conectado ainda."} : {type:"success", text:`${r.connections} conexão(ões) atualizada(s): ${r.imported} movimentações e ${r.balances} saldos/contas.`});
+      onImported && onImported();
+    }catch(err){
+      setMessage({type:"error", text: err.message || "Não foi possível atualizar agora."});
     }finally{
       setSyncing(false);
     }
@@ -1986,6 +2079,7 @@ function BankConnect({onImported}){
       <button className="bankBtn" onClick={openWidget} disabled={opening||syncing}>
         <Landmark size={16}/> {syncing ? "Importando..." : opening ? "Abrindo..." : "Conectar banco"}
       </button>
+      <button className="bankBtn" onClick={refreshAll} disabled={opening||syncing}><RotateCw size={16}/> Atualizar saldos</button>
       {message && <small className={message.type==="error"?"negative":"positive"}>{message.text}</small>}
     </div>
   </div>
@@ -1999,8 +2093,20 @@ function Fixed({entity,total}){
     add({name,value:Number(value),day:Number(day)});
     setName("");setValue("");setDay("");
   };
+  // Dias até o próximo vencimento (dia do mês; meses curtos usam o último dia).
+  const now = new Date(), td = now.getDate();
+  const dim = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const nextDim = new Date(now.getFullYear(), now.getMonth()+2, 0).getDate();
+  const daysTo = (d)=>{ const dd=Math.min(Number(d)||1,dim); return dd>=td ? dd-td : (dim-td)+Math.min(Number(d)||1,nextDim); };
+  const sorted = data.slice().sort((a,b)=>(Number(a.day)||0)-(Number(b.day)||0));
+  const passed = data.filter(x=>Math.min(Number(x.day)||1,dim)<td).reduce((a,b)=>a+(Number(b.value)||0),0);
+  const upcoming = data.reduce((a,b)=>a+(Number(b.value)||0),0)-passed;
   return <div className="content">
-    <div className="stats"><Card title="Total fixo mensal" value={money(total)} icon={<CalendarClock/>}/></div>
+    <div className="stats">
+      <Card title="Total fixo mensal" value={money(total)} icon={<CalendarClock/>} big/>
+      <Card title="A vencer neste mês" value={money(upcoming)} icon={<Hourglass/>}/>
+      <Card title="Já venceram no mês" value={money(passed)} icon={<CheckCircle2/>}/>
+    </div>
     <div className="panel">
       <div className="inlineAdd">
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Nome (ex.: Internet)"/>
@@ -2008,7 +2114,8 @@ function Fixed({entity,total}){
         <input value={day} onChange={e=>setDay(e.target.value)} type="number" min="1" max="31" placeholder="Dia"/>
         <button onClick={submit}><Plus/></button>
       </div>
-      {data.map(x=><div className="transaction" key={x.id}><div><b>{x.name}</b><small>Todo dia {x.day}</small></div><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}
+      {sorted.map(x=>{ const n=daysTo(x.day); return <div className="transaction" key={x.id}><div className="txMain"><span className="txDot out"><CalendarClock size={15}/></span><div><b>{x.name}</b><small>Todo dia {x.day}</small></div></div><span className={"dueChip"+(n===0?" today":n<=3?" soon":"")}>{n===0?"Vence hoje":n===1?"Amanhã":`em ${n} dias`}</span><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>; })}
+      {data.length===0 && <p className="emptyHint">Nenhum pagamento fixo cadastrado ainda.</p>}
     </div>
   </div>
 }
@@ -2029,7 +2136,12 @@ function Debts({entity,remaining}){
     update(x.id, {paid:Math.min(x.total, x.paid+n)});
   };
   return <div className="content">
-    <div className="stats"><Card title="Total restante" value={money(remaining)} icon={<CircleDollarSign/>}/></div>
+    <div className="stats">
+      <Card title="Total devido" value={money(data.reduce((a,b)=>a+(Number(b.total)||0),0))} icon={<CircleDollarSign/>}/>
+      <Card title="Já pago" value={money(data.reduce((a,b)=>a+(Number(b.paid)||0),0))} icon={<CheckCircle2/>} positive/>
+      <Card title="Total restante" value={money(remaining)} icon={<Hourglass/>} negative big/>
+      <Card title="Quitado" value={(()=>{ const t=data.reduce((a,b)=>a+(Number(b.total)||0),0), p=data.reduce((a,b)=>a+(Number(b.paid)||0),0); return (t?Math.round(p/t*100):0)+"%"; })()} icon={<TrendingUp/>}/>
+    </div>
     <div className="panel">
       <div className="inlineAdd">
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Nome da dívida"/>
@@ -2063,7 +2175,7 @@ function Debts({entity,remaining}){
   </div>
 }
 
-function Cards({entity,bill}){
+function Cards({entity,bill,bankCards=[]}){
   const {data,add,remove} = entity;
   const [cat,setCat]=useState(""); const [value,setValue]=useState("");
   const submit=()=>{
@@ -2072,7 +2184,9 @@ function Cards({entity,bill}){
     setCat("");setValue("");
   };
   return <div className="content">
-    <div className="cardVisual"><div><span>Libano Card</span><b>•••• 4821</b></div><strong>{money(bill)}</strong><small>Fatura atual</small></div>
+    {bankCards.length>0
+      ? bankCards.map(a=><div className="cardVisual" key={a.id}><div><span>{a.name||"Cartão"}</span><b>{a.institution_name}</b></div><strong>{money(Number(a.balance)||0)}</strong><small>{a.available_credit!=null ? `Limite disponível ${money(Number(a.available_credit)||0)}` : "Fatura atual"}{a.bill_due_date ? ` · vence ${formatTxDate(a.bill_due_date).slice(0,5)}` : ""}</small></div>)
+      : <div className="cardVisual"><div><span>Libano Card</span><b>•••• 4821</b></div><strong>{money(bill)}</strong><small>Fatura atual</small></div>}
     <div className="panel">
       <div className="panelTitle"><h2>Fatura por categoria</h2></div>
       <div className="inlineAdd">
@@ -2080,7 +2194,8 @@ function Cards({entity,bill}){
         <input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/>
         <button onClick={submit}><Plus/></button>
       </div>
-      {data.map(x=><div className="transaction" key={x.id}><b>{x.cat}</b><strong>{money(x.value)}</strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>)}
+      {data.slice().sort((a,b)=>(Number(b.value)||0)-(Number(a.value)||0)).map((x,i)=>{ const tot = data.reduce((a,b)=>a+(Number(b.value)||0),0)||1, pct=Math.round((Number(x.value)||0)/tot*100); return <div className="transaction" key={x.id}><div className="txMain" style={{flex:1}}><span className="txDot out"><CreditCard size={15}/></span><div style={{flex:1}}><b>{x.cat}</b><div className="progress" style={{marginTop:7,height:6}}><i style={{width:pct+"%", background:FIN_COLORS[i%FIN_COLORS.length]}}/></div></div></div><strong>{money(x.value)}<em className="txPct">{pct}%</em></strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>; })}
+      {data.length===0 && <p className="emptyHint">Nenhuma compra no cartão ainda.</p>}
     </div>
   </div>
 }
@@ -16005,9 +16120,35 @@ function diffWords(a, b) {
 function Budgets({entity,transactions,month}){
   const {data,add,remove}=entity;
   const [cat,setCat]=useState(""); const [limit,setLimit]=useState("");
-  const spent=(cat)=>transactions.filter(x=>x.type==="out" && x.cat===cat).reduce((a,b)=>a+b.value,0);
+  const spent=(c)=>transactions.filter(x=>x.type==="out" && x.cat===c).reduce((a,b)=>a+(Number(b.value)||0),0);
   const submit=()=>{if(!cat.trim()||!limit)return; add({cat,limit_value:Number(limit)});setCat("");setLimit("");};
-  return <div className="content"><div className="panel"><div className="panelTitle"><h2>Orçamento mensal</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div><div className="inlineAdd"><input value={cat} onChange={e=>setCat(e.target.value)} placeholder="Categoria (ex.: Alimentação)"/><input value={limit} onChange={e=>setLimit(e.target.value)} type="number" step="0.01" min="0" placeholder="Limite mensal"/><button onClick={submit}><Plus/></button></div></div><div className="budgetGrid">{data.map(x=>{const s=spent(x.cat),pct=x.limit_value?Math.round(s/x.limit_value*100):0;return <div className="budgetCard" key={x.id}><div className="panelTitle"><h3>{x.cat}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div><b>{money(s)} <small>/ {money(x.limit_value)}</small></b><div className="progress"><i style={{width:Math.min(100,pct)+"%"}}/></div><p>{pct>100?`Você ultrapassou ${money(s-x.limit_value)}.`:`Restam ${money(Math.max(0,x.limit_value-s))}.`}</p></div>})}{!data.length&&<p className="emptyHint">Cadastre limites por categoria para acompanhar seus gastos.</p>}</div></div>;
+  const catSuggestions = Array.from(new Set(transactions.map(x=>String(x.cat||"").trim()).filter(Boolean))).filter(c=>!data.some(b=>b.cat===c));
+  const totalLimit = data.reduce((a,b)=>a+(Number(b.limit_value)||0),0);
+  const totalSpent = data.reduce((a,b)=>a+spent(b.cat),0);
+  return <div className="content">
+    {data.length>0 && <div className="stats">
+      <Card title="Limite total" value={money(totalLimit)} icon={<PiggyBank/>}/>
+      <Card title="Gasto nas categorias" value={money(totalSpent)} icon={<TrendingDown/>} negative/>
+      <Card title={totalLimit-totalSpent>=0?"Ainda disponível":"Estourado"} value={money(Math.abs(totalLimit-totalSpent))} icon={<WalletCards/>} big positive={totalLimit-totalSpent>=0} negative={totalLimit-totalSpent<0}/>
+    </div>}
+    <div className="panel"><div className="panelTitle"><h2>Orçamento mensal</h2><span>{month.slice(5)}/{month.slice(0,4)}</span></div>
+      <div className="inlineAdd">
+        <input value={cat} onChange={e=>setCat(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }} list="budgetCatList" placeholder="Categoria (ex.: Alimentação)"/>
+        <datalist id="budgetCatList">{catSuggestions.map(c=><option key={c} value={c}/>)}</datalist>
+        <input value={limit} onChange={e=>setLimit(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }} type="number" step="0.01" min="0" placeholder="Limite mensal"/>
+        <button onClick={submit}><Plus/></button>
+      </div>
+    </div>
+    <div className="budgetGrid">{data.map(x=>{
+      const s=spent(x.cat), pct=x.limit_value?Math.round(s/x.limit_value*100):0, tone=budgetTone(pct);
+      return <div className="budgetCard" key={x.id}>
+        <div className="panelTitle"><h3>{x.cat}</h3><button onClick={()=>remove(x.id)}><Trash2 size={15}/></button></div>
+        <b>{money(s)} <small>/ {money(x.limit_value)}</small></b>
+        <div className="progress"><i style={{width:Math.min(100,pct)+"%", background:tone}}/></div>
+        <p><span style={{color:tone,fontWeight:700}}>{pct}%</span> · {pct>100?`Você ultrapassou ${money(s-x.limit_value)}.`:`Restam ${money(Math.max(0,x.limit_value-s))}.`}</p>
+      </div>;
+    })}{!data.length&&<p className="emptyHint">Cadastre limites por categoria para acompanhar seus gastos.</p>}</div>
+  </div>;
 }
 
 function Goals({entity, session}){
