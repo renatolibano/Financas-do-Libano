@@ -16898,7 +16898,7 @@ function studyGoalPct(g){
     const {current, target} = studyGoalDaysProgress(g);
     return target ? Math.min(100, Math.round(current/target*100)) : 0;
   }
-  if(g.mode==="count"){
+  if(g.mode==="count" || g.mode==="progressao"){
     const t = Number(g.target_value)||0;
     return t ? Math.min(100, Math.round((Number(g.current_value)||0)/t*100)) : 0;
   }
@@ -16909,11 +16909,44 @@ function studyGoalFmtDate(d){
   const [y,m,dd] = d.split("-");
   return (dd && m && y) ? `${dd}/${m}/${y}` : d;
 }
+const progFmt = (n)=> String(Math.round((Number(n)||0)*100)/100).replace(".",",");
+// Metas de evolução (ex.: 40 -> 60 flexões, +1 por dia): situação do dia.
+function studyGoalProgInfo(g){
+  const cur = Number(g.current_value)||0, step = Number(g.prog_step)||1, target = Number(g.target_value)||0;
+  return {cur, step, target, doneToday: g.prog_date===todayISO(), hold: !!g.prog_hold, next: target>0 ? Math.min(target, cur+step) : cur+step};
+}
+// Metas do dia (diária/evolução) ainda sem registro hoje.
+function studyGoalPendingToday(g){
+  if(g.status!=="andamento" || (g.start_date && g.start_date>todayISO())) return false;
+  if(g.mode==="diaria") return dailyGoalToday(g) < (Number(g.daily_target)||0);
+  if(g.mode==="progressao") return g.prog_date!==todayISO();
+  return false;
+}
+// Texto do prazo: "Faltam 5 dias", "Vence hoje" ou "Atrasada há 2 dias" (só para metas em andamento).
+function studyGoalDueText(g){
+  if(g.status!=="andamento" || !g.due_date) return null;
+  const d = daysUntilISO(g.due_date);
+  if(d===null) return null;
+  const pl = (n)=> n+" dia"+(Math.abs(n)===1?"":"s");
+  return d<0 ? {text:`Atrasada há ${pl(-d)}`, late:true} : d===0 ? {text:"Vence hoje", late:false} : {text:`Faltam ${pl(d)}`, late:false};
+}
+// Anel de progresso (SVG) usado no resumo do topo das Metas.
+function GoalRing({pct, color, children, size=68}){
+  const r = (size-10)/2, c = 2*Math.PI*r, v = Math.max(0, Math.min(100, pct||0));
+  return <div className="goalRing" style={{width:size, height:size}}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--bg-surface-3)" strokeWidth="7"/>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="7" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c*(1-v/100)} transform={`rotate(-90 ${size/2} ${size/2})`} style={{transition:"stroke-dashoffset .5s"}}/>
+    </svg>
+    <span>{children}</span>
+  </div>;
+}
 function studyGoalBadge(g){
   if(g.status==="falhou") return {label:"Falhou", color:"#ff5c5c"};
-  if(g.status==="concluida") return {label:"Concluída", color:"#3ecf6a"};
+  if(g.status==="concluida") return {label:"🏆 Concluída", color:"#3ecf6a"};
   if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
   if(g.start_date && g.start_date > todayISO()) return {label:"Agendada", color:"#3ea0ff"};
+  if(g.mode==="progressao") return g.prog_date===todayISO() ? {label:"Hoje: registrado", color:"#3ecf6a"} : {label:"Pendente hoje", color: colorHex(g.color)};
   if(g.mode==="diaria") return dailyGoalToday(g) >= (Number(g.daily_target)||0) ? {label:"Hoje: feita", color:"#3ecf6a"} : {label:"Pendente hoje", color: colorHex(g.color)};
   return {label:"Em andamento", color: colorHex(g.color)};
 }
@@ -17185,6 +17218,18 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
   const [filter,setFilter] = useState("todas");
   const [openMenuId,setOpenMenuId] = useState(null);
   const [modal,setModal] = useState(null); // null | "new" | goal being edited
+  const [progFail,setProgFail] = useState(null); // {id, value}: "Falhei" aberto numa meta de evolução
+
+  // Meta de evolução: registra o dia. gained = quanto subiu hoje; abaixo do mínimo, o novo atual precisa ser mantido no dia seguinte.
+  const progRegister = (g, gained)=>{
+    const step = Number(g.prog_step)||1, target = Number(g.target_value)||0;
+    const next = Math.round(Math.min(target>0 ? target : Infinity, (Number(g.current_value)||0) + gained)*100)/100;
+    const reached = target>0 && next>=target;
+    update(g.id,{ current_value:next, prog_date:todayISO(), prog_hold: gained<step && !reached, ...(reached ? {status:"concluida"} : {}) });
+    setProgFail(null);
+    if(reached) toast(`Meta concluída — ${g.title} 🎉`);
+  };
+  const progHold = (g)=> update(g.id,{prog_hold:false, prog_date:todayISO()});
 
   const myId = session?.user?.id;
   const canShare = cloudConfigured && !!session;
@@ -17251,7 +17296,15 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
   const emAndamento = data.filter(g=>g.status==="andamento").length;
   const concluidas = data.filter(g=>g.status==="concluida").length;
   const pausadas = data.filter(g=>g.status==="pausada").length;
-  const filtered = filter==="todas" ? data : data.filter(g=>g.status===filter);
+  const filteredRaw = filter==="todas" ? data : data.filter(g=>g.status===filter);
+  // Pendentes do dia primeiro, depois as demais em andamento, pausadas, concluídas e falhadas (ordem estável).
+  const goalRank = (g)=> g.status==="andamento" ? (studyGoalPendingToday(g)?0:1) : g.status==="pausada"?2 : g.status==="concluida"?3 : 4;
+  const filtered = filteredRaw.slice().sort((a,b)=>goalRank(a)-goalRank(b));
+  const dailyList = data.filter(g=>(g.mode==="diaria"||g.mode==="progressao") && g.status==="andamento" && !(g.start_date && g.start_date>todayISO()) && (!canShare || g.user_id===myId));
+  const dailyDone = dailyList.filter(g=>!studyGoalPendingToday(g)).length;
+  const overallPct = total ? Math.round(concluidas/total*100) : 0;
+  const heroPct = dailyList.length ? Math.round(dailyDone/dailyList.length*100) : overallPct;
+  const heroPending = dailyList.length - dailyDone;
 
   const confirmRemove = (id)=>{ if(confirm("Excluir esta meta?")){ setOpenMenuId(null); remove(id); } };
 
@@ -17267,6 +17320,15 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
 
     {canShare && partners.length>0 && <p className="emptyHint">Vinculado com: {partners.map(p=>p.partner_email).join(", ")}</p>}
     {!canShare && <p className="emptyHint">Ative a sincronização (Supabase) para criar metas de estudo em conjunto com outra conta.</p>}
+
+    {total>0 && <div className="goalHero">
+      <GoalRing pct={heroPct} color={dailyList.length && heroPending===0 ? "#3ecf6a" : "#f0b429"}>{dailyList.length ? `${dailyDone}/${dailyList.length}` : `${overallPct}%`}</GoalRing>
+      <div className="goalHeroText">
+        <b>{dailyList.length ? (heroPending===0 ? "Metas do dia cumpridas 🎉" : heroPending===1 ? "1 meta do dia pendente" : `${heroPending} metas do dia pendentes`) : "Seu progresso geral"}</b>
+        <small>{concluidas} de {total} metas concluídas · {emAndamento} em andamento</small>
+        <div className="progress"><i style={{width:overallPct+"%"}}/></div>
+      </div>
+    </div>}
 
     <div className="studyStats">
       <div className="studyStat"><div className="studyStatIcon" style={{background:"#ff5c5c22",color:"#ff5c5c"}}><Target size={17}/></div><strong>{total}</strong><small>Metas no total</small></div>
@@ -17293,9 +17355,12 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
         const Icon = STUDY_ICONS[g.icon] || Target;
         const badge = studyGoalBadge(g);
         const daysInfo = g.mode==="dias" ? studyGoalDaysProgress(g) : null;
+        const prog = g.mode==="progressao" ? studyGoalProgInfo(g) : null;
+        const due = studyGoalDueText(g);
+        const progDays = prog && g.status==="andamento" && prog.cur<prog.target ? Math.ceil((prog.target-prog.cur)/prog.step) : 0;
         const mine = !canShare || g.user_id===myId;
         const otherEmail = partnerEmail(g.user_id);
-        return <div className="studyGoalCard" key={g.id}>
+        return <div className={"studyGoalCard"+(g.status==="concluida"?" done":"")} key={g.id} style={{"--gc":hex}}>
           <div className="studyGoalIcon" style={{background:hex+"22", color:hex}}><Icon size={20}/></div>
           <div className="studyGoalBody">
             <div className="studyGoalTop">
@@ -17303,7 +17368,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
               <button className="studyGoalMenuBtn" onClick={(e)=>{e.stopPropagation(); setOpenMenuId(id=>id===g.id?null:g.id);}}><MoreVertical size={18}/></button>
             </div>
             <div className="studyGoalProgressRow">
-              <div className="progress"><i style={{width:pct+"%", background:hex}}/></div>
+              <div className="progress ticks"><i style={{width:pct+"%", background:`linear-gradient(90deg,${hex}99,${hex})`}}/></div>
               <span className="studyGoalPct" style={{color:hex}}>{pct}%</span>
             </div>
             <div className="studyGoalFoot">
@@ -17311,6 +17376,8 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                 <span className="studyGoalFootInfo">
                   {g.mode==="diaria"
                     ? <><Flame size={13}/> Hoje: {Math.round(dailyGoalToday(g)*10)/10} / {g.daily_target||0} {DAILY_UNIT_LABEL[g.daily_unit]||""}{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
+                    : g.mode==="progressao"
+                    ? <><TrendingUp size={13}/> Atual: {progFmt(prog.cur)} / {progFmt(prog.target)} {g.unit||""} · +{progFmt(prog.step)} por dia</>
                     : g.mode==="dias"
                     ? (daysInfo.scheduled
                         ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
@@ -17319,8 +17386,21 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                       ? <><ClipboardList size={13}/> Progresso: {g.current_value||0} / {g.target_value||0} {g.unit||""}</>
                       : (g.start_date && g.start_date>todayISO()
                           ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
-                          : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}</> : ""))}
+                          : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}{due && <b style={{color:due.late?"#ff7b7b":"inherit", fontWeight:700}}> · {due.text}</b>}</> : ""))}
                 </span>
+                {prog && progDays>0 && (
+                  <span className="studyGoalFootInfo"><CalendarClock size={13}/> Previsão: {studyGoalFmtDate(isoAddDays(todayISO(), prog.doneToday ? progDays : progDays-1))} (~{progDays} dia{progDays===1?"":"s"} no ritmo atual)</span>
+                )}
+                {(g.mode==="count" || g.mode==="progressao") && due && (
+                  <span className="studyGoalFootInfo" style={due.late?{color:"#ff7b7b"}:undefined}><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)} · {due.text}</span>
+                )}
+                {prog && g.status==="andamento" && (
+                  <span className="studyGoalFootInfo studyGoalFootLink">
+                    {prog.doneToday ? <><CheckCircle2 size={13}/> Hoje: registrado</>
+                      : prog.hold ? <><Flame size={13}/> Hoje: mantenha os {progFmt(prog.cur)}</>
+                      : <><Flame size={13}/> Hoje: chegue a {progFmt(prog.next)} (+{progFmt(prog.step)})</>}
+                  </span>
+                )}
                 {g.mode==="diaria" && g.link_pdf_id && (
                   <span className="studyGoalFootInfo studyGoalFootLink">
                     {g.link_source==="audiolivro" ? <Headphones size={13}/> : <BookOpen size={13}/>} {(g.link_source==="audiolivro" ? audiobooksList : booksList).find(x=>x.id===g.link_pdf_id)?.title || "Item removido"} · meta diária (atualiza sozinha)
@@ -17340,6 +17420,20 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
               </div>
               <span className="studyGoalBadge" style={{color:badge.color, borderColor:badge.color}}>{badge.label}</span>
             </div>
+            {prog && mine && g.status==="andamento" && !prog.doneToday && (
+              progFail?.id===g.id
+                ? <div className="goalProgRow" onClick={e=>e.stopPropagation()}>
+                    <input type="number" min="0" step="any" autoFocus value={progFail.value} onChange={e=>setProgFail({id:g.id, value:e.target.value})} placeholder={`Quanto subiu? (meta +${progFmt(prog.step)})`}/>
+                    <button type="button" className="ghost" disabled={progFail.value===""} onClick={()=>progRegister(g, Math.max(0, Number(progFail.value)||0))}>Confirmar</button>
+                    <button type="button" className="ghost" onClick={()=>setProgFail(null)}>Cancelar</button>
+                  </div>
+                : prog.hold
+                  ? <div className="goalProgRow"><button type="button" className="ghost goalProgOk" onClick={()=>progHold(g)}><CheckCircle2 size={14}/> Consegui manter os {progFmt(prog.cur)}</button></div>
+                  : <div className="goalProgRow">
+                      <button type="button" className="ghost goalProgOk" onClick={()=>progRegister(g, prog.step)}><CheckCircle2 size={14}/> Consegui +{progFmt(prog.step)}</button>
+                      <button type="button" className="ghost goalProgFail" onClick={()=>setProgFail({id:g.id, value:""})}><XCircle size={14}/> Falhei</button>
+                    </div>
+            )}
           </div>
           {openMenuId===g.id && <div className="studyGoalMenuPop" onClick={e=>e.stopPropagation()}>
             <button onClick={()=>{setOpenMenuId(null); setModal(g);}}><Pencil size={13}/> Editar</button>
@@ -17404,6 +17498,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
   const [dailySource,setDailySource] = useState(goal?.mode==="diaria" && goal?.link_source==="audiolivro" ? "audiolivro" : "livro");
   const [dailyTarget,setDailyTarget] = useState(goal?.daily_target || "");
   const [notifyTime,setNotifyTime] = useState(goal?.daily_notify_time || "20:00");
+  const [progStep,setProgStep] = useState(goal?.prog_step ?? 1);
 
   const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
   const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
@@ -17465,9 +17560,16 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
       payload.link_page_end = end;
       if (target>0 && current>=target) payload.status = "concluida";
     } else {
-      payload.current_value = mode==="count" ? Number(currentValue)||0 : 0;
-      payload.target_value = (mode==="count" || mode==="dias") ? Number(targetValue)||0 : 0;
-      payload.unit = mode==="count" ? unit.trim() : (mode==="dias" ? "dias" : "");
+      payload.current_value = (mode==="count" || mode==="progressao") ? Number(currentValue)||0 : 0;
+      payload.target_value = (mode==="count" || mode==="dias" || mode==="progressao") ? Number(targetValue)||0 : 0;
+      payload.unit = (mode==="count" || mode==="progressao") ? unit.trim() : (mode==="dias" ? "dias" : "");
+    }
+
+    if (mode==="progressao") {
+      if (!(Number(progStep)>0) || !(payload.target_value>0)) return;
+      payload.prog_step = Number(progStep);
+      if (!goal) { payload.prog_hold = false; payload.prog_date = null; }
+      if (payload.current_value>=payload.target_value) payload.status = "concluida";
     }
 
     if (mode==="diaria") {
@@ -17511,15 +17613,28 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
       </label>
 
       <label>Tipo de progresso
-        <div className="modeToggle">
+        <div className="modeToggle modeToggleWrap">
           <button type="button" className={mode==="percent"?"active":""} onClick={()=>setMode("percent")}>Percentual</button>
           <button type="button" className={mode==="count"?"active":""} onClick={()=>setMode("count")}>Quantidade</button>
           <button type="button" className={mode==="dias"?"active":""} onClick={()=>setMode("dias")}>Por dias</button>
           <button type="button" className={mode==="diaria"?"active":""} onClick={()=>{setMode("diaria"); setLinkPdfId("");}}>Diária</button>
+          <button type="button" className={mode==="progressao"?"active":""} onClick={()=>setMode("progressao")}>Evolução</button>
         </div>
       </label>
 
       {mode==="percent" && <label>Progresso atual (%)<input type="number" min="0" max="100" value={percent} onChange={e=>setPercent(e.target.value)}/></label>}
+
+      {mode==="progressao" && <>
+        <div className="fieldRow">
+          <label>Valor atual<input type="number" min="0" step="any" value={currentValue} onChange={e=>setCurrentValue(e.target.value)} placeholder="Ex.: 40" required/></label>
+          <label>Meta final<input type="number" min="1" step="any" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="Ex.: 60" required/></label>
+        </div>
+        <div className="fieldRow">
+          <label>Subir por dia (+)<input type="number" min="0.01" step="any" value={progStep} onChange={e=>setProgStep(e.target.value)} placeholder="Ex.: 1" required/></label>
+          <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: flexões, páginas"/></label>
+        </div>
+        <p className="fieldHint"><TrendingUp size={13}/> Todo dia você marca "Consegui" (o atual sobe o valor definido) ou "Falhei" (informa quanto subiu; no dia seguinte aparece "Consegui manter" o novo atual). A meta conclui sozinha ao chegar no valor final.</p>
+      </>}
 
       {mode==="dias" && <>
         <label>Meta (em dias)<input type="number" min="1" value={targetValue} onChange={e=>setTargetValue(e.target.value)} placeholder="Ex.: 7"/></label>

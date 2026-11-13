@@ -3133,3 +3133,22 @@ body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px
 .remConfirmBtns{display:flex;gap:10px;margin-top:8px}
 .remConfirmBtns button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:12px;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-1);font-weight:600}
 .remConfirmBtns button.danger{background:#d64545;border-color:#d64545;color:#fff}
+
+.modeToggleWrap{flex-wrap:wrap}.modeToggleWrap button{min-width:calc(33% - 8px)}
+.goalProgRow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.goalProgRow input{flex:1;min-width:120px;padding:8px 10px;border-radius:9px;border:1px solid var(--border);background:var(--bg-surface-2);color:var(--text-1);font-size:12.5px}
+.goalProgRow .ghost{display:flex;align-items:center;gap:6px;padding:8px 12px}
+.goalProgOk{color:#3ecf6a;border-color:#3ecf6a}
+.goalProgFail{color:#ff5c5c;border-color:#ff5c5c}
+
+.goalHero{display:flex;align-items:center;gap:18px;border:1px solid var(--border);background:linear-gradient(135deg,var(--bg-surface),var(--bg-surface-2));border-radius:16px;padding:18px 20px;margin-bottom:18px}
+.goalHeroText{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.goalHeroText b{font-size:15.5px}
+.goalHeroText small{color:var(--text-2);font-size:12px}
+.goalRing{position:relative;flex:0 0 auto}
+.goalRing span{position:absolute;inset:0;display:grid;place-items:center;font-size:14px;font-weight:800}
+.studyGoalCard{border-left:3px solid var(--gc,var(--border));transition:border-color .2s,transform .15s}
+.studyGoalCard.done{opacity:.82}
+.studyGoalCard .progress i{transition:width .5s}
+.progress.ticks{position:relative}
+.progress.ticks::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,transparent calc(25% - 1px),#0007 calc(25% - 1px),#0007 25%,transparent 25%,transparent calc(50% - 1px),#0007 calc(50% - 1px),#0007 50%,transparent 50%,transparent calc(75% - 1px),#0007 calc(75% - 1px),#0007 75%,transparent 75%)}

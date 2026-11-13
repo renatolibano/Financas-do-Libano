@@ -1425,3 +1425,13 @@ begin
     execute format('create policy "delete_own_%1$s" on %1$s for delete using (auth.uid() = user_id)', t);
   end loop;
 end $$;
+
+
+-- Atualização: Metas de evolução (ex.: flexões 40 -> 60, subindo +1 por dia).
+-- current_value/target_value/unit já existem; prog_step = quanto precisa subir por dia;
+-- prog_date = último dia registrado; prog_hold = falhou no mínimo e precisa manter o novo atual no dia seguinte.
+alter table study_goals drop constraint if exists study_goals_mode_check;
+alter table study_goals add constraint study_goals_mode_check check (mode in ('percent','count','dias','diaria','progressao'));
+alter table study_goals add column if not exists prog_step numeric not null default 1;
+alter table study_goals add column if not exists prog_date date;
+alter table study_goals add column if not exists prog_hold boolean not null default false;
