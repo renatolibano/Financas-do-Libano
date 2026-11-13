@@ -16898,7 +16898,12 @@ function studyGoalPct(g){
     const {current, target} = studyGoalDaysProgress(g);
     return target ? Math.min(100, Math.round(current/target*100)) : 0;
   }
-  if(g.mode==="count" || g.mode==="progressao"){
+  if(g.mode==="progressao"){
+    // A barra começa no primeiro valor atual informado (prog_start): 40 -> 60 começa em 0% e chega a 100% em 60.
+    const t = Number(g.target_value)||0, st = Number(g.prog_start)||0;
+    return t>st ? Math.min(100, Math.max(0, Math.round(((Number(g.current_value)||0)-st)/(t-st)*100))) : 0;
+  }
+  if(g.mode==="count"){
     const t = Number(g.target_value)||0;
     return t ? Math.min(100, Math.round((Number(g.current_value)||0)/t*100)) : 0;
   }
@@ -17377,7 +17382,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                   {g.mode==="diaria"
                     ? <><Flame size={13}/> Hoje: {Math.round(dailyGoalToday(g)*10)/10} / {g.daily_target||0} {DAILY_UNIT_LABEL[g.daily_unit]||""}{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
                     : g.mode==="progressao"
-                    ? <><TrendingUp size={13}/> Atual: {progFmt(prog.cur)} / {progFmt(prog.target)} {g.unit||""} · +{progFmt(prog.step)} por dia</>
+                    ? <><TrendingUp size={13}/> Atual: {progFmt(prog.cur)} / {progFmt(prog.target)} {g.unit||""} · +{progFmt(prog.step)} por dia{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
                     : g.mode==="dias"
                     ? (daysInfo.scheduled
                         ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
@@ -17499,6 +17504,8 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
   const [dailyTarget,setDailyTarget] = useState(goal?.daily_target || "");
   const [notifyTime,setNotifyTime] = useState(goal?.daily_notify_time || "20:00");
   const [progStep,setProgStep] = useState(goal?.prog_step ?? 1);
+  const [progStart,setProgStart] = useState(goal?.prog_start ?? "");
+  const [progRemind,setProgRemind] = useState(goal ? !!goal.daily_notify_time : true);
 
   const linkOptions = linkSource==="livro" ? booksList : studyPdfsList;
   const linkedDoc = linkOptions.find(d=>d.id===linkPdfId);
@@ -17568,7 +17575,10 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
     if (mode==="progressao") {
       if (!(Number(progStep)>0) || !(payload.target_value>0)) return;
       payload.prog_step = Number(progStep);
-      if (!goal) { payload.prog_hold = false; payload.prog_date = null; }
+      payload.daily_notify_time = progRemind ? (notifyTime || "20:00") : null;
+      if (progRemind) requestNotificationPermission();
+      if (!goal) { payload.prog_hold = false; payload.prog_date = null; payload.prog_start = payload.current_value; }
+      else payload.prog_start = progStart==="" ? (goal.prog_start ?? null) : Number(progStart);
       if (payload.current_value>=payload.target_value) payload.status = "concluida";
     }
 
@@ -17633,7 +17643,10 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
           <label>Subir por dia (+)<input type="number" min="0.01" step="any" value={progStep} onChange={e=>setProgStep(e.target.value)} placeholder="Ex.: 1" required/></label>
           <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: flexões, páginas"/></label>
         </div>
-        <p className="fieldHint"><TrendingUp size={13}/> Todo dia você marca "Consegui" (o atual sobe o valor definido) ou "Falhei" (informa quanto subiu; no dia seguinte aparece "Consegui manter" o novo atual). A meta conclui sozinha ao chegar no valor final.</p>
+        {goal && <label>Valor inicial (onde a barra começa)<input type="number" step="any" value={progStart} onChange={e=>setProgStart(e.target.value)} placeholder="Ex.: 40"/></label>}
+        <label className="penCheckLabel"><input type="checkbox" checked={progRemind} onChange={e=>setProgRemind(e.target.checked)}/> Lembrete diário até registrar o dia</label>
+        {progRemind && <label>Avisar a partir de<input type="time" value={notifyTime} onChange={e=>setNotifyTime(e.target.value)} required/></label>}
+        <p className="fieldHint"><TrendingUp size={13}/> Todo dia você marca "Consegui" (o atual sobe o valor definido) ou "Falhei" (informa quanto subiu; no dia seguinte aparece "Consegui manter" o novo atual). A meta conclui sozinha ao chegar no valor final. Com o lembrete ligado, o app avisa a partir do horário e repete de hora em hora até você registrar o dia.</p>
       </>}
 
       {mode==="dias" && <>

@@ -188,10 +188,12 @@ export async function syncDailyGoalNotifications(goals, { enabled, userId } = {}
   const reg = await getSwRegistration();
 
   for (const g of goals) {
-    if (g.mode !== "diaria" || (userId && g.user_id && g.user_id !== userId)) continue;
-    const target = Number(g.daily_target) || 0;
-    const done = dailyGoalToday(g);
-    const active = g.status === "andamento" && target > 0 && (!g.start_date || g.start_date <= today);
+    if ((g.mode !== "diaria" && g.mode !== "progressao") || (userId && g.user_id && g.user_id !== userId)) continue;
+    // Meta de evolução: "feita hoje" = já registrou o dia (Consegui/Falhei); o lembrete é opcional (sem horário = sem aviso).
+    const prog = g.mode === "progressao";
+    const target = prog ? 1 : Number(g.daily_target) || 0;
+    const done = prog ? (g.prog_date === today ? 1 : 0) : dailyGoalToday(g);
+    const active = g.status === "andamento" && target > 0 && (!g.start_date || g.start_date <= today) && (!prog || !!g.daily_notify_time);
     if (!active || done >= target) { closeDailyGoalNotification(g.id); continue; }
     if (!enabled || nowHM < (g.daily_notify_time || "20:00")) continue;
     if (Date.now() - (last[g.id] || 0) < 60 * 60 * 1000) continue;
@@ -199,10 +201,16 @@ export async function syncDailyGoalNotifications(goals, { enabled, userId } = {}
     try {
       if (reg && (await reg.getNotifications({ tag })).length) continue; // ainda na bandeja
     } catch (e) { /* ignora */ }
-    const left = Math.round((target - done) * 10) / 10;
-    const unit = DAILY_UNIT_LABEL[g.daily_unit] || "";
-    const title = "Meta diária pendente";
-    const body = `${g.title} — faltam ${left} ${unit} hoje.`;
+    let title = "Meta diária pendente", body;
+    if (prog) {
+      const cur = Number(g.current_value) || 0, step = Number(g.prog_step) || 1, tgt = Number(g.target_value) || 0;
+      const next = Math.round((tgt > 0 ? Math.min(tgt, cur + step) : cur + step) * 100) / 100;
+      title = "Meta de evolução pendente";
+      body = g.prog_hold ? `${g.title} — hoje é dia de manter os ${cur} ${g.unit || ""}.` : `${g.title} — hoje: chegue a ${next} ${g.unit || ""} (+${step}).`;
+    } else {
+      const left = Math.round((target - done) * 10) / 10;
+      body = `${g.title} — faltam ${left} ${DAILY_UNIT_LABEL[g.daily_unit] || ""} hoje.`;
+    }
     last[g.id] = Date.now();
     try { localStorage.setItem(storageKey, JSON.stringify(last)); } catch (e) { /* ignora */ }
     playNotifSound();

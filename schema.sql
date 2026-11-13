@@ -1435,3 +1435,6 @@ alter table study_goals add constraint study_goals_mode_check check (mode in ('p
 alter table study_goals add column if not exists prog_step numeric not null default 1;
 alter table study_goals add column if not exists prog_date date;
 alter table study_goals add column if not exists prog_hold boolean not null default false;
+
+-- Atualização: valor inicial da meta de evolução (a barra de progresso começa daqui).
+alter table study_goals add column if not exists prog_start numeric;
