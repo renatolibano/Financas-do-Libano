@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
 import { useIdbPersistentState } from "./idbStorage";
 import { loadLocal, saveLocal } from "./storage";
+import { isOffline, isNetworkError, enqueue, newId, subscribeOutbox } from "./offlineQueue";
 
 // "transactions" é a única tabela que cresce sem limite (é o extrato
 // financeiro completo, ano após ano) — por isso tem um hook próprio, em vez
@@ -94,6 +95,12 @@ export function useTransactions(session, initialData) {
           console.error(e);
           setError(e.message);
           loadedRef.current.delete(ym); // permite tentar de novo depois
+          // Sem internet: mostra a última cópia guardada desse mês (mesmo vencida) em vez de uma lista vazia.
+          const stale = loadLocal(monthCacheKey(userId, ym), null);
+          if (stale?.rows) {
+            setMonthsData((d) => ({ ...d, [ym]: stale.rows }));
+            setLoadedMonths((s) => new Set(s).add(ym));
+          }
         })
         .finally(() => setLoadingCount((n) => n - 1));
     },
@@ -119,29 +126,43 @@ export function useTransactions(session, initialData) {
   // cliente, então não há motivo pra reconsultar o saldo só por isso.
   const [balanceVersion, setBalanceVersion] = useState(0);
 
+  // Depois que as alterações feitas offline são enviadas, o saldo do banco pode ter mudado.
+  useEffect(() => subscribeOutbox((ev) => { if (ev === "flushed") setBalanceVersion((v) => v + 1); }), []);
+
   const add = useCallback(
     async (row) => {
       if (cloud) {
+        const place = (inserted) => {
+          const ym = String(inserted.date || "").slice(0, 7);
+          loadedRef.current.add(ym);
+          setMonthsData((d) => {
+            const rows = [inserted, ...(d[ym] || [])];
+            saveLocal(monthCacheKey(userId, ym), { rows, ts: Date.now() });
+            return { ...d, [ym]: rows };
+          });
+          setLoadedMonths((s) => new Set(s).add(ym));
+          setBalanceVersion((v) => v + 1);
+          return inserted;
+        };
+        // Sem internet: aparece na hora e é enviada depois (fila offline).
+        const queueInsert = () => {
+          const full = { ...row, id: row.id || newId(), user_id: userId };
+          enqueue(userId, { kind: "insert", table: "transactions", row: full });
+          return place({ ...full, created_at: new Date().toISOString() });
+        };
+        if (isOffline()) return queueInsert();
         const { data: inserted, error } = await supabase
           .from("transactions")
           .insert({ ...row, user_id: userId })
           .select()
           .maybeSingle();
         if (error) {
+          if (isNetworkError(error)) return queueInsert();
           console.error("Supabase insert error:", error);
           alert("Não foi possível salvar: " + error.message);
           return null;
         }
-        const ym = String(inserted.date || "").slice(0, 7);
-        loadedRef.current.add(ym);
-        setMonthsData((d) => {
-          const rows = [inserted, ...(d[ym] || [])];
-          saveLocal(monthCacheKey(userId, ym), { rows, ts: Date.now() });
-          return { ...d, [ym]: rows };
-        });
-        setLoadedMonths((s) => new Set(s).add(ym));
-        setBalanceVersion((v) => v + 1);
-        return inserted;
+        return place(inserted);
       } else {
         const item = { id: Date.now() + Math.random(), ...row };
         setLocalData((d) => [item, ...d]);
@@ -154,20 +175,26 @@ export function useTransactions(session, initialData) {
   const remove = useCallback(
     async (id) => {
       if (cloud) {
+        const dropLocal = () => {
+          setMonthsData((d) => {
+            const next = {};
+            for (const ym in d) {
+              next[ym] = d[ym].filter((x) => x.id !== id);
+              saveLocal(monthCacheKey(userId, ym), { rows: next[ym], ts: Date.now() });
+            }
+            return next;
+          });
+          setBalanceVersion((v) => v + 1);
+        };
+        const queueDelete = () => { enqueue(userId, { kind: "delete", table: "transactions", id }); dropLocal(); };
+        if (isOffline()) return queueDelete();
         const { error } = await supabase.from("transactions").delete().eq("id", id);
         if (error) {
+          if (isNetworkError(error)) return queueDelete();
           alert("Não foi possível excluir: " + error.message);
           return;
         }
-        setMonthsData((d) => {
-          const next = {};
-          for (const ym in d) {
-            next[ym] = d[ym].filter((x) => x.id !== id);
-            saveLocal(monthCacheKey(userId, ym), { rows: next[ym], ts: Date.now() });
-          }
-          return next;
-        });
-        setBalanceVersion((v) => v + 1);
+        dropLocal();
       } else {
         setLocalData((d) => d.filter((x) => x.id !== id));
       }

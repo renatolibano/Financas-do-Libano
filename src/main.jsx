@@ -43,6 +43,7 @@ import { createInviteCode, acceptInviteCode, getMyPartners } from "./lib/partner
 import { useEntity } from "./lib/useEntity";
 import { useTransactions } from "./lib/useTransactions";
 import { clearLocal, usePersistentState, loadLocal, saveLocal, removeLocalKey } from "./lib/storage";
+import { isOffline, pendingCount, subscribeOutbox, flushOutbox } from "./lib/offlineQueue";
 import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
 import { idbGet, idbSet, idbDelete } from "./lib/idbStorage";
@@ -345,7 +346,27 @@ function Root(){
   if(pinHash && !unlocked){
     return <LockScreen pinHash={pinHash} onUnlock={()=>setUnlocked(true)}/>;
   }
-  return <App session={session} theme={theme} setTheme={setTheme} pinHash={pinHash} setPinHash={setPinHash} autoLockMinutes={autoLockMinutes} setAutoLockMinutes={setAutoLockMinutes}/>;
+  return <>
+    {cloudConfigured && session && <ConnectionBadge userId={session.user.id}/>}
+    <App session={session} theme={theme} setTheme={setTheme} pinHash={pinHash} setPinHash={setPinHash} autoLockMinutes={autoLockMinutes} setAutoLockMinutes={setAutoLockMinutes}/>
+  </>;
+}
+
+// Aviso discreto no topo: sem internet (usando dados salvos no aparelho) e/ou alterações aguardando envio.
+function ConnectionBadge({ userId }) {
+  const [online, setOnline] = useState(!isOffline());
+  const [pending, setPending] = useState(()=>pendingCount(userId));
+  useEffect(()=>{
+    const on = ()=>setOnline(true), off = ()=>setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    const unsub = subscribeOutbox(()=>setPending(pendingCount(userId)));
+    const timer = setInterval(()=>{ if(!isOffline() && pendingCount(userId)>0) flushOutbox(userId); }, 30000);
+    return ()=>{ window.removeEventListener("online", on); window.removeEventListener("offline", off); unsub(); clearInterval(timer); };
+  }, [userId]);
+  if(online && pending===0) return null;
+  const n = `${pending} alteraç${pending===1?"ão":"ões"}`;
+  return <div className="connBadge">{online ? `Enviando ${n}…` : `Sem internet · usando dados salvos${pending ? ` · ${n} para enviar` : ""}`}</div>;
 }
 
 function LockScreen({ pinHash, onUnlock }) {
@@ -879,7 +900,8 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // (transação adicionada/removida, ou importação do banco) — não a cada
   // vez que mais um mês é carregado, já que o saldo do banco já considera
   // todas as transações da conta, não só as que o cliente baixou.
-  const [cloudBalance, setCloudBalance] = useState(null);
+  // Guarda o último saldo recebido para mostrá-lo também quando o app abrir sem internet.
+  const [cloudBalance, setCloudBalance] = useState(()=>{ const u=session?.user?.id; const c=u ? loadLocal("cloud-balance:"+u, null) : null; return c==null ? null : Number(c); });
   useEffect(() => {
     let active = true;
     if (!cloudConfigured || !session?.user?.id) {
@@ -893,6 +915,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
         return;
       }
       setCloudBalance(data == null ? null : Number(data));
+      if(data != null) saveLocal("cloud-balance:"+session.user.id, Number(data));
     });
     return () => { active = false; };
   }, [session?.user?.id, transactions.balanceVersion]);

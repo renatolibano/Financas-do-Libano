@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase, cloudConfigured } from "./supabaseClient";
 import { loadLocal, saveLocal } from "./storage";
 import { useIdbPersistentState } from "./idbStorage";
+import { isOffline, isNetworkError, enqueue, newId } from "./offlineQueue";
 
 const uid = () => Date.now() + Math.random();
 
@@ -127,12 +128,22 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   const add = useCallback(
     async (row) => {
       if (cloud) {
+        // Sem internet: grava na tela/cache agora e envia depois (fila offline, ver offlineQueue.js).
+        const queueInsert = () => {
+          const full = { ...row, id: row.id || newId(), user_id: session.user.id };
+          enqueue(session.user.id, { kind: "insert", table, row: full });
+          const item = { ...full, created_at: new Date().toISOString() };
+          setCloudData((d) => (order === "desc" ? [item, ...d] : [...d, item]));
+          return item;
+        };
+        if (isOffline()) return queueInsert();
         const { data: inserted, error } = await supabase
           .from(table)
           .insert({ ...row, user_id: session.user.id })
           .select()
           .maybeSingle();
         if (error) {
+          if (isNetworkError(error)) return queueInsert();
           console.error("Supabase insert error:", error);
           alert("Não foi possível salvar: " + error.message);
           return null;
@@ -144,14 +155,20 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
         setLocalData((d) => (order === "desc" ? [item, ...d] : [...d, item]));
       }
     },
-    [cloud, table, session, order, setLocalData]
+    [cloud, table, session, order, setLocalData, setCloudData]
   );
 
   const remove = useCallback(
     async (id) => {
       if (cloud) {
+        const queueDelete = () => {
+          enqueue(userId, { kind: "delete", table, id });
+          setCloudData((d) => d.filter((x) => x.id !== id));
+        };
+        if (isOffline()) return queueDelete();
         const { error } = await supabase.from(table).delete().eq("id", id);
         if (error) {
+          if (isNetworkError(error)) return queueDelete();
           alert("Não foi possível excluir: " + error.message);
           return;
         }
@@ -160,12 +177,19 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
         setLocalData((d) => d.filter((x) => x.id !== id));
       }
     },
-    [cloud, table, setLocalData]
+    [cloud, table, userId, setLocalData]
   );
 
   const update = useCallback(
     async (id, patch) => {
       if (cloud) {
+        const applyLocal = () => {
+          let merged = null;
+          setCloudData((d) => d.map((x) => { if (x.id !== id) return x; merged = { ...x, ...patch }; return merged; }));
+          return merged;
+        };
+        const queueUpdate = () => { enqueue(userId, { kind: "update", table, id, patch }); return applyLocal(); };
+        if (isOffline()) return queueUpdate();
         // Pede de volta só o "id" (não a linha inteira) — o cliente já tem
         // os dados que acabou de enviar em `patch`, então baixar tudo de
         // novo (capa em base64, drawings, etc.) a cada troca de página, nota
@@ -178,6 +202,7 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
           .select("id")
           .maybeSingle();
         if (error) {
+          if (isNetworkError(error)) return queueUpdate();
           console.error("Supabase update error:", error);
           alert("Não foi possível atualizar: " + error.message);
           return null;
@@ -187,20 +212,12 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
           alert("Não foi possível atualizar: o item não foi encontrado no banco de dados.");
           return null;
         }
-        let merged = null;
-        setCloudData((d) =>
-          d.map((x) => {
-            if (x.id !== id) return x;
-            merged = { ...x, ...patch };
-            return merged;
-          })
-        );
-        return merged;
+        return applyLocal();
       } else {
         setLocalData((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
       }
     },
-    [cloud, table, setLocalData]
+    [cloud, table, userId, setLocalData]
   );
 
   const reorder = useCallback(

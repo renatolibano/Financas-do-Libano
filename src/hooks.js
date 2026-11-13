@@ -1,6 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, cloudConfigured } from "./lib/supabaseClient";
 import { isNative, setNativeOrientation } from "./lib/native";
+import { isOffline, flushOutbox } from "./lib/offlineQueue";
+
+// Sessão guardada pelo Supabase neste aparelho (chave sb-<projeto>-auth-token) — usada para entrar sem internet.
+function readStoredSession(){
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && /^sb-.+-auth-token$/.test(k)){
+        const v = JSON.parse(localStorage.getItem(k));
+        if(v?.user?.id) return v;
+      }
+    }
+  }catch(e){}
+  return null;
+}
 
 // Hook reutilizável de tela cheia: usa a Fullscreen API do navegador no elemento apontado por `ref`,
 // o que no celular também esconde a barra de endereço/navegação. Se o navegador não suportar a API
@@ -89,15 +104,31 @@ export function useSession(){
   const [recovery,setRecovery] = useState(false);
   useEffect(()=>{
     if(!cloudConfigured){ setChecking(false); return; }
-    supabase.auth.getSession().then(({data})=>{
-      setSession(data.session);
+    // Sem internet: entra direto com a sessão guardada no aparelho. O Supabase tentaria renovar o token
+    // vencido e levaria até ~30 s pra desistir (e devolveria "sem sessão", caindo na tela de login).
+    if(isOffline()){
+      const stored = readStoredSession();
+      if(stored){ setSession(stored); setChecking(false); }
+    }
+    supabase.auth.getSession().then(({data, error})=>{
+      const noNet = isOffline() || error?.name === "AuthRetryableFetchError";
+      setSession(cur => data.session || (noNet ? (cur || readStoredSession()) : null));
       setChecking(false);
+      if(data.session) flushOutbox(data.session.user.id);
     });
     const {data:sub} = supabase.auth.onAuthStateChange((event, s)=>{
+      if(!s && event === "INITIAL_SESSION" && isOffline()) return; // offline: mantém a sessão guardada
       setSession(s);
       if(event === "PASSWORD_RECOVERY") setRecovery(true);
     });
-    return ()=>sub.subscription.unsubscribe();
+    // Conexão voltou: renova a sessão e envia o que foi feito offline.
+    const onOnline = ()=>{
+      supabase.auth.getSession().then(({data})=>{
+        if(data.session){ setSession(data.session); flushOutbox(data.session.user.id); }
+      });
+    };
+    window.addEventListener("online", onOnline);
+    return ()=>{ sub.subscription.unsubscribe(); window.removeEventListener("online", onOnline); };
   },[]);
   return {session, checking, recovery};
 }
