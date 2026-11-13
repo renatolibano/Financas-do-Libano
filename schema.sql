@@ -1438,3 +1438,6 @@ alter table study_goals add column if not exists prog_hold boolean not null defa
 
 -- Atualização: valor inicial da meta de evolução (a barra de progresso começa daqui).
 alter table study_goals add column if not exists prog_start numeric;
+
+-- Atualização: meta de evolução só em dias úteis (sábado e domingo = descanso, sem lembrete).
+alter table study_goals add column if not exists prog_weekdays_only boolean not null default false;

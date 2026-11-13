@@ -16920,11 +16920,25 @@ function studyGoalProgInfo(g){
   const cur = Number(g.current_value)||0, step = Number(g.prog_step)||1, target = Number(g.target_value)||0;
   return {cur, step, target, doneToday: g.prog_date===todayISO(), hold: !!g.prog_hold, next: target>0 ? Math.min(target, cur+step) : cur+step};
 }
+// Meta de evolução só em dias úteis: sábado e domingo são dia de descanso.
+function studyGoalRestToday(g){
+  return g.mode==="progressao" && !!g.prog_weekdays_only && [0,6].includes(new Date().getDay());
+}
+// Dia em que a meta de evolução termina no ritmo atual, contando só os dias de treino (pula fim de semana se for só dias úteis).
+function studyGoalProgFinishISO(g, days, doneToday){
+  let d = doneToday ? isoAddDays(todayISO(),1) : todayISO(), left = days;
+  for(let i=0;i<1500;i++){
+    const wd = new Date(d+"T00:00:00").getDay();
+    if(!(g.prog_weekdays_only && (wd===0||wd===6)) && --left<=0) return d;
+    d = isoAddDays(d,1);
+  }
+  return d;
+}
 // Metas do dia (diária/evolução) ainda sem registro hoje.
 function studyGoalPendingToday(g){
   if(g.status!=="andamento" || (g.start_date && g.start_date>todayISO())) return false;
   if(g.mode==="diaria") return dailyGoalToday(g) < (Number(g.daily_target)||0);
-  if(g.mode==="progressao") return g.prog_date!==todayISO();
+  if(g.mode==="progressao") return g.prog_date!==todayISO() && !studyGoalRestToday(g);
   return false;
 }
 // Texto do prazo: "Faltam 5 dias", "Vence hoje" ou "Atrasada há 2 dias" (só para metas em andamento).
@@ -16951,7 +16965,7 @@ function studyGoalBadge(g){
   if(g.status==="concluida") return {label:"🏆 Concluída", color:"#3ecf6a"};
   if(g.status==="pausada") return {label:"Pausada", color:"#8d95a4"};
   if(g.start_date && g.start_date > todayISO()) return {label:"Agendada", color:"#3ea0ff"};
-  if(g.mode==="progressao") return g.prog_date===todayISO() ? {label:"Hoje: registrado", color:"#3ecf6a"} : {label:"Pendente hoje", color: colorHex(g.color)};
+  if(g.mode==="progressao") return g.prog_date===todayISO() ? {label:"Hoje: registrado", color:"#3ecf6a"} : studyGoalRestToday(g) ? {label:"Dia de descanso", color:"#8d95a4"} : {label:"Pendente hoje", color: colorHex(g.color)};
   if(g.mode==="diaria") return dailyGoalToday(g) >= (Number(g.daily_target)||0) ? {label:"Hoje: feita", color:"#3ecf6a"} : {label:"Pendente hoje", color: colorHex(g.color)};
   return {label:"Em andamento", color: colorHex(g.color)};
 }
@@ -17305,7 +17319,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
   // Pendentes do dia primeiro, depois as demais em andamento, pausadas, concluídas e falhadas (ordem estável).
   const goalRank = (g)=> g.status==="andamento" ? (studyGoalPendingToday(g)?0:1) : g.status==="pausada"?2 : g.status==="concluida"?3 : 4;
   const filtered = filteredRaw.slice().sort((a,b)=>goalRank(a)-goalRank(b));
-  const dailyList = data.filter(g=>(g.mode==="diaria"||g.mode==="progressao") && g.status==="andamento" && !(g.start_date && g.start_date>todayISO()) && (!canShare || g.user_id===myId));
+  const dailyList = data.filter(g=>(g.mode==="diaria"||g.mode==="progressao") && g.status==="andamento" && !(g.start_date && g.start_date>todayISO()) && !studyGoalRestToday(g) && (!canShare || g.user_id===myId));
   const dailyDone = dailyList.filter(g=>!studyGoalPendingToday(g)).length;
   const overallPct = total ? Math.round(concluidas/total*100) : 0;
   const heroPct = dailyList.length ? Math.round(dailyDone/dailyList.length*100) : overallPct;
@@ -17382,7 +17396,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                   {g.mode==="diaria"
                     ? <><Flame size={13}/> Hoje: {Math.round(dailyGoalToday(g)*10)/10} / {g.daily_target||0} {DAILY_UNIT_LABEL[g.daily_unit]||""}{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
                     : g.mode==="progressao"
-                    ? <><TrendingUp size={13}/> Atual: {progFmt(prog.cur)} / {progFmt(prog.target)} {g.unit||""} · +{progFmt(prog.step)} por dia{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
+                    ? <><TrendingUp size={13}/> Atual: {progFmt(prog.cur)} / {progFmt(prog.target)} {g.unit||""} · +{progFmt(prog.step)} por dia{g.prog_weekdays_only ? " · só dias úteis" : ""}{g.daily_notify_time ? ` · avisa às ${g.daily_notify_time}` : ""}</>
                     : g.mode==="dias"
                     ? (daysInfo.scheduled
                         ? <><CalendarPlus size={13}/> Começa em {studyGoalFmtDate(g.start_date)}</>
@@ -17394,7 +17408,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                           : (g.due_date ? <><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)}{due && <b style={{color:due.late?"#ff7b7b":"inherit", fontWeight:700}}> · {due.text}</b>}</> : ""))}
                 </span>
                 {prog && progDays>0 && (
-                  <span className="studyGoalFootInfo"><CalendarClock size={13}/> Previsão: {studyGoalFmtDate(isoAddDays(todayISO(), prog.doneToday ? progDays : progDays-1))} (~{progDays} dia{progDays===1?"":"s"} no ritmo atual)</span>
+                  <span className="studyGoalFootInfo"><CalendarClock size={13}/> Previsão: {studyGoalFmtDate(studyGoalProgFinishISO(g, progDays, prog.doneToday))} (~{progDays} dia{progDays===1?"":"s"}{g.prog_weekdays_only?" úteis":""} no ritmo atual)</span>
                 )}
                 {(g.mode==="count" || g.mode==="progressao") && due && (
                   <span className="studyGoalFootInfo" style={due.late?{color:"#ff7b7b"}:undefined}><CalendarClock size={13}/> Conclusão: {studyGoalFmtDate(g.due_date)} · {due.text}</span>
@@ -17402,6 +17416,7 @@ function StudyGoals({entity, studyPdfsList=[], booksList=[], audiobooksList=[], 
                 {prog && g.status==="andamento" && (
                   <span className="studyGoalFootInfo studyGoalFootLink">
                     {prog.doneToday ? <><CheckCircle2 size={13}/> Hoje: registrado</>
+                      : studyGoalRestToday(g) ? <><Hourglass size={13}/> Hoje: dia de descanso</>
                       : prog.hold ? <><Flame size={13}/> Hoje: mantenha os {progFmt(prog.cur)}</>
                       : <><Flame size={13}/> Hoje: chegue a {progFmt(prog.next)} (+{progFmt(prog.step)})</>}
                   </span>
@@ -17504,6 +17519,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
   const [dailyTarget,setDailyTarget] = useState(goal?.daily_target || "");
   const [notifyTime,setNotifyTime] = useState(goal?.daily_notify_time || "20:00");
   const [progStep,setProgStep] = useState(goal?.prog_step ?? 1);
+  const [progWeekdays,setProgWeekdays] = useState(!!goal?.prog_weekdays_only);
   const [progStart,setProgStart] = useState(goal?.prog_start ?? "");
   const [progRemind,setProgRemind] = useState(goal ? !!goal.daily_notify_time : true);
 
@@ -17575,6 +17591,7 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
     if (mode==="progressao") {
       if (!(Number(progStep)>0) || !(payload.target_value>0)) return;
       payload.prog_step = Number(progStep);
+      payload.prog_weekdays_only = progWeekdays;
       payload.daily_notify_time = progRemind ? (notifyTime || "20:00") : null;
       if (progRemind) requestNotificationPermission();
       if (!goal) { payload.prog_hold = false; payload.prog_date = null; payload.prog_start = payload.current_value; }
@@ -17643,6 +17660,12 @@ function StudyGoalModal({goal, studyPdfsList=[], booksList=[], audiobooksList=[]
           <label>Subir por dia (+)<input type="number" min="0.01" step="any" value={progStep} onChange={e=>setProgStep(e.target.value)} placeholder="Ex.: 1" required/></label>
           <label>Unidade<input value={unit} onChange={e=>setUnit(e.target.value)} placeholder="Ex.: flexões, páginas"/></label>
         </div>
+        <label>Dias da meta
+          <div className="modeToggle">
+            <button type="button" className={!progWeekdays?"active":""} onClick={()=>setProgWeekdays(false)}>Todo dia</button>
+            <button type="button" className={progWeekdays?"active":""} onClick={()=>setProgWeekdays(true)}>Só dias úteis</button>
+          </div>
+        </label>
         {goal && <label>Valor inicial (onde a barra começa)<input type="number" step="any" value={progStart} onChange={e=>setProgStart(e.target.value)} placeholder="Ex.: 40"/></label>}
         <label className="penCheckLabel"><input type="checkbox" checked={progRemind} onChange={e=>setProgRemind(e.target.checked)}/> Lembrete diário até registrar o dia</label>
         {progRemind && <label>Avisar a partir de<input type="time" value={notifyTime} onChange={e=>setNotifyTime(e.target.value)} required/></label>}

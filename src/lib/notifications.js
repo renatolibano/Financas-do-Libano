@@ -193,7 +193,7 @@ export async function syncDailyGoalNotifications(goals, { enabled, userId } = {}
     const prog = g.mode === "progressao";
     const target = prog ? 1 : Number(g.daily_target) || 0;
     const done = prog ? (g.prog_date === today ? 1 : 0) : dailyGoalToday(g);
-    const active = g.status === "andamento" && target > 0 && (!g.start_date || g.start_date <= today) && (!prog || !!g.daily_notify_time);
+    const active = g.status === "andamento" && target > 0 && (!g.start_date || g.start_date <= today) && (!prog || !!g.daily_notify_time) && !(prog && g.prog_weekdays_only && [0, 6].includes(now.getDay()));
     if (!active || done >= target) { closeDailyGoalNotification(g.id); continue; }
     if (!enabled || nowHM < (g.daily_notify_time || "20:00")) continue;
     if (Date.now() - (last[g.id] || 0) < 60 * 60 * 1000) continue;
