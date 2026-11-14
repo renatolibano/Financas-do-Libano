@@ -92,6 +92,7 @@ import {
 } from "./lib/calendar";
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
+import { downloadWordPdfAsImages } from "./lib/wordPdfImage";
 import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals, sigOf, setWordOriginalSig, downloadPdfFromOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
@@ -23051,7 +23052,21 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     }
     regularExport(kind);
   };
+  // Documento com páginas de PDF importadas e já editado: o PDF sai igual à tela, cada página como imagem.
+  const [exportingPdf, setExportingPdf] = useState("");
+  const exportPdfAsImages = async () => {
+    const dims = currentPageDims();
+    setExportingPdf("Gerando PDF…");
+    try {
+      await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, onProgress: (i, n) => setExportingPdf(`Gerando PDF… página ${i} de ${n}`) });
+    } catch (err) {
+      alert("Não foi possível exportar o PDF: " + (err?.message || err));
+    } finally {
+      setExportingPdf("");
+    }
+  };
   const regularExport = (kind) => {
+    if (kind === "pdf" && bodyRef.current?.querySelector(":scope > .pdf-import-page")) { exportPdfAsImages(); return; }
     if (kind === "docx") downloadWordDocx(currentDocForExport());
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
@@ -24310,6 +24325,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
         </div>
 
         {appendingPdf && <div className="wordToast">Inserindo arquivo no documento…</div>}
+        {exportingPdf && <div className="wordToast">{exportingPdf}</div>}
         {fileMenuOpen && (
           <div className="wordBackstage">
             <div className="wordBackstageNav">
