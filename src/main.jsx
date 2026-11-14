@@ -91,7 +91,7 @@ import {
   parseTimes, timesLabel,
 } from "./lib/calendar";
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
-import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
+import { downloadWordDocx, downloadWordPdf, countWords, safeFileName } from "./lib/wordExport";
 import { downloadWordPdfAsImages } from "./lib/wordPdfImage";
 import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals, sigOf, setWordOriginalSig, downloadPdfFromOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
@@ -2653,13 +2653,36 @@ function resizeImageToDataUrl(file, maxWidth, maxHeight, quality = 0.85) {
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        // JPEG não tem transparência (fundo viraria preto): imagem com transparência (logo, assinatura, desenho) fica em PNG;
+        // se o PNG ficar grande demais, vira JPEG com fundo branco.
+        if (imageHasTransparency(img)) {
+          const png = canvas.toDataURL("image/png");
+          if (png.length < 1500000) { resolve(png); return; }
+          ctx.globalCompositeOperation = "destination-over";
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, width, height);
+        }
         resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.src = reader.result;
     };
     reader.readAsDataURL(file);
   });
+}
+
+// Amostra a imagem reduzida e diz se há algum pixel (semi)transparente.
+function imageHasTransparency(img) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = c.height = 96;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    x.drawImage(img, 0, 0, 96, 96);
+    const d = x.getImageData(0, 0, 96, 96).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] < 255) return true;
+  } catch { /* sem leitura de pixels: segue como JPEG */ }
+  return false;
 }
 
 // Igual a resizeImageToDataUrl, mas devolve um Blob (JPEG) em vez de uma
@@ -2680,7 +2703,10 @@ function resizeImageToBlob(file, maxWidth, maxHeight, quality = 0.85) {
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff"; // JPEG não tem transparência: sem isso o fundo transparente ficaria preto
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
         canvas.toBlob((blob) => {
           if (!blob) { reject(new Error("Falha ao gerar imagem")); return; }
           resolve(blob);
@@ -21592,9 +21618,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const savePending = useRef(false);
   const scheduleSave = (patch) => {
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => onSave(patch), 600);
+    savePending.current = true;
+    saveTimer.current = setTimeout(() => { savePending.current = false; onSave(patch); }, 600);
   };
 
   const handleTitleChange = (e) => {
@@ -21662,14 +21690,63 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     sel.addRange(range);
   };
 
+  // Desfazer/refazer: o cursor volta para onde o texto mudou (e não para o fim do documento) e a rolagem é mantida.
   const restoreHtml = (html) => {
     const el = bodyRef.current;
     if (!el) return;
     setSelectedImg(null);
     setActiveCell(null);
     setSelectedShape(null);
+    const beforeText = el.textContent || "";
+    const sel = window.getSelection();
+    let savedOff = null;
+    if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.setEnd(sel.anchorNode, sel.anchorOffset);
+      savedOff = r.toString().length;
+    }
+    const scrollers = [];
+    for (let n = el.parentElement; n; n = n.parentElement) if (n.scrollTop > 0) scrollers.push([n, n.scrollTop]);
     el.innerHTML = html;
-    placeCaretAtEnd(el);
+    const afterText = el.textContent || "";
+    let off;
+    if (beforeText === afterText) off = savedOff ?? afterText.length; // só formatação mudou: cursor no mesmo lugar
+    else {
+      const max = Math.min(beforeText.length, afterText.length);
+      let p = 0;
+      while (p < max && beforeText[p] === afterText[p]) p++;
+      let q = 0;
+      while (q < max - p && beforeText[beforeText.length - 1 - q] === afterText[afterText.length - 1 - q]) q++;
+      off = afterText.length - q; // fim do trecho que mudou
+    }
+    let placed = false;
+    try {
+      const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let acc = 0, node;
+      while ((node = w.nextNode())) {
+        const len = node.nodeValue.length;
+        if (acc + len >= off) {
+          el.focus({ preventScroll: true });
+          const range = document.createRange();
+          range.setStart(node, off - acc);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          placed = true;
+          break;
+        }
+        acc += len;
+      }
+    } catch { /* cai no fim do documento */ }
+    if (!placed) placeCaretAtEnd(el);
+    scrollers.forEach(([n, top]) => { n.scrollTop = top; });
+    try {
+      const rc = sel.getRangeAt(0).getBoundingClientRect();
+      const host = el.closest(".wordPageArea") || el.parentElement;
+      const hr = host.getBoundingClientRect();
+      if (rc && (rc.bottom < hr.top || rc.top > hr.bottom)) (sel.anchorNode.parentElement || el).scrollIntoView({ block: "center" });
+    } catch { /* sem seleção: nada a rolar */ }
     handleBodyInput();
   };
 
@@ -22936,8 +23013,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
 
   const flushSave = () => {
     clearTimeout(saveTimer.current);
+    savePending.current = false;
     onSave(currentPatch());
   };
+  // Salva na hora se o app/aba for escondido ou fechado com uma edição ainda no atraso de 600 ms (comum no celular).
+  const flushSaveRef = useRef(flushSave);
+  flushSaveRef.current = flushSave;
+  useEffect(() => {
+    const onHide = () => { if (savePending.current && (document.visibilityState === "hidden" || document.visibilityState === undefined)) flushSaveRef.current(); };
+    const onPageHide = () => { if (savePending.current) flushSaveRef.current(); };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => { document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", onPageHide); };
+  }, []);
 
   const handleClose = () => {
     flushSave();
@@ -22956,6 +23044,20 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [appendingPdf, setAppendingPdf] = useState(false);
   // Arquivos originais importados neste documento (baixam idênticos, sem passar pelo editor).
   const [originals, setOriginals] = useState([]);
+  // Impressão: papel e orientação do documento (@page); documentos de PDF importado saem sem margem extra, página a página.
+  useEffect(() => {
+    const st = document.createElement("style");
+    st.setAttribute("data-word-print-page", "");
+    document.head.appendChild(st);
+    const update = () => {
+      const d = currentPageDims();
+      const full = !!bodyRef.current?.querySelector(":scope > .pdf-import-page");
+      st.textContent = `@page{size:${d.w}px ${d.h}px;${full ? "margin:0;" : ""}}`;
+    };
+    update();
+    window.addEventListener("beforeprint", update);
+    return () => { window.removeEventListener("beforeprint", update); st.remove(); };
+  }, [pageSize, orientation]);
   useEffect(() => { let on = true; listWordOriginals(doc?.id).then(l => { if (on) setOriginals(l || []); }); return () => { on = false; }; }, [doc?.id]);
   // Documento importado e ainda sem edições: "PDF"/"Word (.docx)" entregam o arquivo original idêntico (o conteúdo do editor
   // é comparado com o da importação; qualquer edição faz o botão voltar a gerar um arquivo novo a partir do editor).
@@ -23052,31 +23154,51 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     }
     regularExport(kind);
   };
-  // Documento com páginas de PDF importadas e já editado: o PDF sai igual à tela, cada página como imagem.
+  // Documento com páginas de PDF importadas e já editado: PDF e Word saem iguais à tela, cada página como imagem.
   const [exportingPdf, setExportingPdf] = useState("");
-  const exportPdfAsImages = async () => {
+  const exportPagesAsImages = async (format) => {
     const dims = currentPageDims();
-    setExportingPdf("Gerando PDF…");
+    const label = format === "docx" ? "Word" : "PDF";
+    setExportingPdf(`Gerando ${label}…`);
     try {
-      await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, onProgress: (i, n) => setExportingPdf(`Gerando PDF… página ${i} de ${n}`) });
+      await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, format, onProgress: (i, n) => setExportingPdf(`Gerando ${label}… página ${i} de ${n}`) });
     } catch (err) {
-      alert("Não foi possível exportar o PDF: " + (err?.message || err));
+      alert(`Não foi possível exportar o ${label}: ` + (err?.message || err));
     } finally {
       setExportingPdf("");
     }
   };
   const regularExport = (kind) => {
-    if (kind === "pdf" && bodyRef.current?.querySelector(":scope > .pdf-import-page")) { exportPdfAsImages(); return; }
+    if ((kind === "pdf" || kind === "docx") && bodyRef.current?.querySelector(":scope > .pdf-import-page")) { exportPagesAsImages(kind); return; }
     if (kind === "docx") downloadWordDocx(currentDocForExport());
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
   };
   const fileMenuPrint = () => { closeFileMenu(); setTimeout(() => window.print(), 50); };
+  // Compartilhar: envia o documento como arquivo PDF quando o navegador permite; senão, o texto (como antes).
   const fileMenuShare = async () => {
+    const shareTitle = title.trim() || "Documento sem título";
     const text = stripHtml(bodyRef.current?.innerHTML || "").trim().slice(0, 500);
     if (navigator.share) {
-      try { await navigator.share({ title: title.trim() || "Documento sem título", text }); }
-      catch { /* usuário cancelou o compartilhamento — nada a fazer */ }
+      try {
+        if (navigator.canShare) {
+          let blob;
+          setExportingPdf("Preparando PDF…");
+          try {
+            if (bodyRef.current?.querySelector(":scope > .pdf-import-page")) {
+              const dims = currentPageDims();
+              blob = await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, asBlob: true, onProgress: (i, n) => setExportingPdf(`Preparando PDF… página ${i} de ${n}`) });
+            } else blob = await downloadWordPdf(currentDocForExport(), { asBlob: true });
+          } catch { blob = null; }
+          finally { setExportingPdf(""); }
+          const file = blob && new File([blob], `${safeFileName(shareTitle)}.pdf`, { type: "application/pdf" });
+          if (file && navigator.canShare({ files: [file] })) {
+            try { await navigator.share({ title: shareTitle, files: [file] }); return; }
+            catch (err) { if (err?.name === "AbortError") return; /* outro erro (ex.: gesto expirado): cai no texto */ }
+          }
+        }
+        await navigator.share({ title: shareTitle, text });
+      } catch { /* usuário cancelou o compartilhamento — nada a fazer */ }
     } else {
       try { await navigator.clipboard.writeText(text); alert("Este navegador não tem compartilhamento nativo. O texto do documento foi copiado."); }
       catch { alert("Compartilhamento não é suportado neste navegador."); }
@@ -23781,12 +23903,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   }, [focusMode, readMode]);
 
   // ---- paleta de comandos (Ajuda > Comandos) ----
+  // Ctrl+F foca "Localizar", Ctrl+H foca "Substituir por" (também quando a barra já está aberta).
+  const focusFind = (which) => {
+    fmt.setFindOpen(true);
+    setTimeout(() => { const el = (which === "replace" ? fmt.replaceInputRef : fmt.findInputRef).current; el?.focus(); el?.select?.(); }, 0);
+  };
   const commandList = [
     ["Negrito", () => fmt.exec("bold")], ["Itálico", () => fmt.exec("italic")], ["Sublinhado", () => fmt.exec("underline")], ["Tachado", () => fmt.exec("strikeThrough")],
     ["Alinhar à Esquerda", () => fmt.exec("justifyLeft")], ["Centralizar", () => fmt.exec("justifyCenter")], ["Alinhar à Direita", () => fmt.exec("justifyRight")], ["Justificar", () => fmt.exec("justifyFull")],
     ["Marcadores", () => fmt.exec("insertUnorderedList")], ["Numeração", () => fmt.exec("insertOrderedList")], ["Aumentar Recuo", () => fmt.exec("indent")], ["Diminuir Recuo", () => fmt.exec("outdent")],
     ["Título 1", () => fmt.applyHeading("H1")], ["Título 2", () => fmt.applyHeading("H2")], ["Título 3", () => fmt.applyHeading("H3")], ["Parágrafo Normal", () => fmt.applyHeading("P")],
-    ["Localizar", () => fmt.setFindOpen(true)], ["Substituir", () => fmt.setFindOpen(true)], ["Selecionar Tudo", () => fmt.selectAll()],
+    ["Localizar", () => focusFind("find")], ["Substituir", () => focusFind("replace")], ["Selecionar Tudo", () => fmt.selectAll()],
     ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Quebra de Página", () => fmt.insertPageBreak()], ["Inserir Sumário", () => fmt.insertTOC()],
     ["Inserir Nota de Rodapé", () => fmt.insertFootnote()], ["Inserir Nota de Fim", () => fmt.insertEndnote()], ["Inserir Gráfico…", () => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })],
     ["Inserir Assinatura", () => fmt.insertSignatureLine()], ["Data e Hora", () => fmt.insertDateTime()], ["Caixa de Texto", () => fmt.insertTextBox()],
@@ -23868,8 +23995,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       case "m": return run(() => fmt.exec("indent"));
       case "d": return run(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }));
       case "k": return run(() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); });
-      case "f": return run(() => fmt.setFindOpen(true));
-      case "h": return run(() => fmt.setFindOpen(true));
+      case "f": return run(() => focusFind("find"));
+      case "h": return run(() => focusFind("replace"));
       case "p": return run(() => window.print());
       case "s": return run(flushSave);
       case "1": return run(() => fmt.applyLineHeight("1"));
@@ -24579,7 +24706,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   <button onClick={() => fmt.setFindOpen(true)}>Localização Avançada…</button>
                   <button onClick={() => openDlg("goto")}>Ir Para…</button>
                 </>)}
-                <RbSm icon={Replace} label="Substituir" tip="Substituir (Ctrl+H)" desc="Procura um texto no documento e o substitui por outro." onClick={() => fmt.setFindOpen(true)}/>
+                <RbSm icon={Replace} label="Substituir" tip="Substituir (Ctrl+H)" desc="Procura um texto no documento e o substitui por outro." onClick={() => focusFind("replace")}/>
                 {rbm("select", (t) => <RbSm icon={MousePointer2} label="Selecionar" chevron tip="Selecionar" desc="Seleciona todo o documento, o parágrafo ou a frase onde está o cursor." onClick={t}/>, <>
                   <button onClick={fmt.selectAll}>Selecionar Tudo</button>
                   <button onClick={() => selectUnit("paragraph")}>Selecionar Parágrafo</button>
@@ -25549,7 +25676,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 ref={fmt.findInputRef} autoFocus placeholder="Localizar" value={fmt.findQuery}
                 onFocus={() => { fmt.lastFindField.current = "find"; }}
                 onChange={e => { fmt.setFindQuery(e.target.value); fmt.runFind(e.target.value); }}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) fmt.findPrev(); else fmt.findNext(); } }}
+                onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); fmt.closeFind(); } else if (e.key === "Enter") { e.preventDefault(); if (e.shiftKey) fmt.findPrev(); else fmt.findNext(); } }}
               />
               <span className="wordFindCount">{fmt.findMatches.length ? `${fmt.findIndex + 1}/${fmt.findMatches.length}` : "0/0"}</span>
               <button data-tip="Anterior" data-tipdesc="Vai para a ocorrência anterior do termo buscado." onClick={fmt.findPrev}><ChevronDown size={13} style={{ transform: "rotate(180deg)" }}/></button>
@@ -25558,6 +25685,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 ref={fmt.replaceInputRef} placeholder="Substituir por" value={fmt.replaceValue}
                 onFocus={() => { fmt.lastFindField.current = "replace"; }}
                 onChange={e => fmt.setReplaceValue(e.target.value)}
+                onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); fmt.closeFind(); } }}
               />
               <button className="ghost" onClick={fmt.replaceCurrent}>Substituir</button>
               <button className="ghost" onClick={fmt.replaceAll}>Substituir tudo</button>

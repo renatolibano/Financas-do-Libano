@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { Document, Packer, Paragraph, ImageRun, PageOrientation, HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom } from "docx";
 import { downloadBlob, safeFileName } from "./wordExport";
 
 // PDF de um documento com páginas de PDF importadas (.pdf-import-page) JÁ EDITADO: cada página é desenhada como imagem
@@ -91,7 +92,44 @@ async function rasterize(svg, cw, ch, bg) {
   return attempt("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
 }
 
-export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, title, onProgress }) {
+const jpegBytes = (dataUrl) => {
+  const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+
+// .docx com uma seção por página; a imagem fica ancorada no canto da página (sem margens), então não vaza para outra página.
+function buildImageDocx(shots) {
+  const px = (v) => Math.round(v);
+  return new Document({
+    sections: shots.map((sh) => {
+      const landscape = sh.w > sh.h;
+      return {
+        properties: { page: {
+          // o docx troca largura/altura sozinho quando a orientação é paisagem: passa-se sempre retrato
+          size: { width: px(Math.min(sh.w, sh.h) * 15), height: px(Math.max(sh.w, sh.h) * 15), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+          margin: { top: 0, bottom: 0, left: 0, right: 0, header: 0, footer: 0 },
+        } },
+        children: [new Paragraph({
+          spacing: { before: 0, after: 0 },
+          children: [new ImageRun({
+            type: "jpg",
+            data: jpegBytes(sh.jpeg),
+            transformation: { width: px(sh.w), height: px(sh.h) },
+            floating: {
+              horizontalPosition: { relative: HorizontalPositionRelativeFrom.PAGE, offset: 0 },
+              verticalPosition: { relative: VerticalPositionRelativeFrom.PAGE, offset: 0 },
+              behindDocument: true,
+            },
+          })],
+        })],
+      };
+    }),
+  });
+}
+
+export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, title, onProgress, asBlob = false, format = "pdf" }) {
   if (!pageEl || !bodyEl) throw new Error("Documento não encontrado.");
   const rawCss = collectCss();
   const css = escXml(rawCss);
@@ -155,6 +193,7 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
     const bg = idoc.defaultView.getComputedStyle(page).backgroundColor || "#fff";
     const serializer = new XMLSerializer();
     let pdf = null;
+    const shots = []; // só no .docx: uma imagem por página
 
     for (let i = 0; i < list.length; i++) {
       onProgress?.(i + 1, list.length);
@@ -181,13 +220,22 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
 
       const jpeg = await rasterize(svg, cw, ch, bg);
 
+      if (format === "docx") { shots.push({ jpeg, w: p.w, h: p.h }); continue; }
       const wPt = p.w * PX_TO_PT, hPt = p.h * PX_TO_PT;
       const orientation = wPt > hPt ? "landscape" : "portrait";
       if (!pdf) pdf = new jsPDF({ unit: "pt", format: [wPt, hPt], orientation, compress: true });
       else pdf.addPage([wPt, hPt], orientation);
       pdf.addImage(jpeg, "JPEG", 0, 0, wPt, hPt, undefined, "FAST");
     }
-    downloadBlob(pdf.output("blob"), `${safeFileName(title)}.pdf`);
+    if (format === "docx") {
+      const blob = await Packer.toBlob(buildImageDocx(shots));
+      if (asBlob) return blob;
+      downloadBlob(blob, `${safeFileName(title)}.docx`);
+      return;
+    }
+    const blob = pdf.output("blob");
+    if (asBlob) return blob;
+    downloadBlob(blob, `${safeFileName(title)}.pdf`);
   } finally {
     iframe.remove();
   }

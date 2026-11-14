@@ -511,7 +511,7 @@ function blockToLines(b) {
   return [text];
 }
 
-export async function downloadWordPdf(doc) {
+export async function downloadWordPdf(doc, opts = {}) {
   const landscape = doc.orientation === "paisagem";
   const format = PAGE_SIZES[doc.page_size]?.pdf || "a4";
   const marginPt = doc.margins === "estreita" ? 36 : doc.margins === "larga" ? 72 : 54;
@@ -619,6 +619,7 @@ export async function downloadWordPdf(doc) {
     }
   }
 
+  if (opts.asBlob) return pdf.output("blob");
   pdf.save(`${safeFileName(doc.title)}.pdf`);
 }
 

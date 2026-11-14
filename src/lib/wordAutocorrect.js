@@ -62,6 +62,15 @@ export const AUTOCORRECT = [
   [":(", "☹"], [":-(", "☹"], [":|", "\u{1F610}"], ["1/2", "½"], ["1/4", "¼"], ["3/4", "¾"],
 ];
 
+// Correções para português (só palavras sem acento que não existem assim no idioma, para não trocar palavra válida).
+// Usada quando o idioma do documento é português (ou o padrão do app); o usuário pode remover/trocar qualquer uma nas opções.
+export const AUTOCORRECT_PT = [
+  ["voce", "você"], ["voces", "vocês"], ["voçe", "você"], ["tambem", "também"], ["tambén", "também"],
+  ["entao", "então"], ["nao", "não"], ["naõ", "não"], ["sao", "são"], ["alem", "além"], ["porem", "porém"],
+  ["ja", "já"], ["apos", "após"], ["atraves", "através"], ["tres", "três"], ["excessao", "exceção"],
+  ["concerteza", "com certeza"], ["derrepente", "de repente"], ["pessoalmete", "pessoalmente"],
+];
+
 const FRACTIONS = ["1/2", "1/4", "3/4"];
 const INITIAL_CAPS_EXCEPTIONS = ["CDs", "IDs", "PCs", "TVs", "DJs", "GBs", "KBs", "MBs", "TBs", "VMs"];
 const CAPS_LOCK_EXCEPTIONS = ["iOS", "mRNA", "tRNA", "rRNA", "cDNA", "eSIM", "eSATA", "iSCSI", "vCPU"];
@@ -102,11 +111,17 @@ export function isEnglish(lang) {
 
 const isEnglishEntry = (from) => chars(from).some(isAlpha) && chars(from).every((c) => isAlpha(c) || c === "'");
 
-export function replacementIn(word, english, prefs = DEFAULT_PREFS) {
+export function isPortuguese(lang) {
+  const p = String(lang || "").toLowerCase().split(/[-_]/)[0];
+  return p === "" || p === "pt" || p === "por"; // sem idioma definido = padrão do app (pt-BR)
+}
+
+export function replacementIn(word, english, prefs = DEFAULT_PREFS, portuguese = false) {
   const mine = prefs.entries.find(([a]) => a === word);
   if (mine) return mine[1];
   const hit = AUTOCORRECT
     .filter(([a]) => english || !isEnglishEntry(a))
+    .concat(portuguese ? AUTOCORRECT_PT : [])
     .filter(([a]) => !prefs.removed.includes(a) && !prefs.entries.some(([e]) => e === a))
     .filter(([a]) => prefs.fractions || !FRACTIONS.includes(a))
     .find(([a]) => a === word || (chars(a).every(isLower) && word.toLowerCase() === a && isUpper(chars(word)[0])));
@@ -185,7 +200,7 @@ export function shouldCapitalize(word, next) {
 // Palavra que termina no cursor. `before` = texto do parágrafo até o cursor, incluindo o
 // caractere gatilho (espaço ou ,.;:!?) — ou sem ele quando `onEnter`.
 // Devolve { start, end, text, format } (substituir before[start..end] por text) ou null.
-export function autocorrectWord(before, { onEnter = false, english = false, turkic = false, prefs = DEFAULT_PREFS, inCell = false } = {}) {
+export function autocorrectWord(before, { onEnter = false, english = false, portuguese = false, turkic = false, prefs = DEFAULT_PREFS, inCell = false } = {}) {
   if (!prefs.enabled) return null;
   const all = chars(before);
   const last = all[all.length - 1];
@@ -210,7 +225,7 @@ export function autocorrectWord(before, { onEnter = false, english = false, turk
 
   // 2) substituição da palavra inteira, "wait..." -> "wait…", ou sorriso no fim
   let replaced = false;
-  const found = prefs.replaceText ? replacementIn(word, english, prefs) : null;
+  const found = prefs.replaceText ? replacementIn(word, english, prefs, portuguese) : null;
   if (found != null) { word = found; replaced = true; }
   else if (prefs.replaceText && word.length > 3 && word.endsWith("...")) { word = word.slice(0, -3) + "…"; replaced = true; }
   else if (prefs.replaceText) {
@@ -574,7 +589,7 @@ export function createAutocorrect({ getBody, getPrefs, getLang, isTracking, befo
     // 2) AutoCorrect da palavra que terminou
     const lang = getLang();
     const inCell = !!ctx.block.closest("td,th");
-    const res = autocorrectWord(ctx.before, { english: isEnglish(lang), turkic: isTurkic(lang), prefs, inCell });
+    const res = autocorrectWord(ctx.before, { english: isEnglish(lang), portuguese: isPortuguese(lang), turkic: isTurkic(lang), prefs, inCell });
     if (res && (res.changed || res.format)) {
       beforeApply?.();
       const { body, block, lineStart, off } = ctx;
@@ -672,7 +687,7 @@ export function createAutocorrect({ getBody, getPrefs, getLang, isTracking, befo
       // Enter termina a palavra como um espaço faria ("teh" -> "the", maiúscula, link).
       if (off > lineStart) {
         const lang = getLang();
-        const res = autocorrectWord(ctx.before, { onEnter: true, english: isEnglish(lang), turkic: isTurkic(lang), prefs, inCell: !!block.closest("td,th") });
+        const res = autocorrectWord(ctx.before, { onEnter: true, english: isEnglish(lang), portuguese: isPortuguese(lang), turkic: isTurkic(lang), prefs, inCell: !!block.closest("td,th") });
         if (res && (res.changed || res.format)) {
           busy = true;
           try {

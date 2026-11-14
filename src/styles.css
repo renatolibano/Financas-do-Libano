@@ -1857,6 +1857,12 @@ h1{font-size:23px}
   .wordPageArea{display:block!important;position:static!important;overflow:visible!important;padding:0!important;background:none!important}
   .wordPageWrap{display:block!important;zoom:1!important}
   .wordPage{box-shadow:none!important;width:auto!important;min-height:0!important;margin:0!important}
+  /* o 'display:revert' acima desfaz regras que escondem partes do documento: reaplica as que não podem sair impressas */
+  .wordPage .wordRichBody .word-field .wf-code,.wordPage .wordRichBody.wordHideChanges .word-del,.wordPage .word-page-meta{display:none!important}
+  .wordPage .wordRichBody.word-show-codes .word-field .wf-code{display:inline!important}
+  .wordPage .wordRichBody.word-show-codes .word-field .wf-result,.wordPage .wordRichBody .word-field[data-show-code="1"] .wf-result{display:none!important}
+  .wordPage .wordRichBody .pdf-import-page{break-inside:avoid;break-after:page}
+  .wordPage .wordRichBody .pdf-import-page:last-of-type{break-after:auto}
 }
 .wordTableDialog{background:var(--bg-modal);border:1px solid var(--border);border-radius:14px;padding:20px;width:260px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 90px #000a}
 .wordTableDialog h3{margin:0;font-size:15px}

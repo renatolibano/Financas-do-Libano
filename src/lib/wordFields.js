@@ -50,6 +50,16 @@ function groupThousands(digits) {
 }
 
 // Figura numérica "\# ..." (0 sempre mostra, # só com valor, , milhares, . decimais, % × 100).
+// Figura numérica no estilo brasileiro ("#.##0,00": ponto = milhar, vírgula = decimal) ou americano ("#,##0.00").
+// Detecta pelo texto da figura; a americana (que já funcionava) continua saindo no estilo americano.
+const swapSeps = (t) => t.replace(/[.,]/g, (c) => (c === "." ? "," : "."));
+function isBrPicture(core) {
+  const d = core.lastIndexOf("."), c = core.lastIndexOf(",");
+  if (d >= 0 && c >= 0) return c > d;
+  if (c >= 0) return core.length - c - 1 !== 3;
+  if (d >= 0) return core.length - d - 1 === 3 && /^#+$/.test(core.slice(0, d));
+  return false;
+}
 export function formatPicture(value, picture) {
   const sections = picture.split(";");
   let section, x, minus;
@@ -61,7 +71,9 @@ export function formatPicture(value, picture) {
   const rest = section.slice(start);
   let len = rest.search(/[^#0,.]/);
   if (len < 0) len = rest.length;
-  const core = rest.slice(0, len), suffix = rest.slice(len), prefix = section.slice(0, start);
+  const rawCore = rest.slice(0, len), suffix = rest.slice(len), prefix = section.slice(0, start);
+  const br = isBrPicture(rawCore);
+  const core = br ? swapSeps(rawCore) : rawCore;
   if (prefix.includes("%") || suffix.includes("%")) x *= 100;
   const dot = core.indexOf(".");
   const intPic = dot >= 0 ? core.slice(0, dot) : core;
@@ -77,7 +89,8 @@ export function formatPicture(value, picture) {
   whole = whole === "0" && minInt === 0 ? "" : whole.padStart(minInt, "0");
   if (intPic.includes(",")) whole = groupThousands(whole);
   while (decimals.length > minFrac && decimals.endsWith("0")) decimals = decimals.slice(0, -1);
-  const body = decimals ? `${whole}.${decimals}` : whole;
+  const body0 = decimals ? `${whole}.${decimals}` : whole;
+  const body = br ? swapSeps(body0) : body0;
   return `${minus && rounded !== 0 ? "-" : ""}${prefix}${body}${suffix}`;
 }
 
