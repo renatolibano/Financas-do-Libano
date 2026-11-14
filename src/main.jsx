@@ -92,6 +92,7 @@ import {
 } from "./lib/calendar";
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
+import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
 import { PAGE_SIZES, pageSizeLabel, pageSizeCmText } from "./lib/wordPageSizes";
@@ -18476,7 +18477,7 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     try {
       const { title, html, page_size, orientation, margins } = await importWordFile(file);
       const inserted = await add({ title, content: html, preview: stripHtml(html).replace(/\s+/g, " ").trim().slice(0, 200), page_size: page_size || "a4", orientation: orientation || "retrato", margins: margins || "normal" });
-      if (inserted) setActiveDoc(inserted);
+      if (inserted) { saveWordOriginal(inserted.id, file); setActiveDoc(inserted); } // guarda o arquivo exato para baixar idêntico depois
     } catch (err) {
       alert("Não foi possível importar: " + (err?.message || err));
     } finally {
@@ -18562,6 +18563,7 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     setOpenMenuId(null);
     if (!confirm(`Excluir "${doc.title}"? Essa ação não pode ser desfeita.`)) return;
     await remove(doc.id);
+    deleteWordOriginals(doc.id);
   };
 
   const visibleDocs = useMemo(() => {
@@ -22951,6 +22953,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const fileMenuOpenFile = () => openFileInputRef.current?.click();
   // PDF aberto dentro de um documento: entra no FIM do mesmo documento, como novas páginas (em vez de abrir outro documento).
   const [appendingPdf, setAppendingPdf] = useState(false);
+  // Arquivos originais importados neste documento (baixam idênticos, sem passar pelo editor).
+  const [originals, setOriginals] = useState([]);
+  useEffect(() => { let on = true; listWordOriginals(doc?.id).then(l => { if (on) setOriginals(l || []); }); return () => { on = false; }; }, [doc?.id]);
+  const downloadOriginal = (o) => downloadWordOriginal(doc.id, o).catch(err => alert("Não foi possível baixar: " + (err?.message || err)));
   const appendImportedFile = async (file) => {
     setAppendingPdf(true);
     try {
@@ -22979,6 +22985,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       el.appendChild(frag);
       handleBodyInput();
       flushSave();
+      saveWordOriginal(doc.id, file).then(() => listWordOriginals(doc.id)).then(l => setOriginals(l || []));
       firstNew?.scrollIntoView?.({ block: "start", behavior: "smooth" });
     } catch (err) {
       alert("Não foi possível inserir o arquivo: " + (err?.message || err));
@@ -24210,6 +24217,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <button className="ghost" onClick={() => setExportOpen(o => !o)}><Download size={15}/> <span>Baixar</span></button>
               {exportOpen && (
                 <div className="wordExportMenu" onClick={e => e.stopPropagation()}>
+                  {originals.map(o => <button key={o.id} onClick={() => { setExportOpen(false); downloadOriginal(o); }}><FileDown size={14}/> Original: {o.name}</button>)}
                   <button onClick={() => { setExportOpen(false); downloadWordDocx(currentDocForExport()); }}><FileType2 size={14}/> Word (.docx)</button>
                   <button onClick={() => { setExportOpen(false); downloadWordPdf(currentDocForExport()); }}><FileDown size={14}/> PDF</button>
                   {Object.entries(EXPORT_FORMATS).map(([k, f]) => <button key={k} onClick={() => { setExportOpen(false); fileMenuExport(k); }}><FileType2 size={14}/> {f.label}</button>)}
@@ -24287,6 +24295,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               })() : fileMenuSection === "export" ? (<>
                 <h3>Exportar</h3>
                 <p className="wordBackstageHint">Baixa uma cópia deste documento no formato escolhido.</p>
+                {originals.map(o => <button key={o.id} className="wordBackstageBig" onClick={() => downloadOriginal(o)}><FileDown size={20}/> <div><b>Original: {o.name}</b><span>Exatamente o arquivo que você importou, sem nenhuma alteração.</span></div></button>)}
                 <button className="wordBackstageBig" onClick={() => fileMenuExport("docx")}><FileType2 size={20}/> <div><b>Word (.docx)</b><span>Mantém formatação, tabelas e imagens.</span></div></button>
                 <button className="wordBackstageBig" onClick={() => fileMenuExport("pdf")}><FileDown size={20}/> <div><b>PDF</b><span>Pronto para leitura e impressão.</span></div></button>
                 {Object.entries(EXPORT_FORMATS).map(([k, f]) => (
