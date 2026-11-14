@@ -249,7 +249,9 @@ function pageRuns(page, tc, vp) {
 }
 
 // ---------- API ----------
-export async function pdfFileToWordHtml(file) {
+// opts.fit = { w, h } (px): tamanho da página do documento onde o PDF está sendo inserido; cada página do PDF é ajustada
+// (sem cortar) e centralizada num bloco exatamente desse tamanho — assim 3 PDFs de 1 página viram 3 páginas certinhas.
+export async function pdfFileToWordHtml(file, opts = {}) {
   const buf = await file.arrayBuffer();
   const task = pdfjsLib.getDocument({ data: buf, wasmUrl: pdfWasmUrl, fontExtraProperties: true });
   const doc = await task.promise;
@@ -258,24 +260,32 @@ export async function pdfFileToWordHtml(file) {
   let meta = { page_size: "a4", orientation: "retrato" };
   const imgState = { bytes: 0 };
   try {
-    let scale = 1, targetW = 794;
+    let scale = 1, targetW = 794, pageH = 1123;
+    const fit = opts.fit && opts.fit.w > 0 && opts.fit.h > 0 ? opts.fit : null;
+    if (fit) { targetW = fit.w; pageH = fit.h; }
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       const v1 = page.getViewport({ scale: 1 });
-      if (p === 1) {
+      if (p === 1 && !fit) {
         const land = v1.width > v1.height;
         const ratio = Math.max(v1.width, v1.height) / Math.min(v1.width, v1.height);
         const carta = ratio < 1.354;
         const dims = carta ? { w: 816, h: 1056 } : { w: 794, h: 1123 };
         targetW = land ? dims.h : dims.w;
+        pageH = land ? dims.w : dims.h;
         scale = targetW / v1.width;
         meta = { page_size: carta ? "carta" : "a4", orientation: land ? "paisagem" : "retrato" };
       }
-      const vp = page.getViewport({ scale });
+      const pageScale = fit ? Math.min(fit.w / v1.width, fit.h / v1.height) : scale;
+      const vp = page.getViewport({ scale: pageScale });
       const tc = await page.getTextContent();
       const layers = await pageGraphics(page, vp, imgState); // carrega as fontes do PDF (usadas em pageRuns)
       const runs = pageRuns(page, tc, vp);
       const W = Math.round(vp.width), H = Math.round(vp.height);
+      // O bloco tem sempre o tamanho exato da página (o arredondamento de 1 px por página fazia 3 páginas virarem 4).
+      const outW = fit || Math.abs(W - targetW) <= 2 ? targetW : W;
+      const outH = fit || Math.abs(H - pageH) <= 2 ? pageH : H;
+      const offX = Math.round((outW - W) / 2), offY = Math.round((outH - H) / 2);
       let body = "";
       for (const l of layers) {
         if (l.type === "img") { body += l.html; hasContent = true; }
@@ -283,7 +293,8 @@ export async function pdfFileToWordHtml(file) {
       }
       if (runs.length) hasContent = true;
       body += runs.join("\n");
-      pages.push(`<div class="pdf-import-page" style="position:relative;width:${W}px;height:${H}px;overflow:hidden;background:#fff">${body}</div>`);
+      if (offX || offY) body = `<div style="position:absolute;left:${offX}px;top:${offY}px;width:${W}px;height:${H}px">${body}</div>`;
+      pages.push(`<div class="pdf-import-page" style="position:relative;width:${outW}px;height:${outH}px;overflow:hidden;background:#fff">${body}</div>`);
       page.cleanup();
     }
   } finally {

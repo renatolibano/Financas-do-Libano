@@ -92,7 +92,7 @@ import {
 } from "./lib/calendar";
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords } from "./lib/wordExport";
-import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals } from "./lib/wordOriginals";
+import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals, sigOf, setWordOriginalSig, downloadPdfFromOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
 import { PAGE_SIZES, pageSizeLabel, pageSizeCmText } from "./lib/wordPageSizes";
@@ -22956,11 +22956,45 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // Arquivos originais importados neste documento (baixam idênticos, sem passar pelo editor).
   const [originals, setOriginals] = useState([]);
   useEffect(() => { let on = true; listWordOriginals(doc?.id).then(l => { if (on) setOriginals(l || []); }); return () => { on = false; }; }, [doc?.id]);
+  // Documento importado e ainda sem edições: "PDF"/"Word (.docx)" entregam o arquivo original idêntico (o conteúdo do editor
+  // é comparado com o da importação; qualquer edição faz o botão voltar a gerar um arquivo novo a partir do editor).
+  const tryOriginalExport = async (kind) => {
+    if (!originals.length) return false;
+    const latest = originals.slice().sort((a, b) => b.at - a.at)[0];
+    if (!latest.sig || latest.sig !== sigOf(bodyRef.current?.innerHTML || "")) return false; // editado depois da importação
+    if (kind === "pdf") return downloadPdfFromOriginals(doc.id, originals, bodyRef.current.querySelectorAll(":scope > .pdf-import-page").length, title);
+    if (kind === "docx" && originals.length === 1 && /\.docx$/i.test(originals[0].name)) { await downloadWordOriginal(doc.id, originals[0]); return true; }
+    return false;
+  };
+  // Original sem assinatura (importado pela lista): a assinatura é tirada na primeira abertura, antes de qualquer edição.
+  useEffect(() => {
+    const pending = originals.filter(o => !o.sig);
+    if (!pending.length) return;
+    const t = setTimeout(() => {
+      const sig = sigOf(bodyRef.current?.innerHTML || "");
+      Promise.all(pending.map(o => setWordOriginalSig(doc.id, o.id, sig))).then(() => setOriginals(l => l.map(o => (o.sig ? o : { ...o, sig }))));
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [originals]);
+  const attachOriginalRef = useRef(null);
+  const attachOriginal = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    flushSave();
+    await saveWordOriginal(doc.id, file, sigOf(bodyRef.current?.innerHTML || ""));
+    setOriginals((await listWordOriginals(doc.id)) || []);
+    alert("Arquivo original guardado. Enquanto o documento não for editado, PDF/Word baixam esse arquivo idêntico.");
+  };
   const downloadOriginal = (o) => downloadWordOriginal(doc.id, o).catch(err => alert("Não foi possível baixar: " + (err?.message || err)));
   const appendImportedFile = async (file) => {
     setAppendingPdf(true);
     try {
-      const imp = await importWordFile(file);
+      // PDF inserido num documento que já tem páginas de PDF: cada página é ajustada ao tamanho de página do documento.
+      const dims = PAGE_SIZES[pageSize]?.px || PAGE_SIZES.a4.px;
+      const fit = bodyRef.current?.querySelector(":scope > .pdf-import-page") ? { w: orientation === "paisagem" ? dims[1] : dims[0], h: orientation === "paisagem" ? dims[0] : dims[1] } : undefined;
+      const imp = await importWordFile(file, { fit });
       const el = bodyRef.current;
       if (!el) return;
       const frag = document.createRange().createContextualFragment(imp.html);
@@ -22985,7 +23019,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       el.appendChild(frag);
       handleBodyInput();
       flushSave();
-      saveWordOriginal(doc.id, file).then(() => listWordOriginals(doc.id)).then(l => setOriginals(l || []));
+      saveWordOriginal(doc.id, file, sigOf(el.innerHTML)).then(() => listWordOriginals(doc.id)).then(l => setOriginals(l || []));
       firstNew?.scrollIntoView?.({ block: "start", behavior: "smooth" });
     } catch (err) {
       alert("Não foi possível inserir o arquivo: " + (err?.message || err));
@@ -23011,6 +23045,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     closeFileMenu();
   };
   const fileMenuExport = (kind) => {
+    if (kind === "docx" || kind === "pdf") {
+      tryOriginalExport(kind).then(done => { if (!done) regularExport(kind); }).catch(() => regularExport(kind));
+      return;
+    }
+    regularExport(kind);
+  };
+  const regularExport = (kind) => {
     if (kind === "docx") downloadWordDocx(currentDocForExport());
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
@@ -23957,7 +23998,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       if (!ph) return;
       const br = body.getBoundingClientRect();
       const ar = area.getBoundingClientRect();
-      const pages = Math.max(1, Math.ceil((br.height - 2) / ph));
+      // Documento de páginas de PDF importadas: uma página por bloco (não depende de arredondamentos de 1 px); sobra de conteúdo depois do último bloco conta à parte.
+      const pdfBlocks = body.querySelectorAll(":scope > .pdf-import-page");
+      let pages = Math.max(1, Math.ceil((br.height - 2) / ph));
+      if (pdfBlocks.length) {
+        let tail = false;
+        for (let n = pdfBlocks[pdfBlocks.length - 1].nextElementSibling; n; n = n.nextElementSibling) {
+          if (n.classList.contains("word-page-meta")) continue;
+          if ((n.textContent || "").trim() || n.querySelector("img, table, svg")) { tail = true; break; }
+        }
+        if (!tail) pages = pdfBlocks.length;
+      }
       let page = Math.floor((ar.top + ar.height / 2 - br.top) / ph) + 1;
       page = Math.min(Math.max(page, 1), pages);
       setPageInfo(p => (p.page === page && p.pages === pages ? p : { page, pages }));
@@ -24218,9 +24269,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               {exportOpen && (
                 <div className="wordExportMenu" onClick={e => e.stopPropagation()}>
                   {originals.map(o => <button key={o.id} onClick={() => { setExportOpen(false); downloadOriginal(o); }}><FileDown size={14}/> Original: {o.name}</button>)}
-                  <button onClick={() => { setExportOpen(false); downloadWordDocx(currentDocForExport()); }}><FileType2 size={14}/> Word (.docx)</button>
-                  <button onClick={() => { setExportOpen(false); downloadWordPdf(currentDocForExport()); }}><FileDown size={14}/> PDF</button>
+                  <button onClick={() => { setExportOpen(false); fileMenuExport("docx"); }}><FileType2 size={14}/> Word (.docx)</button>
+                  <button onClick={() => { setExportOpen(false); fileMenuExport("pdf"); }}><FileDown size={14}/> PDF</button>
                   {Object.entries(EXPORT_FORMATS).map(([k, f]) => <button key={k} onClick={() => { setExportOpen(false); fileMenuExport(k); }}><FileType2 size={14}/> {f.label}</button>)}
+                  <button onClick={() => { setExportOpen(false); attachOriginalRef.current?.click(); }}><Upload size={14}/> Anexar arquivo original…</button>
+                  <input ref={attachOriginalRef} type="file" accept={IMPORT_ACCEPT} hidden onChange={attachOriginal}/>
                 </div>
               )}
             </div>
