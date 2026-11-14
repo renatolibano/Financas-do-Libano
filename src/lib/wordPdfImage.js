@@ -10,6 +10,11 @@ const MAX_PIXELS = 14e6;
 const JPEG_QUALITY = 0.92;
 const PX_TO_PT = 0.75;
 
+// Qualquer recurso externo (url() que não seja data:, @import) dentro do SVG "suja" o canvas e impede o toDataURL.
+const stripExternal = (t) => t
+  .replace(/@import[^;]*;/g, "")
+  .replace(/url\(\s*(?!["']?\s*data:)[^)]*\)/gi, 'url("data:,")');
+
 const escXml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
 // CSS do app que afeta o conteúdo do editor (regras do Word, do corpo de notas e do PDF importado + regras genéricas de tags).
@@ -36,7 +41,7 @@ function collectCss() {
     try { rules = sheet.cssRules; } catch { continue; }
     if (rules) walk(rules, "");
   }
-  return out.join("\n");
+  return stripExternal(out.join("\n"));
 }
 
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
@@ -62,6 +67,29 @@ const loadImage = (url) => new Promise((resolve, reject) => {
   im.onerror = () => reject(new Error("falha ao desenhar a página"));
   im.src = url;
 });
+
+
+async function rasterize(svg, cw, ch, bg) {
+  const attempt = async (url) => {
+    const img = await loadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(img, 0, 0, cw, ch);
+    await new Promise((r) => setTimeout(r, 0));
+    ctx.drawImage(img, 0, 0, cw, ch); // 2ª passada: alguns navegadores terminam de decodificar imagens internas só depois do 1º desenho
+    const out = canvas.toDataURL("image/jpeg", JPEG_QUALITY); // lança erro se o canvas estiver "tainted"
+    canvas.width = canvas.height = 0;
+    return out;
+  };
+  const blobUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+  try { return await attempt(blobUrl); }
+  catch { /* tenta de novo como data URL (alguns navegadores tratam blob: como origem diferente) */ }
+  finally { URL.revokeObjectURL(blobUrl); }
+  return attempt("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
+}
 
 export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, title, onProgress }) {
   if (!pageEl || !bodyEl) throw new Error("Documento não encontrado.");
@@ -145,28 +173,13 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
         }
         pg.appendChild(bd);
       }
-      const html = serializer.serializeToString(pg);
+      const html = stripExternal(serializer.serializeToString(pg));
 
       const k = Math.min(SCALE, Math.sqrt(MAX_PIXELS / (p.w * p.h)));
       const cw = Math.max(1, Math.round(p.w * k)), ch = Math.max(1, Math.round(p.h * k));
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${cw}" height="${ch}" viewBox="0 0 ${p.w} ${p.h}"><foreignObject x="${-p.x}" y="${-p.y}" width="${pageW}" height="${totalH}"><style xmlns="http://www.w3.org/1999/xhtml">${css}</style>${html}</foreignObject></svg>`;
 
-      const canvas = document.createElement("canvas");
-      canvas.width = cw; canvas.height = ch;
-      const ctx = canvas.getContext("2d");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, cw, ch);
-      let img;
-      const blobUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
-      try {
-        try { img = await loadImage(blobUrl); }
-        catch { img = await loadImage("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg)); }
-        ctx.drawImage(img, 0, 0, cw, ch);
-        await new Promise((r) => setTimeout(r, 0));
-        ctx.drawImage(img, 0, 0, cw, ch); // 2ª passada: alguns navegadores terminam de decodificar imagens internas só depois do 1º desenho
-      } finally { URL.revokeObjectURL(blobUrl); }
-      const jpeg = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
-      canvas.width = canvas.height = 0;
+      const jpeg = await rasterize(svg, cw, ch, bg);
 
       const wPt = p.w * PX_TO_PT, hPt = p.h * PX_TO_PT;
       const orientation = wPt > hPt ? "landscape" : "portrait";
