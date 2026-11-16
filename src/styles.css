@@ -151,11 +151,12 @@
 }
 
 *{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg-grad-3);color:var(--text-1)}
 button,input,select{font:inherit}
 button{cursor:pointer;border:0;background:none;color:inherit}
-.app{min-height:100vh;display:flex;background:radial-gradient(circle at 75% 0%,var(--bg-grad-1) 0,var(--bg-grad-2) 35%,var(--bg-grad-3) 70%)}
-.sidebar{width:76px;height:100vh;border-right:1px solid var(--border-soft);background:var(--bg-sidebar);padding:22px 12px;position:fixed;left:0;top:0;z-index:30;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;transition:width .22s ease,box-shadow .22s ease}
+.app{min-height:100vh;min-height:100dvh;display:flex;background:radial-gradient(circle at 75% 0%,var(--bg-grad-1) 0,var(--bg-grad-2) 35%,var(--bg-grad-3) 70%)}
+.sidebar{width:76px;height:100vh;height:100dvh;border-right:1px solid var(--border-soft);background:var(--bg-sidebar);padding:22px 12px;position:fixed;left:0;top:0;z-index:30;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;transition:width .22s ease,box-shadow .22s ease}
 .sidebar.expanded{width:250px;box-shadow:20px 0 60px #0008}
 .brand{display:flex;align-items:center;gap:11px;padding:0 4px 22px}
 .brandIcon{flex:0 0 auto;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--accent);color:var(--accent-text-on);font-weight:900;font-size:22px;overflow:hidden}
@@ -233,7 +234,7 @@ h1{font-size:28px;margin:0 0 4px}
 header p{margin:0;color:var(--text-2);font-size:13px}
 .add,.primary{background:var(--accent);color:var(--accent-text-on);border-radius:10px;padding:11px 15px;font-weight:750;display:flex;align-items:center;gap:8px}
 .content{max-width:1280px;margin:auto}
-.flashStudyRootFull{max-width:100%;height:100vh;overflow-y:auto;background:var(--bg-grad-3);padding:20px;box-sizing:border-box}
+.flashStudyRootFull{max-width:100%;height:100vh;height:100dvh;overflow-y:auto;background:var(--bg-grad-3);padding:20px;box-sizing:border-box}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
 .stat{border:1px solid var(--border);background:var(--bg-surface);border-radius:15px;padding:18px;min-height:125px;display:flex;flex-direction:column;align-items:flex-start}
 .stat.featured{background:linear-gradient(135deg,var(--bg-featured-1),var(--bg-featured-2));border-color:var(--border-featured)}
@@ -312,8 +313,8 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .inlineAdd button.bankBtn{width:auto;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 16px;white-space:nowrap;font-size:13px;font-weight:600}
 .row button{color:var(--text-3);margin-left:auto}
 .debtActions{display:flex;gap:10px;margin-top:14px}
-.bootScreen{min-height:100vh;display:grid;place-items:center;background:var(--bg-grad-3);color:var(--text-2);font-size:14px}
-.authScreen{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 75% 0%,var(--bg-grad-1) 0,var(--bg-grad-2) 35%,var(--bg-grad-3) 70%);padding:20px}
+.bootScreen{min-height:100vh;min-height:100dvh;display:grid;place-items:center;background:var(--bg-grad-3);color:var(--text-2);font-size:14px}
+.authScreen{min-height:100vh;min-height:100dvh;display:grid;place-items:center;background:radial-gradient(circle at 75% 0%,var(--bg-grad-1) 0,var(--bg-grad-2) 35%,var(--bg-grad-3) 70%);padding:20px}
 .authCard{width:min(380px,100%);background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:28px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
 .authBrand{display:flex;align-items:center;gap:11px;margin-bottom:6px}
 .authCard h1{margin:0;font-size:22px}
@@ -328,7 +329,7 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .aiErrorMsg{background:var(--bg-danger-soft);border:1px solid var(--border-danger);color:#ff9d9d;border-radius:9px;padding:10px;font-size:12px}
 .ghost:disabled{opacity:.6;cursor:default}
 .modalBack{position:fixed;inset:0;background:#000a;backdrop-filter:blur(5px);z-index:50;display:grid;place-items:center;padding:20px}
-.modal{width:min(450px,100%);max-height:calc(100vh - 40px);overflow-y:auto;overflow-x:hidden;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:22px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
+.modal{width:min(450px,100%);max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;overflow-x:hidden;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:22px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
 .lockScreenModal{text-align:center;justify-items:center}
 .lockScreenIcon{width:52px;height:52px;border-radius:50%;background:var(--accent, #4c8dff)22;color:var(--accent, #4c8dff);display:grid;place-items:center}
 .lockScreenPinInput{width:100%;text-align:center;font-size:22px;letter-spacing:10px;padding:12px}
@@ -395,7 +396,7 @@ h1{font-size:23px}
 /* Barra de navegação inferior (celular): fica escondida, só a setinha central some ao toque */
 .mobileTabBar{display:none}
 @media(max-width:760px){
-.mobileTabBar{display:block;position:fixed;left:0;right:0;bottom:0;z-index:50}
+.mobileTabBar{display:block;position:fixed;left:0;right:0;bottom:0;z-index:50;padding-bottom:env(safe-area-inset-bottom,0px);background:var(--bg-sidebar)}
 }
 .mobileTabBarPanel{display:grid;grid-template-columns:repeat(3,1fr);max-height:0;overflow:hidden;background:var(--bg-sidebar);border-top:1px solid var(--border-soft);transition:max-height .22s ease}
 .mobileTabBarPanel.open{max-height:88px}
@@ -551,7 +552,7 @@ h1{font-size:23px}
 
 .whiteboardBody{position:relative;overflow:hidden;padding:0;display:block;touch-action:none;overscroll-behavior:contain}
 .whiteboardBackFull{padding:0;overscroll-behavior:contain}
-.whiteboardModalFull{width:100vw;height:100vh;border-radius:0;position:relative}
+.whiteboardModalFull{width:100vw;height:100vh;height:100dvh;border-radius:0;position:relative}
 .whiteboardModalFull .whiteboardBody{position:absolute;inset:0}
 
 .whiteboardBackBtn{position:absolute;top:16px;left:16px;z-index:15;display:flex;align-items:center;gap:8px;background:rgba(20,20,24,.72);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:999px;padding:8px 16px 8px 10px;color:var(--text-1);font-weight:700;font-size:13px}
@@ -970,7 +971,7 @@ h1{font-size:23px}
 .flashAIBtn{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7b5bff,#ff5bd6);color:#fff;display:grid;place-items:center;flex-shrink:0}
 .flashAIBtn:hover{filter:brightness(1.1)}
 
-.flashAIQuizPanel{width:min(520px,100%);max-height:min(680px,calc(100vh - 40px));display:flex;flex-direction:column;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;box-shadow:0 20px 80px #000;overflow:hidden}
+.flashAIQuizPanel{width:min(520px,100%);max-height:min(680px,calc(100vh - 40px));max-height:min(680px,calc(100dvh - 40px));display:flex;flex-direction:column;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;box-shadow:0 20px 80px #000;overflow:hidden}
 .flashAIQuizHead{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border)}
 .flashAIQuizHeadIcon{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#7b5bff,#ff5bd6);color:#fff;display:grid;place-items:center;flex-shrink:0}
 .flashAIQuizHead b{display:block;font-size:14px}
@@ -1378,7 +1379,7 @@ h1{font-size:23px}
 .levelRunHeadBtns{display:flex;gap:8px}
 .levelExitBtn{width:34px;height:34px;border-radius:10px;background:var(--bg-surface-3);border:1px solid var(--border);color:var(--text-2);display:grid;place-items:center}
 .levelExitBtn:hover{color:#ff9d9d;border-color:var(--border-danger)}
-.levelPipContent{padding:14px;display:grid;gap:12px;min-height:100vh;background:var(--bg-grad-3)}
+.levelPipContent{padding:14px;display:grid;gap:12px;min-height:100vh;min-height:100dvh;background:var(--bg-grad-3)}
 .levelPipAnswerBtns{grid-template-columns:1fr 1fr}
 .levelHistoryRow{display:flex;flex-wrap:wrap;gap:8px}
 .levelDot{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff}
@@ -1973,6 +1974,8 @@ h1{font-size:23px}
   .wordMargin-normal .wordRichBody{padding:32px}
   .wordMargin-larga .wordRichBody{padding:44px}
   .wordFindBar{left:8px;right:8px;max-width:none}
+  /* PDF importado: as páginas têm largura fixa em px; no celular a folha acompanha essa largura (o zoom a encaixa na tela) em vez de cortá-las */
+  .wordPage:has(>.wordRichBody>.pdf-import-page){width:max-content!important;min-width:0!important;min-height:0!important}
 }
 
 /* Aba Design — marcador invisível onde tema/marca d'água/cor/borda de
@@ -2870,7 +2873,7 @@ h1{font-size:23px}
 
 /* Citação: janela flutuante de edição (centro da tela) e linha de citação clicável */
 .abQModalBack{position:fixed;inset:0;z-index:90;background:#000a;backdrop-filter:blur(5px);display:grid;place-items:center;padding:20px}
-.abQModal{width:min(620px,100%);max-height:calc(100vh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;background:var(--bg-modal,var(--bg-surface));border:1px solid var(--border);border-radius:16px;padding:18px;box-shadow:0 24px 70px #000b}
+.abQModal{width:min(620px,100%);max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;background:var(--bg-modal,var(--bg-surface));border:1px solid var(--border);border-radius:16px;padding:18px;box-shadow:0 24px 70px #000b}
 .abQModal h3{margin:0;display:flex;align-items:center;gap:8px;font-size:16px}
 .abQModal small{color:var(--text-2);font-size:12px}
 .abQModal textarea{width:100%;resize:vertical;border-radius:10px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-1);padding:12px;font:inherit;font-size:15px;line-height:1.55;min-height:160px}
@@ -2901,7 +2904,7 @@ h1{font-size:23px}
 
 /* Aviso de atualização do app Android */
 .updateBack{position:fixed;inset:0;z-index:300;display:grid;place-items:center;padding:20px;background:#000b;backdrop-filter:blur(6px);animation:updFade .2s ease}
-.updateCard{position:relative;width:min(380px,100%);max-height:calc(100vh - 40px);overflow:auto;display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:30px 24px 22px;border-radius:24px;background:linear-gradient(180deg,var(--accent-soft-bg),var(--bg-modal) 55%);border:1px solid var(--accent);box-shadow:0 24px 70px #000a,0 0 0 6px var(--accent-ring);color:var(--text-1);animation:updPop .28s cubic-bezier(.2,.9,.3,1.2)}
+.updateCard{position:relative;width:min(380px,100%);max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow:auto;display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:30px 24px 22px;border-radius:24px;background:linear-gradient(180deg,var(--accent-soft-bg),var(--bg-modal) 55%);border:1px solid var(--accent);box-shadow:0 24px 70px #000a,0 0 0 6px var(--accent-ring);color:var(--text-1);animation:updPop .28s cubic-bezier(.2,.9,.3,1.2)}
 .updateCard h2{margin:0;font-size:20px;font-weight:700}
 .updateClose{position:absolute;top:12px;right:12px;display:grid;place-items:center;width:30px;height:30px;padding:0;border-radius:50%;background:var(--bg-surface-2);border:1px solid var(--border);color:var(--text-2)}
 .updateIcon{display:grid;place-items:center;width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;box-shadow:0 8px 24px var(--accent-ring)}

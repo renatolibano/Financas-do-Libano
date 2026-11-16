@@ -625,8 +625,13 @@ export async function downloadWordPdf(doc, opts = {}) {
 
 // Contagem de palavras/caracteres — usada na barra de status do editor.
 export function countWords(html) {
-  const text = stripHtmlLocal(html).trim();
+  const d = document.createElement("div");
+  d.innerHTML = html || "";
+  d.querySelectorAll(".word-del, .word-page-meta").forEach(n => n.remove()); // texto excluído e metadados não contam
+  const chars = (d.textContent || "").trim().length;
+  // textContent cola o texto de parágrafos/células/linhas vizinhos ("a</p><p>b" virava "ab" = 1 palavra): separa os blocos com espaço.
+  d.querySelectorAll("br,p,div,li,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre").forEach(n => n.after(" "));
+  const text = (d.textContent || "").trim();
   const words = text ? text.split(/\s+/).length : 0;
-  const chars = text.length;
   return { words, chars };
 }

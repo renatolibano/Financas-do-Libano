@@ -310,3 +310,40 @@ export async function openExternal(url, system = false) {
 export async function setNativeOrientation(mode) {
   await registerPlugin("Orientation").setMode({ mode });
 }
+
+// ---------- Salvar / compartilhar arquivos (o WebView não baixa por <a download>) ----------
+const MIME_BY_EXT = { pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", json: "application/json", txt: "text/plain", html: "text/html", md: "text/markdown", rtf: "application/rtf", odt: "application/vnd.oasis.opendocument.text", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webm: "audio/webm", mp3: "audio/mpeg", m4a: "audio/mp4" };
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+  fr.onerror = () => reject(new Error("não foi possível ler o arquivo"));
+  fr.readAsDataURL(blob);
+});
+// share = false: grava em Downloads; share = true: abre o seletor de compartilhar do Android.
+export async function saveBlobNative(blob, filename, { share = false } = {}) {
+  const data = await blobToBase64(blob);
+  const ext = String(filename).split(".").pop().toLowerCase();
+  const mime = blob.type || MIME_BY_EXT[ext] || "application/octet-stream";
+  const plugin = registerPlugin("FileSaver");
+  return share ? plugin.share({ filename, mime, data }) : plugin.save({ filename, mime, data });
+}
+
+// Imprimir / salvar como PDF pelo serviço de impressão do Android.
+export const printNative = (title) => registerPlugin("FileSaver").printPage({ title: title || "Libano" });
+
+// Todo download feito por <a download href="blob:..."> (Word, backup, áudios, prints, receitas...) passa a ser salvo em
+// Downloads no app Android, sem precisar mexer em cada tela.
+function installNativeDownloads() {
+  const orig = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.hasAttribute("download") && String(this.href).startsWith("blob:")) {
+      const name = this.download || "arquivo";
+      fetch(this.href).then((r) => r.blob()).then((b) => saveBlobNative(b, name)).then((res) => {
+        if (res?.saved) alert(`Salvo em Downloads: ${name}`);
+      }).catch((e) => alert("Não foi possível salvar o arquivo: " + (e?.message || e)));
+      return;
+    }
+    return orig.apply(this, arguments);
+  };
+}
+if (isNative) installNativeDownloads();

@@ -33,7 +33,7 @@ Teste sem publicar: aba **Actions > Gerar APK Android > Run workflow**. O APK fi
 
 ## Limitações conhecidas
 
-- Downloads de arquivos feitos pelo app (backup, exportar documento, Baixador) usam o mecanismo do navegador e **não funcionam dentro do WebView do Android**. Para isso, use o site no navegador do celular.
+- Downloads de arquivos feitos pelo app (backup, exportar documento, áudios, prints) são salvos na pasta **Downloads** do celular (Android 10+) ou abrem o seletor de compartilhar (Android 9 ou anterior). O botão **Compartilhar** do Word envia o PDF pelo seletor do Android. **Imprimir** no Word abre o serviço de impressão do Android (imprimir ou salvar como PDF). O Baixador (arquivos baixados do servidor) continua só pelo site no navegador.
 - Login/conexão com Strava e links de convite usam o endereço do site.
 - Não há versão para iPhone (continue usando o PWA).
 

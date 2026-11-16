@@ -1,4 +1,4 @@
-import { isNative, appOrigin, syncReminderNotifications, testNativeNotification } from "./lib/native";
+import { isNative, appOrigin, syncReminderNotifications, testNativeNotification, saveBlobNative, printNative } from "./lib/native";
 import UpdateBanner from "./components/UpdateBanner";
 import React, {useMemo, useState, useEffect, useLayoutEffect, useRef} from "react";
 import {createRoot} from "react-dom/client";
@@ -22986,19 +22986,61 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (side === "left") { setMarginLeftCm(rounded); scheduleSave({ margin_left: rounded }); }
     else { setMarginRightCm(rounded); scheduleSave({ margin_right: rounded }); }
   };
+  // Largura natural da folha na tela (antes do zoom): PDF importado = largura do bloco; celular = folha responsiva (100vw - 40); resto = tamanho do papel.
+  const naturalPageWidth = () => {
+    const blk = bodyRef.current?.querySelector(":scope > .pdf-import-page");
+    const bw = blk ? parseFloat(blk.style.width) : 0;
+    if (bw > 0) return bw;
+    if (window.matchMedia("(max-width:760px)").matches) return Math.max(200, window.innerWidth - 40);
+    return currentPageDims().w;
+  };
   const fitZoomToWidth = () => {
     const area = pageAreaRef.current;
     if (!area) return;
-    const { w } = currentPageDims();
+    const w = naturalPageWidth();
     const avail = area.clientWidth - 40;
-    setZoom(Math.max(50, Math.min(200, Math.round((avail / w) * 100))));
+    setZoom(Math.max(25, Math.min(200, Math.round((avail / w) * 100))));
   };
+  // Celular: abre já ajustado à largura da tela (uma página A4 tem 794 px) e aceita pinça com dois dedos para o zoom.
+  const zoomRef = useRef(100);
+  zoomRef.current = zoom;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const area = pageAreaRef.current;
+      if (area && area.clientWidth > 0 && area.clientWidth - 40 < naturalPageWidth() - 2) fitZoomToWidth();
+    }, 60);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.id]);
+  useEffect(() => {
+    const area = pageAreaRef.current;
+    if (!area) return;
+    let start = null;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onStart = (e) => { if (e.touches.length === 2) start = { d: dist(e.touches) || 1, z: zoomRef.current }; };
+    const onMove = (e) => {
+      if (!start || e.touches.length !== 2) return;
+      e.preventDefault();
+      setZoom(Math.max(25, Math.min(200, Math.round(start.z * dist(e.touches) / start.d))));
+    };
+    const onEnd = (e) => { if (e.touches.length < 2) start = null; };
+    area.addEventListener("touchstart", onStart, { passive: true });
+    area.addEventListener("touchmove", onMove, { passive: false });
+    area.addEventListener("touchend", onEnd, { passive: true });
+    area.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      area.removeEventListener("touchstart", onStart);
+      area.removeEventListener("touchmove", onMove);
+      area.removeEventListener("touchend", onEnd);
+      area.removeEventListener("touchcancel", onEnd);
+    };
+  }, [viewMode, readMode]);
   const fitZoomToPage = () => {
     const area = pageAreaRef.current;
     if (!area) return;
     const { h } = currentPageDims();
     const avail = area.clientHeight - 52;
-    setZoom(Math.max(50, Math.min(200, Math.round((avail / h) * 100))));
+    setZoom(Math.max(25, Math.min(200, Math.round((avail / h) * 100))));
   };
 
   // Patch completo do estado atual do documento — usado tanto pra fechar
@@ -23174,14 +23216,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
   };
-  const fileMenuPrint = () => { closeFileMenu(); setTimeout(() => window.print(), 50); };
+  // No app Android, window.print() não faz nada: usa o serviço de impressão do sistema (imprimir ou salvar como PDF).
+  const printDoc = () => {
+    if (isNative) printNative(title.trim() || "Documento").catch(err => alert("Não foi possível imprimir: " + (err?.message || err)));
+    else window.print();
+  };
+  const fileMenuPrint = () => { closeFileMenu(); setTimeout(() => printDoc(), 50); };
   // Compartilhar: envia o documento como arquivo PDF quando o navegador permite; senão, o texto (como antes).
   const fileMenuShare = async () => {
     const shareTitle = title.trim() || "Documento sem título";
     const text = stripHtml(bodyRef.current?.innerHTML || "").trim().slice(0, 500);
-    if (navigator.share) {
+    if (navigator.share || isNative) {
       try {
-        if (navigator.canShare) {
+        if (isNative || navigator.canShare) {
           let blob;
           setExportingPdf("Preparando PDF…");
           try {
@@ -23192,12 +23239,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           } catch { blob = null; }
           finally { setExportingPdf(""); }
           const file = blob && new File([blob], `${safeFileName(shareTitle)}.pdf`, { type: "application/pdf" });
-          if (file && navigator.canShare({ files: [file] })) {
+          if (file && isNative) {
+            try { await saveBlobNative(blob, file.name, { share: true }); return; } catch { /* cai no texto */ }
+          }
+          if (file && navigator.share && navigator.canShare({ files: [file] })) {
             try { await navigator.share({ title: shareTitle, files: [file] }); return; }
             catch (err) { if (err?.name === "AbortError") return; /* outro erro (ex.: gesto expirado): cai no texto */ }
           }
         }
-        await navigator.share({ title: shareTitle, text });
+        if (navigator.share) await navigator.share({ title: shareTitle, text });
+        else { await navigator.clipboard.writeText(text); alert("O texto do documento foi copiado."); }
       } catch { /* usuário cancelou o compartilhamento — nada a fazer */ }
     } else {
       try { await navigator.clipboard.writeText(text); alert("Este navegador não tem compartilhamento nativo. O texto do documento foi copiado."); }
@@ -23499,17 +23550,34 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // ---- Campos (lib/wordFields.js, port de fields.rs/table_formula.rs): DATE, SEQ, IF, =SUM(ABOVE)… ----
   const fieldEditRef = useRef(null);
   // Página de um elemento (mesma conta da barra de status: o texto corre numa folha contínua).
+  // Documento de PDF importado: a página é o bloco .pdf-import-page onde o elemento está (igual à barra de status).
+  const pdfPageCount = (body) => {
+    const blocks = body.querySelectorAll(":scope > .pdf-import-page");
+    if (!blocks.length) return 0;
+    for (let n = blocks[blocks.length - 1].nextElementSibling; n; n = n.nextElementSibling) {
+      if (n.classList.contains("word-page-meta")) continue;
+      if ((n.textContent || "").trim() || n.querySelector("img, table, svg")) return 0; // sobra de conteúdo depois do último bloco: conta por altura
+    }
+    return blocks.length;
+  };
   const pageOfEl = (el) => {
     const body = bodyRef.current;
     const ph = currentPageDims().h * (zoom / 100);
     if (!body || !el || !ph) return pageInfo.page;
+    const pdfPages = pdfPageCount(body);
+    if (pdfPages) {
+      let top = el;
+      while (top && top.parentElement !== body) top = top.parentElement;
+      const i = top ? Array.from(body.querySelectorAll(":scope > .pdf-import-page")).indexOf(top) : -1;
+      return i >= 0 ? i + 1 : pdfPages;
+    }
     const pages = Math.max(1, Math.ceil((body.getBoundingClientRect().height - 2) / ph));
     return Math.min(Math.max(Math.floor((el.getBoundingClientRect().top - body.getBoundingClientRect().top) / ph) + 1, 1), pages);
   };
   const fieldBase = () => {
     const body = bodyRef.current;
     const ph = currentPageDims().h * (zoom / 100);
-    const pages = body && ph ? Math.max(1, Math.ceil((body.getBoundingClientRect().height - 2) / ph)) : pageInfo.pages;
+    const pages = body && ph ? (pdfPageCount(body) || Math.max(1, Math.ceil((body.getBoundingClientRect().height - 2) / ph))) : pageInfo.pages;
     return { ...documentContext(body, { title: currentDocForExport().title, lang: grammarLang, pages, pageOf: pageOfEl }) };
   };
   const fieldCell = () => {
@@ -23997,7 +24065,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       case "k": return run(() => { if (window.getSelection()?.isCollapsed === false) fmt.openLinkPopover(); else alert("Selecione um texto antes de inserir o link."); });
       case "f": return run(() => focusFind("find"));
       case "h": return run(() => focusFind("replace"));
-      case "p": return run(() => window.print());
+      case "p": return run(() => printDoc());
       case "s": return run(flushSave);
       case "1": return run(() => fmt.applyLineHeight("1"));
       case "2": return run(() => fmt.applyLineHeight("2"));
@@ -24011,7 +24079,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const QAT_CMDS = {
     new: { label: "Novo", icon: FilePlus, desc: "Cria um novo documento em branco.", run: fileMenuNew },
     save: { label: "Salvar", icon: Save, desc: "Salva o documento agora (ele também é salvo automaticamente).", run: flushSave },
-    print: { label: "Imprimir", icon: Printer, desc: "Imprime o documento ou salva como PDF pela caixa de impressão do navegador.", run: () => window.print() },
+    print: { label: "Imprimir", icon: Printer, desc: "Imprime o documento ou salva como PDF pela caixa de impressão do navegador.", run: () => printDoc() },
     undo: { label: "Desfazer", icon: Undo2, desc: "Desfaz a última alteração (Ctrl+Z).", run: undo },
     redo: { label: "Refazer", icon: Redo2, desc: "Refaz a alteração desfeita (Ctrl+Y).", run: redo },
     spelling: { label: "Ortografia", icon: SpellCheck, desc: "Liga ou desliga a verificação ortográfica (F7).", run: () => setSpellcheckOn(s => !s) },
@@ -24419,7 +24487,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </div>
               )}
             </div>
-            <button data-tip="Imprimir" data-tipdesc="Imprimir este documento ou salvá-lo como PDF pela caixa de impressão do navegador." onClick={() => window.print()}><Printer size={16}/></button>
+            <button data-tip="Imprimir" data-tipdesc="Imprimir este documento ou salvá-lo como PDF pela caixa de impressão do navegador." onClick={() => printDoc()}><Printer size={16}/></button>
             <button data-tip={nativeFs ? "Sair da tela cheia" : "Tela cheia"} data-tipdesc={nativeFs ? "Sai da tela cheia do navegador." : "Esconde as abas e a barra do navegador para ocupar o monitor todo."} onClick={toggleFullscreen}>{nativeFs ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
             <button onClick={handleClose}><X/></button>
           </div>
@@ -25327,7 +25395,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={Maximize2} label="100%" tip="100%" desc="Retorna o zoom para o tamanho normal do documento." onClick={() => setZoom(100)}/>
               <div className="rbStack">
                 <RbSm icon={ZoomIn} label="Aumentar Zoom" tip="Aumentar Zoom" desc="Aumenta o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.min(200, z + 10))}/>
-                <RbSm icon={ZoomOut} label="Diminuir Zoom" tip="Diminuir Zoom" desc="Reduz o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.max(50, z - 10))}/>
+                <RbSm icon={ZoomOut} label="Diminuir Zoom" tip="Diminuir Zoom" desc="Reduz o nível de ampliação do documento na tela." onClick={() => setZoom(z => Math.max(25, z - 10))}/>
                 <span className="rbSmallLabel">{zoom}%</span>
               </div>
               <div className="rbStack">
@@ -25741,7 +25809,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           {readMode && (
             <div className="wordReadBar">
               <b>{immersive ? "Leitor Imersivo" : "Modo de Leitura"}</b>
-              <button onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={14}/></button>
+              <button onClick={() => setZoom(z => Math.max(25, z - 10))}><ZoomOut size={14}/></button>
               <span>{zoom}%</span>
               <button onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={14}/></button>
               {immersive && <button onClick={toggleReadAloud}><Volume2 size={14}/> {speaking ? "Parar" : "Ler em voz alta"}</button>}
@@ -25864,8 +25932,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           <button className={"wordStatusViewBtn" + (focusMode ? " active" : "")} data-tip="Foco" onClick={() => setFocusMode(true)}><Maximize2 size={13}/></button>
           <button className={"wordStatusViewBtn" + (viewMode === "draft" ? " active" : "")} data-tip="Rascunho" onClick={() => setViewMode("draft")}><FileType size={13}/></button>
           <span className="wordStatusDivider"/>
-          <button className="wordStatusZoomBtn" data-tip="Diminuir Zoom" onClick={() => setZoom(z => Math.max(50, z - 10))}><ZoomOut size={13}/></button>
-          <input type="range" className="wordStatusZoomSlider" min="50" max="200" step="10" value={zoom} onChange={e => setZoom(Number(e.target.value))} data-tip="Zoom"/>
+          <button className="wordStatusZoomBtn" data-tip="Diminuir Zoom" onClick={() => setZoom(z => Math.max(25, z - 10))}><ZoomOut size={13}/></button>
+          <input type="range" className="wordStatusZoomSlider" min="30" max="200" step="10" value={zoom} onChange={e => setZoom(Number(e.target.value))} data-tip="Zoom"/>
           <button className="wordStatusZoomBtn" data-tip="Aumentar Zoom" onClick={() => setZoom(z => Math.min(200, z + 10))}><ZoomIn size={13}/></button>
           <span className="wordZoomValue">{zoom}%</span>
         </div>
