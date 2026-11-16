@@ -244,9 +244,16 @@ export function useEntity(table, initialData, session, order = "asc", opts = {})
   // completar, no momento de abrir, as colunas pesadas que a listagem (com
   // listSelect enxuto) deixou de fora. Devolve o item já mesclado com o que
   // já estava em memória, e atualiza o cloudData pra não buscar de novo.
+  // opts.heavyKey: nome da coluna pesada (ex.: "content"). Se ela já está em memória (item aberto antes nesta sessão) e o
+  // servidor continua com o mesmo updated_at (consulta minúscula), devolve o que já se tem em vez de baixar tudo de novo.
   const fetchFull = useCallback(
-    async (id) => {
+    async (id, opts = {}) => {
       if (!cloud) return localData.find((x) => x.id === id) || null;
+      const mem = cloudData.find((x) => x.id === id);
+      if (opts.heavyKey && mem && mem[opts.heavyKey] != null && mem.updated_at) {
+        const { data: head, error: headErr } = await supabase.from(table).select("updated_at").eq("id", id).maybeSingle();
+        if (!headErr && head?.updated_at && Date.parse(head.updated_at) === Date.parse(mem.updated_at)) return mem;
+      }
       const { data: row, error } = await supabase.from(table).select("*").eq("id", id).maybeSingle();
       if (error) {
         console.error("Supabase fetchFull error:", error);

@@ -82,7 +82,19 @@ async function pageGraphics(page, vp, imgState) {
       if (st.dash && st.dash.length) attrs += ` stroke-dasharray="${st.dash.map((v) => r2(Math.max(0.1, v * sc))).join(" ")}"`;
       if (st.sa < 1) attrs += ` stroke-opacity="${r2(st.sa)}"`;
     }
-    svgLayer().paths.push(`<path ${attrs}/>`);
+    // Traços seguidos com o mesmo estilo (mapas, gráficos, hachuras) viram um único <path>: mesmo desenho, bem menos elementos,
+    // e o limite de caminhos por página quase não é atingido. Preenchimentos não são unidos (sentidos opostos poderiam furar a forma).
+    const arr = svgLayer().paths;
+    if (!doFill && arr.length) {
+      const rest = attrs.slice(`d="${d}"`.length);
+      const prev = arr[arr.length - 1];
+      const tail = `"${rest}/>`;
+      if (prev.startsWith('<path d="') && prev.endsWith(tail) && prev.length < 400000) {
+        arr[arr.length - 1] = prev.slice(0, prev.length - tail.length) + d + tail;
+        return;
+      }
+    }
+    arr.push(`<path ${attrs}/>`);
     pathCount++;
   };
 

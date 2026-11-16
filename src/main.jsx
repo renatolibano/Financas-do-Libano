@@ -18519,7 +18519,7 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
 
   const openDoc = async (doc) => {
     setOpeningId(doc.id);
-    const full = cloud ? (await fetchFull(doc.id)) || doc : doc;
+    const full = cloud ? (await fetchFull(doc.id, { heavyKey: "content" })) || doc : doc;
     setOpeningId(null);
     setActiveDoc(full);
   };
@@ -21531,6 +21531,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const historyBaselineRef = useRef(doc.content || "");
   const historyTimer = useRef(null);
   const HISTORY_LIMIT = 100;
+  const HISTORY_CHAR_BUDGET = 24e6; // ~24 milhões de caracteres somados no histórico de desfazer
   const HISTORY_DEBOUNCE_MS = 500;
   const [fullscreen, toggleFullscreen, nativeFs] = useFullscreen(modalRef, { startOpen: true });
 
@@ -21619,10 +21620,24 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   }, []);
 
   const savePending = useRef(false);
+  // Só envia o que mudou desde o último salvamento (o conteúdo do documento pode ter vários MB, principalmente PDF importado):
+  // abrir e fechar sem editar, ou mudar só o título, não reenvia o corpo inteiro.
+  const lastSavedRef = useRef(null);
+  const persistPatch = (patch) => {
+    const last = lastSavedRef.current;
+    let out = patch;
+    if (last) {
+      out = {};
+      for (const k of Object.keys(patch)) if (patch[k] !== last[k]) out[k] = patch[k];
+      if (!Object.keys(out).length) return;
+    }
+    lastSavedRef.current = { ...(last || {}), ...patch };
+    onSave(out);
+  };
   const scheduleSave = (patch) => {
     clearTimeout(saveTimer.current);
     savePending.current = true;
-    saveTimer.current = setTimeout(() => { savePending.current = false; onSave(patch); }, 600);
+    saveTimer.current = setTimeout(() => { savePending.current = false; persistPatch(patch); }, 600);
   };
 
   const handleTitleChange = (e) => {
@@ -21674,7 +21689,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const html = bodyRef.current?.innerHTML || "";
     if (html === historyBaselineRef.current) return;
     historyRef.current.push(historyBaselineRef.current);
-    if (historyRef.current.length > HISTORY_LIMIT) historyRef.current.shift();
+    // Cada passo guarda o HTML inteiro: em documento grande (PDF importado, vários MB) 100 passos estourariam a memória do
+    // celular. Limita também pelo tamanho total, descartando os passos mais antigos (sempre sobra ao menos 1).
+    let total = 0;
+    for (const h of historyRef.current) total += h.length;
+    while (historyRef.current.length > HISTORY_LIMIT || (total > HISTORY_CHAR_BUDGET && historyRef.current.length > 1)) total -= historyRef.current.shift().length;
     historyBaselineRef.current = html;
     redoStackRef.current = [];
   };
@@ -23056,8 +23075,15 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const flushSave = () => {
     clearTimeout(saveTimer.current);
     savePending.current = false;
-    onSave(currentPatch());
+    persistPatch(currentPatch());
   };
+  // Estado "já salvo" de partida: o documento como foi aberto (depois que o conteúdo entrou no editor).
+  useEffect(() => {
+    lastSavedRef.current = null;
+    const raf = requestAnimationFrame(() => { lastSavedRef.current = currentPatch(); });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.id]);
   // Salva na hora se o app/aba for escondido ou fechado com uma edição ainda no atraso de 600 ms (comum no celular).
   const flushSaveRef = useRef(flushSave);
   flushSaveRef.current = flushSave;
@@ -23348,7 +23374,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     try {
       const t = await navigator.clipboard.readText();
       if (t) fmt.exec("insertText", t);
-    } catch { alert("Não foi possível ler a área de transferência. Use Ctrl+Shift+V."); }
+    } catch { alert("Não foi possível ler a área de transferência. " + (isNative || window.matchMedia?.("(pointer:coarse)").matches ? "Toque e segure no documento e escolha Colar." : "Use Ctrl+Shift+V.")); }
   };
 
   const wrapSelectionStyle = (apply) => {
@@ -25408,7 +25434,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={Contrast} label={"Modo\nEscuro"} tip="Modo Escuro" desc="Inverte as cores da página (fundo escuro, texto claro) para ler com menos brilho." active={darkPage} onClick={() => setDarkPage(d => !d)}/>
             </RbGroup>
             <RbGroup label="Janela">
-              <RbBig icon={Copy} label={"Nova\nJanela"} tip="Nova Janela" desc="Abre este aplicativo em uma nova janela." onClick={() => window.open(window.location.href, "_blank")}/>
+              {!isNative && <RbBig icon={Copy} label={"Nova\nJanela"} tip="Nova Janela" desc="Abre este aplicativo em uma nova janela." onClick={() => window.open(window.location.href, "_blank")}/>}
               <RbBig icon={Rows3} label="Dividir" tip="Dividir" desc="Mostra uma segunda visão do documento abaixo, para consultar outro trecho enquanto edita." active={splitOn} onClick={() => { setSplitOn(s => !s); setSplitHtml(bodyRef.current?.innerHTML || ""); }}/>
             </RbGroup>
             <RbGroup label="Macros">

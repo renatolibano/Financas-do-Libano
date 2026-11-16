@@ -330,6 +330,17 @@ header p{margin:0;color:var(--text-2);font-size:13px}
 .ghost:disabled{opacity:.6;cursor:default}
 .modalBack{position:fixed;inset:0;background:#000a;backdrop-filter:blur(5px);z-index:50;display:grid;place-items:center;padding:20px}
 .modal{width:min(450px,100%);max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;overflow-x:hidden;background:var(--bg-modal);border:1px solid var(--border);border-radius:18px;padding:22px;display:grid;gap:14px;box-shadow:0 20px 80px #000}
+/* Janelas (Configurações etc.): a grade usa uma coluna que pode crescer até o conteúdo mais largo (um <select> com opção longa,
+   uma linha sem quebra) e o overflow-x:hidden cortava o que passava da tela. Coluna que respeita a largura + campos que encolhem. */
+.modal{grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}
+.modal>*,.modal label,.modal .notifSettingsBlock,.modal .notifKindRow{min-width:0}
+.modal input:not([type=checkbox]):not([type=radio]):not([type=range]),.modal select,.modal textarea{width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+.modal select{text-overflow:ellipsis}
+@media (max-width:420px){
+  .modalBack{padding:10px}
+  .modal{padding:16px;border-radius:14px;max-height:calc(100vh - 20px);max-height:calc(100dvh - 20px)}
+  .modalHead{top:-16px;margin:-16px -16px 0;padding:16px 16px 10px}
+}
 .lockScreenModal{text-align:center;justify-items:center}
 .lockScreenIcon{width:52px;height:52px;border-radius:50%;background:var(--accent, #4c8dff)22;color:var(--accent, #4c8dff);display:grid;place-items:center}
 .lockScreenPinInput{width:100%;text-align:center;font-size:22px;letter-spacing:10px;padding:12px}
