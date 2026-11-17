@@ -97,11 +97,12 @@ export function htmlToFlow(html) {
   const visit = (el) => {
     const cl = el.classList;
     if (cl?.contains("word-page-meta") || cl?.contains("word-header-band") || cl?.contains("word-footer-band")
-      || cl?.contains("word-header-band-first") || cl?.contains("word-footer-band-first")) return;
+      || cl?.contains("word-header-band-first") || cl?.contains("word-footer-band-first")
+      || cl?.contains("word-header-band-even") || cl?.contains("word-footer-band-even")) return;
     if (cl?.contains("word-page-break")) { out.push({ type: "para", kind: "pagebreak", runs: [] }); return; }
     if (cl?.contains("word-toc")) {
       out.push({ type: "para", kind: "heading", level: 2, runs: [{ text: "Sumário" }] });
-      el.querySelectorAll(".word-toc-entry").forEach((a) => out.push({ type: "para", kind: "normal", runs: [{ text: a.textContent || "" }] }));
+      el.querySelectorAll(".word-toc-entry").forEach((a) => out.push({ type: "para", kind: "normal", runs: [{ text: (a.querySelector(".t")?.textContent ?? a.textContent ?? "") + (a.querySelector(".p") ? "\t" + a.querySelector(".p").textContent : "") }] }));
       return;
     }
     if (cl?.contains("word-footnotes")) {

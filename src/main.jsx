@@ -93,6 +93,7 @@ import {
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords, safeFileName } from "./lib/wordExport";
 import { downloadWordPdfAsImages } from "./lib/wordPdfImage";
+import WordImageHandles from "./components/WordImageHandles";
 import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals, sigOf, setWordOriginalSig, downloadPdfFromOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
@@ -18612,21 +18613,30 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
         </div>
       </div>
 
-      <div className="notesGrid" onClick={() => setOpenMenuId(null)}>
-        <div className="noteTile addTile" onClick={createDoc}>
-          <div className="noteCoverWrap addCover">
-            {creating ? <span>Criando...</span> : <><Plus size={26}/><span>Documento em branco</span></>}
+      <div className="wordShelf" onClick={() => setOpenMenuId(null)}>
+        <div className="wordThumbTile" onClick={createDoc}>
+          <div className="wordThumbSlot">
+            <div className="wordThumbPage wordThumbBlank" style={{ width: "100%", aspectRatio: "794 / 1123" }}>
+              {creating ? <span>Criando...</span> : <Plus size={30}/>}
+            </div>
           </div>
+          <div className="wordThumbLabel"><b>Documento em branco</b></div>
         </div>
-        {visibleDocs.map(doc => (
-          <div className="noteTile" key={doc.id}>
-            <div className="noteCoverWrap" onClick={() => openDoc(doc)}>
-              <div className="wordDocIcon"><FileType2 size={16}/></div>
-              <b className="noteTitle">{doc.title}</b>
-              <p className="notePreview">{openingId === doc.id ? "Abrindo..." : (doc.preview?.trim() || "Documento vazio")}</p>
-              <div className="noteTileFoot">
-                <small className="noteTileTime">{doc.updated_at ? `editado ${timeAgo(doc.updated_at)}` : ""}</small>
+        {visibleDocs.map(doc => {
+          // Miniatura da folha: proporção do papel/orientação do documento; o texto é o trecho já carregado na listagem (sem baixar o conteúdo).
+          const px = (PAGE_SIZES[doc.page_size] || PAGE_SIZES.a4).px;
+          const [pw, ph] = doc.orientation === "paisagem" ? [px[1], px[0]] : [px[0], px[1]];
+          const k = Math.min(1, (pw / ph) / (5 / 7));
+          return (
+          <div className="wordThumbTile" key={doc.id}>
+            <div className="wordThumbSlot" onClick={() => openDoc(doc)}>
+              <div className="wordThumbPage" style={{ width: (k * 100) + "%", aspectRatio: pw + " / " + ph, "--k": k }}>
+                <div className="wordThumbText">{openingId === doc.id ? "Abrindo..." : (doc.preview?.trim() || "")}</div>
               </div>
+            </div>
+            <div className="wordThumbLabel" onClick={() => openDoc(doc)}>
+              <b title={doc.title}>{doc.title}</b>
+              <small>{doc.updated_at ? `editado ${timeAgo(doc.updated_at)}` : ""}</small>
             </div>
             <button className="bookMenuBtn" onClick={(e) => { e.stopPropagation(); setOpenMenuId(id => id === doc.id ? null : doc.id); }}>
               <MoreVertical size={15}/>
@@ -18639,7 +18649,8 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
       {visibleDocs.length === 0 && (
         <p className="emptyHint">{data.length === 0 ? "Nenhum documento por aqui ainda." : "Nenhum documento encontrado."}</p>
@@ -18775,7 +18786,7 @@ const DATE_FORMATS = [
 // Folhas de rosto (Inserir › Folha de Rosto). Todas têm um .word-title antes da quebra de página,
 // que é o que "Remover Folha de Rosto Atual" procura.
 const COVER_STYLES = [
-  ["classic", "Clássica"], ["modern", "Moderna"], ["band", "Faixa Colorida"], ["minimal", "Minimalista"], ["report", "Relatório"], ["academic", "Acadêmica"],
+  ["classic", "Clássica"], ["modern", "Moderna"], ["band", "Faixa Colorida"], ["minimal", "Minimalista"], ["report", "Relatório"], ["academic", "Acadêmica"], ["book", "Livro"],
 ];
 const coverHtml = (kind, date) => {
   const br = '<div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>';
@@ -18785,6 +18796,7 @@ const coverHtml = (kind, date) => {
     case "band": return `<div style="background:#4472c4;color:#fff;padding:70px 36px 50px"><div class="word-title" style="text-align:left;color:#fff">[Título do Documento]</div><div class="word-subtitle" style="text-align:left;color:#dbe5f7">[Subtítulo]</div></div>${gap(300)}<div style="text-align:right">[Autor]</div><div style="text-align:right">${date}</div>${br}`;
     case "minimal": return `${gap(200)}<div class="word-title" style="text-align:left">[Título do Documento]</div>${gap(380)}<div style="text-align:left;color:#6b7280">${date}</div>${br}`;
     case "report": return `${gap(100)}<div class="word-title" style="text-align:center">[Título do Relatório]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div>${gap(160)}<div style="text-align:center">Autor: [Nome]</div><div style="text-align:center">Organização: [Nome da organização]</div><div style="text-align:center">Versão: 1.0</div><div style="text-align:center">${date}</div>${br}`;
+    case "book": return `${gap(160)}<div class="word-title" style="text-align:center">[TÍTULO DO LIVRO]</div><div class="word-subtitle" style="text-align:center"><i>[Subtítulo]</i></div>${gap(260)}<div style="text-align:center;font-size:16pt;letter-spacing:2px">[Nome do Autor]</div>${gap(220)}<div style="text-align:center;color:#6b7280">[Editora / ${new Date().getFullYear()}]</div>${br}`;
     case "academic": return `<div style="text-align:center;font-weight:700">[INSTITUIÇÃO]</div><div style="text-align:center">[Curso / Departamento]</div>${gap(60)}<div style="text-align:center">[Autor]</div>${gap(150)}<div class="word-title" style="text-align:center">[Título do Trabalho]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div>${gap(150)}<div style="text-align:center">Orientador(a): [Nome]</div>${gap(100)}<div style="text-align:center">[Cidade]</div><div style="text-align:center">${new Date().getFullYear()}</div>${br}`;
     default: return `${gap(140)}<div class="word-title" style="text-align:center">[Título do Documento]</div><div class="word-subtitle" style="text-align:center">[Subtítulo]</div><div style="text-align:center"><br></div><div style="text-align:center"><br></div><div style="text-align:center">${date}</div>${br}`;
   }
@@ -18912,7 +18924,7 @@ const WORD_PAGE_BORDERS = [
 ];
 const WORD_WATERMARK_PRESETS = ["CONFIDENCIAL", "RASCUNHO", "URGENTE", "CÓPIA", "NÃO COPIAR", "NÃO DISTRIBUIR", "AMOSTRA", "ORIGINAL", "PRIORITÁRIO"];
 
-function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
+function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx) {
   const [colorOpen, setColorOpen] = useState(false);
   const [hiliteOpen, setHiliteOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -19137,10 +19149,10 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
   const insertHeaderFooterBand = (kind, variant, styleId) => {
     const el = bodyRef.current;
     if (!el) return;
-    const cls = (kind === "header" ? "word-header-band" : "word-footer-band") + (variant === "first" ? "-first" : "");
+    const cls = (kind === "header" ? "word-header-band" : "word-footer-band") + (variant === "first" ? "-first" : variant === "even" ? "-even" : "");
     let band = el.querySelector("." + cls);
     const hfStyle = HF_STYLES.find(x => x[0] === styleId);
-    const labelFor = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : (kind === "header" ? "Cabeçalho" : "Rodapé");
+    const labelFor = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : variant === "even" ? (kind === "header" ? "Cabeçalho das páginas pares" : "Rodapé das páginas pares") : (kind === "header" ? "Cabeçalho" : "Rodapé");
     if (band && hfStyle) { band.innerHTML = hfStyle[2](labelFor); onChange(); }
     if (band) {
       const r = document.createRange();
@@ -19155,7 +19167,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     }
     band = document.createElement("div");
     band.className = cls;
-    const label = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : (kind === "header" ? "Cabeçalho" : "Rodapé");
+    const label = labelFor;
     band.innerHTML = hfStyle ? hfStyle[2](label) : `<div>${label}</div>`;
     if (kind === "header") el.insertBefore(band, el.firstChild);
     else el.appendChild(band);
@@ -19175,6 +19187,20 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     }
     insertHeaderFooterBand("header", "first");
     insertHeaderFooterBand("footer", "first");
+  };
+
+  // "Páginas pares e ímpares diferentes": faixa "-even" = cabeçalho/rodapé das páginas pares (a faixa normal vale para as ímpares).
+  const toggleParImparDiferente = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const existing = el.querySelectorAll(".word-header-band-even, .word-footer-band-even");
+    if (existing.length) {
+      existing.forEach(n => n.remove());
+      onChange();
+      return;
+    }
+    insertHeaderFooterBand("header", "even");
+    insertHeaderFooterBand("footer", "even");
   };
 
   // ---- número de página — como o editor não pagina de verdade em folhas
@@ -19994,10 +20020,19 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     el.focus();
     const headings = collectHeadings();
     headings.forEach((h, i) => { if (!h.id) h.id = "word-heading-" + Date.now().toString(36) + i; });
+    // Nº da página de cada título: mesma conta das quebras de página do editor (altura da folha = altura do papel).
+    const pageOf = (h) => {
+      const ph = pageHeightPx;
+      if (!ph) return "";
+      const r = el.getBoundingClientRect();
+      const sc = el.offsetWidth ? r.width / el.offsetWidth : 1;
+      return Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
+    };
     const buildBody = () => headings.length
       ? headings.map(h => {
           const level = h.tagName === "H1" ? 1 : h.tagName === "H2" ? 2 : 3;
-          return `<a class="word-toc-entry word-toc-level${level}" href="#${h.id}">${h.textContent || "(sem texto)"}</a>`;
+          const pg = pageOf(h);
+          return `<a class="word-toc-entry word-toc-level${level}" href="#${h.id}" data-pg="${pg}"><span class="t">${escHtml(h.textContent || "(sem texto)")}</span>${pg ? `<span class="l"></span><span class="p">${pg}</span>` : ""}</a>`;
         }).join("")
       : '<p class="word-toc-empty">Nenhum título encontrado. Aplique Título 1, 2 ou 3 a algum parágrafo para o sumário aparecer aqui.</p>';
 
@@ -20022,6 +20057,8 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     } else {
       el.append(toc, after);
     }
+    // O próprio sumário empurra o texto abaixo dele: recalcula os números de página depois que o layout assenta.
+    requestAnimationFrame(() => { const b = toc.querySelector(".word-toc-body"); if (b && el.contains(toc)) { b.innerHTML = buildBody(); onChange(); } });
     onChange();
   };
 
@@ -20831,7 +20868,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm) {
     findOpts, updateFindOpts, findError, findMore, setFindMore, findHooks, findInputRef, replaceInputRef, lastFindField, insertFindCode,
     linkBar, linkPopover, setLinkPopover, openLinkPopover, confirmLink, removeLink, closeLinkPopover, updateLinkBar, handleBodyClick,
     painting, pickPaintFormat, applyPaintFormat, growShrinkFont,
-    caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber, togglePrimeiraPaginaDiferente,
+    caseOpen, setCaseOpen, applyChangeCase, applyParagraphStyle, toggleDropCap, insertTextBox, insertHeaderFooterBand, insertPageNumber, togglePrimeiraPaginaDiferente, toggleParImparDiferente,
     columnsOpen, setColumnsOpen, applyColumns, setParagraphIndent, setParagraphIndentRight, setParagraphSpacing, setParagraphSpacingBefore,
     applyShading, applyBorder, applyBorderCustom,
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
@@ -21199,12 +21236,28 @@ const WORD_SOURCES_KEY = "libano.word.sources";
 const WORD_QUICKPARTS_KEY = "libano.word.quickparts";
 const WORD_MACROS_KEY = "libano.word.macros";
 const WORD_ICON_GLYPHS = ["★", "☆", "♥", "♦", "♣", "♠", "✔", "✘", "☎", "✉", "⚑", "⚙", "✈", "☀", "☁", "☂", "☺", "♫", "⌂", "⌛", "✎", "✂", "⚠", "☑", "➜", "❝", "✪", "⚡"];
+const BK_BR = '<div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>';
+const BK_CHAPTER = (t) => `<h1 style="text-align:center;margin:48px 0 32px">${t}</h1>`;
+const BK_FIRST = (t) => `<p style="text-align:justify;text-indent:0;margin:0">${t}</p>`;
+const BK_BODY = (t) => `<p style="text-align:justify;text-indent:1.25cm;margin:0">${t}</p>`;
+const BK_SCENE = '<p style="text-align:center;letter-spacing:0.5em;text-indent:0;margin:24px 0">* * *</p>';
+const BK_CREDITS = `<p style="text-align:center;font-size:9pt;color:#444"><b>[Título do Livro]</b><br>Copyright © ${new Date().getFullYear()} [Nome do Autor]<br>Todos os direitos reservados.<br><br>Revisão: [Nome]<br>Capa e projeto gráfico: [Nome]<br><br>1ª edição — [Cidade], ${new Date().getFullYear()}<br>ISBN [número]</p>`;
+const BK_DEDICATION = '<p style="text-align:right;font-style:italic;margin:240px 0 0 40%">[Dedicatória: “Para …”]</p>';
+const BK_EPIGRAPH = '<blockquote style="text-align:right;font-style:italic;border-left:none;padding:0;margin:24px 0 24px 40%">[Epígrafe]<br>— [Autor da epígrafe]</blockquote>';
 const WORD_QUICKPART_BUILTINS = [
+  { name: "Livro: Página de Créditos", html: BK_CREDITS },
+  { name: "Livro: Dedicatória", html: BK_DEDICATION },
+  { name: "Livro: Epígrafe", html: BK_EPIGRAPH },
+  { name: "Livro: Quebra de Cena (* * *)", html: BK_SCENE },
+  { name: "Livro: Agradecimentos", html: BK_CHAPTER("Agradecimentos") + BK_FIRST("[Texto dos agradecimentos]") },
+  { name: "Livro: Sobre o Autor", html: BK_CHAPTER("Sobre o Autor") + BK_FIRST("[Texto sobre o autor]") },
   { name: "Linha de Assunto", html: "<p><b>Assunto:</b> </p>" },
   { name: "Bloco de Assinatura", html: "<p><br></p><p>Atenciosamente,</p><p><br></p><p>______________________________<br>Nome<br>Cargo</p>" },
   { name: "Aviso de Confidencialidade", html: "<p style=\"font-size:9pt;color:#666\"><i>Este documento é confidencial e destinado exclusivamente ao seu destinatário.</i></p>" },
 ];
 const WORD_TEMPLATES = [
+  { name: "Livro (estrutura completa)", html: `<div class="word-title" style="text-align:center">[TÍTULO DO LIVRO]</div><div class="word-subtitle" style="text-align:center"><i>[Subtítulo]</i></div><p style="text-align:center;margin-top:200px">[Nome do Autor]</p>${BK_BR}${BK_CREDITS}${BK_BR}${BK_DEDICATION}${BK_BR}${BK_EPIGRAPH}${BK_BR}${BK_CHAPTER("Capítulo 1")}${BK_FIRST("[Primeiro parágrafo do capítulo, sem recuo.]")}${BK_BODY("[Demais parágrafos, com recuo de primeira linha.]")}${BK_SCENE}${BK_FIRST("[Início da nova cena.]")}${BK_BR}${BK_CHAPTER("Capítulo 2")}${BK_FIRST("[Texto]")}${BK_BR}${BK_CHAPTER("Agradecimentos")}${BK_FIRST("[Texto]")}${BK_BR}${BK_CHAPTER("Sobre o Autor")}${BK_FIRST("[Texto]")}` },
+  { name: "Capítulo de livro", html: `${BK_BR}${BK_CHAPTER("Capítulo [n]")}${BK_FIRST("[Primeiro parágrafo, sem recuo.]")}${BK_BODY("[Demais parágrafos.]")}` },
   { name: "Carta", html: "<p style=\"text-align:right\">[Cidade], [data]</p><p><br></p><p>[Destinatário]<br>[Endereço]</p><p><br></p><p>Prezado(a) [nome],</p><p><br></p><p>[Corpo da carta]</p><p><br></p><p>Atenciosamente,</p><p><br></p><p>[Seu nome]</p>" },
   { name: "Currículo", html: "<h1>[Seu nome]</h1><p>[Cidade] · [telefone] · [e-mail]</p><h2>Objetivo</h2><p>[Descreva seu objetivo profissional]</p><h2>Experiência</h2><p><b>[Cargo]</b> — [Empresa] ([período])</p><ul><li>[Realização]</li></ul><h2>Formação</h2><p>[Curso] — [Instituição] ([ano])</p><h2>Habilidades</h2><ul><li>[Habilidade]</li></ul>" },
   { name: "Relatório", html: "<h1>[Título do relatório]</h1><p><i>[Autor] — [data]</i></p><h2>1. Introdução</h2><p>[Texto]</p><h2>2. Desenvolvimento</h2><p>[Texto]</p><h2>3. Conclusão</h2><p>[Texto]</p><h2>Referências</h2><p>[Fontes]</p>" },
@@ -21358,6 +21411,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [margins, setMargins] = useState(doc.margins || "normal");
   const [marginLeftCm, setMarginLeftCm] = useState(doc.margin_left ?? null);
   const [marginRightCm, setMarginRightCm] = useState(doc.margin_right ?? null);
+  const [bookLayout, setBookLayout] = useState({ mt: "", mb: "", gutter: "", mirror: false }); // margem superior/inferior (cm), medianiz (cm), espelhar
   const [ribbonTab, setRibbonTab] = useState("home");
   const [rbMenu, setRbMenu] = useState(null);
   const [fmtState, setFmtState] = useState({ font: "Calibri", size: 11, bold: false, italic: false, underline: false, strike: false, sub: false, sup: false, align: "left", dir: "ltr" });
@@ -21580,6 +21634,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     setDocLanguage(pageMetaEl?.dataset.lang || null);
     setLineNumbers(pageMetaEl?.dataset.linenumbers === "1");
     setHyphenation(pageMetaEl?.dataset.hyphens === "1");
+    try { const bl = pageMetaEl?.dataset.booklayout ? JSON.parse(pageMetaEl.dataset.booklayout) : {}; setBookLayout({ mt: bl.mt ?? "", mb: bl.mb ?? "", gutter: bl.gutter ?? "", mirror: !!bl.mirror }); } catch { setBookLayout({ mt: "", mb: "", gutter: "", mirror: false }); }
     setTextDir(pageMetaEl?.dataset.textdir || "horizontal");
     setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
@@ -21656,6 +21711,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     refreshNavHeadings();
     clearTimeout(historyTimer.current);
     historyTimer.current = setTimeout(commitHistoryCheckpoint, HISTORY_DEBOUNCE_MS);
+    schedulePageBreakSync();
   };
 
   // Painel de Navegação > Títulos — refeito a cada edição, igual à
@@ -21867,6 +21923,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     Object.entries(patch).forEach(([k, v]) => { metaEl.dataset[k] = v || ""; });
     handleBodyInput();
   };
+  const applyBookLayout = (patch) => {
+    const next = { ...bookLayout, ...patch };
+    setBookLayout(next);
+    const empty = next.mt === "" && next.mb === "" && next.gutter === "" && !next.mirror;
+    persistPageMeta({ booklayout: empty ? "" : JSON.stringify(next) });
+  };
   const applyTheme = (key) => { setThemeKey(key); persistPageMeta({ theme: key }); setThemeOpen(false); };
   const applyPageColor = (hex) => { setPageColor(hex); persistPageMeta({ pagecolor: hex }); setPageColorOpen(false); };
   const applyPageBorder = (key) => { setPageBorder(key); persistPageMeta({ pageborder: key }); setPageBorderOpen(false); };
@@ -22057,14 +22119,6 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const frag = document.createRange().createContextualFragment(html);
     el.insertBefore(frag, anchor);
     handleBodyInput();
-  };
-  const insertBlankPage = () => {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.focus();
-    fmt.insertPageBreak();
-    insertAtCursor("<div><br></div>");
-    fmt.insertPageBreak();
   };
   const insertLetterTemplate = () => {
     const nameField = guessField(/nome|name/i);
@@ -22398,6 +22452,21 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       if (isNew) setRibbonTab("pictureformat");
       return;
     }
+    if (e.target === el || !(e.target.textContent || "").trim()) {
+      // imagem atrás do texto não recebe o clique (o texto fica por cima): seleciona pela área onde se clicou
+      const behind = Array.from(el.querySelectorAll('img.word-img-free[data-wrap="behind"]')).reverse().find(im => {
+        const r = im.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      });
+      if (behind) {
+        const isNew = selectedImg !== behind;
+        setSelectedImg(behind);
+        setActiveCell(null);
+        setSelectedShape(null);
+        if (isNew) setRibbonTab("pictureformat");
+        return;
+      }
+    }
     const cell = e.target.closest?.("td, th");
     if (cell && el.contains(cell)) {
       const isNewTable = !activeCell || activeCell.closest("table") !== cell.closest("table");
@@ -22431,14 +22500,183 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
 
   // ---- Formato da Imagem ------------------------------------------------
+  // Imagem em posição livre (à frente/atrás do texto): fica solta sobre a página (position:absolute dentro do corpo), pode ser
+  // arrastada e ocupar a página inteira. O espaçador no fim do corpo garante que a página onde ela está exista (altura).
+  const syncFreeImageSpacer = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    let sp = body.querySelector(":scope > .word-img-spacer");
+    const imgs = Array.from(body.querySelectorAll("img.word-img-free"));
+    if (!imgs.length) { sp?.remove(); return; }
+    if (!sp) {
+      sp = document.createElement("div");
+      sp.className = "word-img-spacer";
+      sp.setAttribute("contenteditable", "false");
+      sp.style.cssText = "height:0;pointer-events:none;user-select:none";
+      body.appendChild(sp);
+    } else if (sp !== body.lastElementChild) body.appendChild(sp);
+    sp.style.height = "0px";
+    const base = body.offsetHeight;
+    const maxBottom = Math.max(...imgs.map(im => im.offsetTop + im.offsetHeight));
+    sp.style.height = Math.max(0, Math.ceil(maxBottom - base)) + "px";
+  };
+  const imgClearFree = (img) => {
+    img.classList.remove("word-img-free");
+    delete img.dataset.wrap;
+    ["position", "left", "top", "zIndex"].forEach(k => { img.style[k] = ""; });
+  };
+  const bodyScale = () => {
+    const body = bodyRef.current;
+    return body && body.offsetWidth ? body.getBoundingClientRect().width / body.offsetWidth : 1;
+  };
+  const imgSetFree = (mode) => { // "front" (à frente do texto) | "behind" (atrás do texto)
+    const img = selectedImg;
+    const body = bodyRef.current;
+    if (!img || !body) return;
+    commitHistoryCheckpoint();
+    if (!img.classList.contains("word-img-free")) {
+      const br = body.getBoundingClientRect(), r = img.getBoundingClientRect(), sc = bodyScale();
+      const w = img.offsetWidth, h = img.offsetHeight;
+      const left = (r.left + r.width / 2 - br.left) / sc - w / 2;
+      const top = (r.top + r.height / 2 - br.top) / sc - h / 2;
+      img.style.width = w + "px";
+      img.style.height = h + "px";
+      img.style.maxWidth = "none";
+      img.style.float = "";
+      img.style.margin = "0";
+      img.style.position = "absolute";
+      img.style.left = Math.round(left) + "px";
+      img.style.top = Math.round(top) + "px";
+      img.classList.add("word-img-free");
+    }
+    img.dataset.wrap = mode;
+    img.style.zIndex = mode === "behind" ? "-1" : "3";
+    syncFreeImageSpacer();
+    handleBodyInput();
+  };
+  const imgFullPage = () => { // ocupa a página inteira (sem margens), na página em que a imagem está
+    const img = selectedImg;
+    const body = bodyRef.current;
+    if (!img || !body) return;
+    const ph = currentPageDims().h;
+    const br = body.getBoundingClientRect(), r = img.getBoundingClientRect(), sc = bodyScale();
+    const centerY = (r.top + r.height / 2 - br.top) / sc;
+    const pageIndex = Math.max(0, Math.floor(centerY / ph));
+    imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
+    img.style.maxWidth = "none";
+    img.style.width = body.offsetWidth + "px";
+    img.style.height = ph + "px";
+    img.style.objectFit = "cover"; // preenche a página sem distorcer (corta o que passar)
+    img.style.left = "0px";
+    img.style.top = pageIndex * ph + "px";
+    img.dataset.rotate = "0";
+    img.style.transform = "";
+    syncFreeImageSpacer();
+    handleBodyInput();
+  };
+  // ---- Páginas: nova página acima/abaixo + separador entre páginas ------------------------------------------------------
+  // A página é de altura fixa (a do papel). Cada quebra de página ganha altura para que o conteúdo seguinte comece exatamente no
+  // topo da próxima página (com a margem superior) e mostra uma faixa escura entre as duas páginas, como no Word.
+  const syncPageBreaks = () => {
+    const body = bodyRef.current;
+    if (!body || body.closest(".wordPage-draft")) return;
+    const brs = Array.from(body.querySelectorAll(":scope > .word-page-break:not(.word-section-break)"));
+    if (!brs.length) return;
+    const ph = currentPageDims().h;
+    const sc = bodyScale();
+    const probe = document.createElement("div"); // mede a margem superior da página na mesma unidade do layout
+    probe.style.cssText = `position:absolute;visibility:hidden;width:1px;height:${getComputedStyle(body).paddingTop}`;
+    brs[0].appendChild(probe);
+    const padTop = probe.offsetHeight;
+    probe.remove();
+    const bg = pageAreaRef.current ? getComputedStyle(pageAreaRef.current).backgroundColor : "";
+    const bodyTop = body.getBoundingClientRect().top;
+    for (const br of brs) {
+      br.style.height = "0px";
+      const top = (br.getBoundingClientRect().top - bodyTop) / sc;
+      let next = (Math.floor((top + 0.5) / ph) + 1) * ph;
+      if (next - top < 24) next += ph; // sem espaço para a faixa: vai para a página seguinte
+      br.style.height = Math.round(next - top + padTop) + "px";
+      br.style.setProperty("--pb-pad", padTop + "px");
+      if (bg) br.style.setProperty("--pb-bg", bg);
+    }
+  };
+  const pbRaf = useRef(0);
+  const schedulePageBreakSync = () => {
+    cancelAnimationFrame(pbRaf.current);
+    pbRaf.current = requestAnimationFrame(syncPageBreaks);
+  };
+  useEffect(() => {
+    const body = bodyRef.current;
+    const t = setTimeout(syncPageBreaks, 80);
+    document.fonts?.ready?.then(schedulePageBreakSync).catch?.(() => {});
+    window.addEventListener("resize", schedulePageBreakSync);
+    body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
+    return () => { clearTimeout(t); cancelAnimationFrame(pbRaf.current); window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.id, pageSize, orientation, margins, viewMode]);
+
+  // Nova página em branco logo ACIMA ou ABAIXO da página onde está o cursor (nunca no meio do texto).
+  const insertPage = (where) => { // "above" | "below"
+    const body = bodyRef.current;
+    if (!body) return;
+    body.focus();
+    const ph = currentPageDims().h, sc = bodyScale(), bodyTop = body.getBoundingClientRect().top;
+    const inFlow = (n) => !(n.classList.contains("word-page-meta") || n.classList.contains("word-ink-layer") || n.classList.contains("word-img-spacer") || (n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    const kids = Array.from(body.children).filter(inFlow);
+    const rel = (n) => (n.getBoundingClientRect().top - bodyTop) / sc;
+    const mkBreak = () => { const d = document.createElement("div"); d.className = "word-page-break"; d.setAttribute("contenteditable", "false"); d.innerHTML = "<span>Quebra de página</span>"; return d; };
+    const mkPara = () => { const d = document.createElement("div"); d.innerHTML = "<br>"; return d; };
+    const blank = mkPara();
+    const spacer = body.querySelector(":scope > .word-img-spacer");
+    let nodes, ref;
+    if (!kids.length) {
+      nodes = where === "above" ? [blank, mkBreak(), mkPara()] : [mkPara(), mkBreak(), blank];
+      ref = spacer;
+    } else {
+      // página do cursor
+      let page = null;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && body.contains(sel.anchorNode)) {
+        const range = sel.getRangeAt(0);
+        let blk = range.startContainer.nodeType === 3 ? range.startContainer.parentNode : range.startContainer;
+        while (blk && blk.parentNode !== body) blk = blk.parentNode;
+        const rect = range.getClientRects()[0] || (blk && blk.getBoundingClientRect());
+        if (rect) page = Math.max(0, Math.floor((((rect.top - bodyTop) / sc) + 2) / ph));
+      }
+      if (page == null) page = where === "above" ? 0 : Math.max(0, Math.ceil((body.getBoundingClientRect().height / sc - 2) / ph) - 1);
+      const j = where === "above" ? page : page + 1; // a nova página fica entre a página j-1 e a antiga página j
+      const target = kids.find(n => rel(n) >= j * ph - 2) || null;
+      const prev = target ? kids[kids.indexOf(target) - 1] : kids[kids.length - 1];
+      const prevIsBreak = !!prev && prev.classList.contains("word-page-break");
+      nodes = [];
+      if (j > 0 && !prevIsBreak) nodes.push(mkBreak()); // fecha a página anterior
+      nodes.push(blank);
+      if (target) nodes.push(mkBreak()); // e a nova página, para o conteúdo antigo seguir na página depois
+      ref = target || spacer;
+    }
+    nodes.forEach(n => body.insertBefore(n, ref || null));
+    const sel2 = window.getSelection();
+    const r = document.createRange();
+    r.setStart(blank, 0);
+    r.collapse(true);
+    sel2.removeAllRanges();
+    sel2.addRange(r);
+    syncPageBreaks();
+    handleBodyInput();
+    blank.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  };
+
   const imgSetWrap = (mode) => { // "inline" | "left" | "right"
     if (!selectedImg) return;
+    if (selectedImg.classList.contains("word-img-free")) { imgClearFree(selectedImg); selectedImg.style.objectFit = ""; syncFreeImageSpacer(); }
     if (mode === "inline") { selectedImg.style.float = ""; selectedImg.style.margin = ""; }
     else { selectedImg.style.float = mode; selectedImg.style.margin = mode === "left" ? "0 12px 8px 0" : "0 0 8px 12px"; }
     handleBodyInput();
   };
   const imgSetAlign = (align) => { // imagem em linha própria: esquerda/centro/direita
     if (!selectedImg) return;
+    if (selectedImg.classList.contains("word-img-free")) { imgClearFree(selectedImg); selectedImg.style.objectFit = ""; syncFreeImageSpacer(); }
     selectedImg.style.float = "";
     selectedImg.style.display = "block";
     selectedImg.style.margin = align === "center" ? "0 auto" : align === "right" ? "0 0 0 auto" : "0 auto 0 0";
@@ -22446,6 +22684,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   const imgSetSize = (pct) => {
     if (!selectedImg) return;
+    selectedImg.style.objectFit = "";
+    selectedImg.style.maxWidth = "";
     selectedImg.style.width = pct === "original" ? "" : pct + "%";
     selectedImg.style.height = pct === "original" ? "" : "auto";
     handleBodyInput();
@@ -22517,6 +22757,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!selectedImg) return;
     selectedImg.remove();
     setSelectedImg(null);
+    syncFreeImageSpacer();
     handleBodyInput();
   };
 
@@ -22971,7 +23212,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   const pageWidthCm = currentPageDimsCm().w;
 
-  const fmt = useWordFormatting(bodyRef, handleBodyInput, pageRef, pageWidthCm);
+  const fmt = useWordFormatting(bodyRef, handleBodyInput, pageRef, pageWidthCm, currentPageDims().h);
   fmt.findHooks.current.before = commitHistoryCheckpoint; // "Substituir" vira um passo de Ctrl+Z
 
   // Margens dos presets em cm — bem próximas dos px antigos (48/76/110px a
@@ -23224,6 +23465,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   // Documento com páginas de PDF importadas e já editado: PDF e Word saem iguais à tela, cada página como imagem.
   const [exportingPdf, setExportingPdf] = useState("");
+  // PDF importado ou imagem solta na página: só a exportação por imagem preserva exatamente o que se vê na tela.
+  const hasLayoutObjects = () => !!bodyRef.current?.querySelector(":scope > .pdf-import-page, img.word-img-free");
   const exportPagesAsImages = async (format) => {
     const dims = currentPageDims();
     const label = format === "docx" ? "Word" : "PDF";
@@ -23237,7 +23480,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     }
   };
   const regularExport = (kind) => {
-    if ((kind === "pdf" || kind === "docx") && bodyRef.current?.querySelector(":scope > .pdf-import-page")) { exportPagesAsImages(kind); return; }
+    if ((kind === "pdf" || kind === "docx") && hasLayoutObjects()) { exportPagesAsImages(kind); return; }
     if (kind === "docx") downloadWordDocx(currentDocForExport());
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
     else downloadWordPdf(currentDocForExport());
@@ -23258,7 +23501,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           let blob;
           setExportingPdf("Preparando PDF…");
           try {
-            if (bodyRef.current?.querySelector(":scope > .pdf-import-page")) {
+            if (hasLayoutObjects()) {
               const dims = currentPageDims();
               blob = await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, asBlob: true, onProgress: (i, n) => setExportingPdf(`Preparando PDF… página ${i} de ${n}`) });
             } else blob = await downloadWordPdf(currentDocForExport(), { asBlob: true });
@@ -23300,7 +23543,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     div.innerHTML = bodyRef.current?.innerHTML || "";
     const text = div.textContent || "";
     const paragraphs = Array.from(div.querySelectorAll("p, div, h1, h2, h3, li")).filter(n => (n.textContent || "").trim()).length;
-    return { ...wordCount, charsNoSpace: text.replace(/\s/g, "").length, paragraphs: paragraphs || (text.trim() ? 1 : 0) };
+    const chapters = Array.from(div.querySelectorAll("h1")).filter(n => (n.textContent || "").trim()).length;
+    const pg = currentPageDimsCm();
+    const wpp = Math.max(80, Math.round(280 * (pg.w * pg.h) / (14 * 21))); // ~280 palavras por página em 14 x 21 cm
+    return { ...wordCount, charsNoSpace: text.replace(/\s/g, "").length, paragraphs: paragraphs || (text.trim() ? 1 : 0), chapters, wpp, bookPages: Math.ceil((wordCount.words || 0) / wpp), readMin: Math.ceil((wordCount.words || 0) / 220) };
   };
 
   // ====== Ribbon no padrão wordcraft/Word: estado dos botões, menus e comandos extras ======
@@ -23439,6 +23685,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     code: { tag: "P", css: { fontFamily: "Consolas, 'Courier New', monospace", background: "#f3f4f6", padding: "6px 10px", borderRadius: "4px", fontSize: "10pt", whiteSpace: "pre-wrap" } },
     caption: { tag: "P", css: { fontStyle: "italic", fontSize: "9pt", color: "#44546a" } },
     listpara: { tag: "P", css: { marginLeft: "36px" } },
+    // Estilos de livro
+    chapter: { tag: "H1", css: { textAlign: "center", margin: "48px 0 32px" } },
+    bookbody: { tag: "P", css: { textAlign: "justify", textIndent: "1.25cm", margin: "0" } },
+    bookfirst: { tag: "P", css: { textAlign: "justify", textIndent: "0", margin: "0" } },
+    epigraph: { tag: "BLOCKQUOTE", css: { textAlign: "right", fontStyle: "italic", borderLeft: "none", padding: "0", margin: "24px 0 24px 40%" } },
+    scenebreak: { tag: "P", css: { textAlign: "center", letterSpacing: "0.5em", textIndent: "0", margin: "24px 0" }, text: "* * *" },
   };
   const applyBlockStyle = (key) => {
     const el = bodyRef.current;
@@ -23451,8 +23703,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (n && n.nodeType === 3) n = n.parentElement;
     const block = n?.closest?.(st.tag.toLowerCase() + ",p,div");
     if (block && el.contains(block)) {
-      ["fontFamily", "background", "padding", "borderRadius", "fontSize", "whiteSpace", "fontStyle", "color", "borderTop", "borderBottom", "borderLeft", "textAlign", "margin", "marginLeft"].forEach(k => { block.style[k] = ""; });
+      ["fontFamily", "background", "padding", "borderRadius", "fontSize", "whiteSpace", "fontStyle", "color", "borderTop", "borderBottom", "borderLeft", "textAlign", "margin", "marginLeft", "textIndent", "letterSpacing"].forEach(k => { block.style[k] = ""; });
       Object.assign(block.style, st.css);
+      if (st.text && !(block.textContent || "").trim()) block.textContent = st.text;
     }
     handleBodyInput();
   };
@@ -24008,7 +24261,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     ["Marcadores", () => fmt.exec("insertUnorderedList")], ["Numeração", () => fmt.exec("insertOrderedList")], ["Aumentar Recuo", () => fmt.exec("indent")], ["Diminuir Recuo", () => fmt.exec("outdent")],
     ["Título 1", () => fmt.applyHeading("H1")], ["Título 2", () => fmt.applyHeading("H2")], ["Título 3", () => fmt.applyHeading("H3")], ["Parágrafo Normal", () => fmt.applyHeading("P")],
     ["Localizar", () => focusFind("find")], ["Substituir", () => focusFind("replace")], ["Selecionar Tudo", () => fmt.selectAll()],
-    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Quebra de Página", () => fmt.insertPageBreak()], ["Inserir Sumário", () => fmt.insertTOC()],
+    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Nova Página Acima", () => insertPage("above")], ["Nova Página Abaixo", () => insertPage("below")], ["Inserir Sumário", () => fmt.insertTOC()],
     ["Inserir Nota de Rodapé", () => fmt.insertFootnote()], ["Inserir Nota de Fim", () => fmt.insertEndnote()], ["Inserir Gráfico…", () => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })],
     ["Inserir Assinatura", () => fmt.insertSignatureLine()], ["Data e Hora", () => fmt.insertDateTime()], ["Caixa de Texto", () => fmt.insertTextBox()],
     ["Controlar Alterações", () => toggleTrackChanges()], ["Contagem de Palavras", () => setWordCountDialogOpen(true)], ["Ler em Voz Alta", () => toggleReadAloud()],
@@ -24075,7 +24328,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       if (kl === "f" || kl === "p") return run(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }));
       return false;
     }
-    if (k === "Enter") return run(fmt.insertPageBreak);
+    if (k === "Enter") return run(() => insertPage("below"));
     if (k === "-") return run(() => fmt.exec("insertText", "\u00AD"));
     if (k === "=") return run(() => fmt.exec("subscript"));
     if (k === "]") return run(() => stepSizePt(1));
@@ -24427,8 +24680,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     add("Controles de conteúdo", q(".word-cc"));
     add("Indicadores", q(".word-bookmark"));
     add("Imagens", imgs.length, imgBytes > 0 ? `≈ ${(imgBytes / 1048576).toFixed(1)} MB embutidos no documento.` : undefined);
-    if (bandText(".word-header-band, .word-header-band-first")) rows.push({ label: "Texto no cabeçalho", n: "sim" });
-    if (bandText(".word-footer-band, .word-footer-band-first")) rows.push({ label: "Texto no rodapé", n: "sim" });
+    if (bandText(".word-header-band, .word-header-band-first, .word-header-band-even")) rows.push({ label: "Texto no cabeçalho", n: "sim" });
+    if (bandText(".word-footer-band, .word-footer-band-first, .word-footer-band-even")) rows.push({ label: "Texto no rodapé", n: "sim" });
     if (watermarkText) rows.push({ label: "Marca d'água", n: "sim", hint: watermarkText });
     if (docProtected) rows.push({ label: "Documento protegido", n: "sim" });
     return rows;
@@ -24785,6 +25038,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   ["Código", "code", () => applyBlockStyle("code"), "Parágrafo em fonte monoespaçada com fundo cinza, para trechos de código."],
                   ["Legenda", "caption", () => applyBlockStyle("caption"), "Texto pequeno em itálico, usado sob figuras e tabelas."],
                   ["Parágrafo da Lista", "listpara", () => applyBlockStyle("listpara"), "Parágrafo recuado, como item de uma lista sem marcador."],
+                  ["Capítulo", "chapter", () => applyBlockStyle("chapter"), "Título de capítulo: Título 1 centralizado, com espaço acima e abaixo."],
+                  ["Corpo de Livro", "bookbody", () => applyBlockStyle("bookbody"), "Texto de livro: justificado, com recuo de 1,25 cm na primeira linha e sem espaço entre parágrafos."],
+                  ["1º Parágrafo", "bookfirst", () => applyBlockStyle("bookfirst"), "Primeiro parágrafo após um título ou quebra de cena: justificado e sem recuo."],
+                  ["Epígrafe", "epigraph", () => applyBlockStyle("epigraph"), "Citação curta no início de um capítulo: itálico, alinhada à direita."],
+                  ["Quebra de Cena", "scenebreak", () => applyBlockStyle("scenebreak"), "Separador centralizado (* * *) para trocar de cena dentro do capítulo."],
                 ].map(([label, cls, fn, desc]) => (
                   <button key={label} type="button" className={"rbStyleTile rbStyle-" + cls} data-tip={label} data-tipdesc={desc} onClick={fn}>
                     <span className="rbStylePrev">AaBbCc</span>
@@ -24844,8 +25102,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   {COVER_STYLES.map(([k, l]) => <button key={k} onClick={() => insertCoverPage(k)}>{l}</button>)}
                   <button onClick={removeCoverPage}>Remover Folha de Rosto Atual</button>
                 </>)}
-                <RbSm icon={FileText} label="Página em Branco" tip="Página em Branco" desc="Insere uma página vazia no ponto onde está o cursor." onClick={insertBlankPage}/>
-                <RbSm icon={FileType} label="Quebra de Página" tip="Quebra de Página (Ctrl+Enter)" desc="Insere uma quebra, movendo o conteúdo seguinte para o início da próxima página." onClick={fmt.insertPageBreak}/>
+                <RbSm icon={FilePlus} label="Página Acima" tip="Nova Página Acima" desc="Insere uma página em branco logo acima da página onde está o cursor." onClick={() => insertPage("above")}/>
+                <RbSm icon={FilePlus2} label="Página Abaixo" tip="Nova Página Abaixo (Ctrl+Enter)" desc="Insere uma página em branco logo abaixo da página onde está o cursor." onClick={() => insertPage("below")}/>
               </div>
             </RbGroup>
             <RbGroup label="Tabelas">
@@ -24918,6 +25176,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 {rbm("header", (t) => <RbSm icon={PanelTop} label="Cabeçalho" chevron tip="Cabeçalho" desc="Adiciona uma área de cabeçalho, repetida no topo de todas as páginas." onClick={t}/>, <>
                   {HF_STYLES.map(([k, l]) => <button key={k} onClick={() => fmt.insertHeaderFooterBand("header", undefined, k)}>{l}</button>)}
                   <button className={bodyRef.current?.querySelector(".word-header-band-first, .word-footer-band-first") ? "active" : ""} onClick={fmt.togglePrimeiraPaginaDiferente}>Primeira Página Diferente</button>
+                  <button className={bodyRef.current?.querySelector(".word-header-band-even, .word-footer-band-even") ? "active" : ""} onClick={fmt.toggleParImparDiferente}>Páginas Pares e Ímpares Diferentes</button>
                 </>)}
                 {rbm("footer", (t) => <RbSm icon={PanelBottom} label="Rodapé" chevron tip="Rodapé" desc="Adiciona uma área de rodapé, repetida na parte inferior de todas as páginas." onClick={t}/>, <>
                   {HF_STYLES.map(([k, l]) => <button key={k} onClick={() => fmt.insertHeaderFooterBand("footer", undefined, k)}>{l}</button>)}
@@ -25102,7 +25361,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               </>)}
               {rbm("breaks", (t) => <RbBig icon={Layers} label="Quebras" chevron tip="Quebras" desc="Insere uma quebra de página ou de seção (próxima página, contínua, página par ou ímpar)." onClick={t}/>, <>
                 <div className="wordDropdownEmpty">Quebras de Página</div>
-                <button onClick={fmt.insertPageBreak}>Página</button>
+                <button onClick={() => { insertPage("above"); setRbMenu(null); }}>Nova página acima</button>
+                <button onClick={() => { insertPage("below"); setRbMenu(null); }}>Nova página abaixo</button>
+                <button onClick={() => { fmt.insertPageBreak(); applyBlockStyle("chapter"); setRbMenu(null); }}>Novo capítulo (página + título)</button>
                 <div className="wordDropdownEmpty">Quebras de Seção</div>
                 <button onClick={() => fmt.insertSectionBreak("nextpage")}>Próxima Página</button>
                 <button onClick={() => fmt.insertSectionBreak("continuous")}>Contínua</button>
@@ -25538,6 +25799,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <button data-tip="Em Linha com o Texto" data-tipdesc="A imagem se comporta como um caractere, dentro do fluxo do texto." onClick={() => imgSetWrap("inline")}><Type size={15}/></button>
                 <button data-tip="Quadrado à Esquerda" data-tipdesc="O texto contorna a imagem, que fica à esquerda." onClick={() => imgSetWrap("left")}><AlignLeft size={15}/></button>
                 <button data-tip="Quadrado à Direita" data-tipdesc="O texto contorna a imagem, que fica à direita." onClick={() => imgSetWrap("right")}><AlignRight size={15}/></button>
+                <button data-tip="À Frente do Texto" data-tipdesc="A imagem fica solta sobre a página, na frente do texto: arraste para mover e use as alças para redimensionar." onClick={() => imgSetFree("front")}><BringToFront size={15}/></button>
+                <button data-tip="Atrás do Texto" data-tipdesc="A imagem fica solta atrás do texto (fundo da página). Para selecioná-la depois, clique numa área sem texto sobre ela." onClick={() => imgSetFree("behind")}><SendToBack size={15}/></button>
               </div>
               <span className="wordRibbonGroupLabel">Quebra de Texto</span>
             </div>
@@ -25557,6 +25820,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <button className="wordTextBtn" onClick={() => imgSetSize("original")}>Original</button>
               </div>
               <span className="wordRibbonGroupLabel">Tamanho</span>
+            </div>
+            <span className="wordRibbonDivider"/>
+            <div className="wordRibbonGroup">
+              <div className="wordRibbonRow">
+                <button className="wordTextBtn" data-tip="Página Inteira" data-tipdesc="A imagem ocupa a página inteira, sem margens, na página em que está (preenche sem distorcer, cortando o excesso)." onClick={imgFullPage}><Maximize2 size={14}/> Página inteira</button>
+              </div>
+              <span className="wordRibbonGroupLabel">Ajustar</span>
             </div>
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
@@ -25875,6 +26145,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 style={{
                   paddingLeft: marginLeftCm != null ? marginLeftCm + "cm" : undefined,
                   paddingRight: marginRightCm != null ? marginRightCm + "cm" : undefined,
+                  paddingTop: bookLayout.mt !== "" ? bookLayout.mt + "cm" : undefined,
+                  paddingBottom: bookLayout.mb !== "" ? bookLayout.mb + "cm" : undefined,
                   writingMode: textDir === "vertical" ? "vertical-rl" : undefined,
                 }}
                 contentEditable={!docProtected && !readMode}
@@ -25907,6 +26179,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 />
               )}
               {inkReplay && <WordInkReplay bodyRef={bodyRef} onClose={() => setInkReplay(false)}/>}
+              {selectedImg && drawTool === "select" && !docProtected && !readMode && (
+                <WordImageHandles
+                  img={selectedImg} bodyRef={bodyRef} pageRef={pageRef}
+                  onBefore={commitHistoryCheckpoint}
+                  onEnd={() => { syncFreeImageSpacer(); handleBodyInput(); }}
+                />
+              )}
             </div>
           </div>
           {splitOn && <div className="wordSplitPane wordRichBody" dangerouslySetInnerHTML={{ __html: splitHtml }}/>}
@@ -26059,6 +26338,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <label>Margem esquerda (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.left ?? 2} onChange={e => { setF("left", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("left", Number(e.target.value)); }}/></label>
             <label>Margem direita (cm) <input type="number" step="0.1" min="0.2" value={dlgForm.right ?? 2} onChange={e => { setF("right", e.target.value); if (Number(e.target.value) > 0) setCustomMargin("right", Number(e.target.value)); }}/></label>
             <label>Predefinição <select value={margins} onChange={e => changePageSetting("margins", e.target.value)}><option value="normal">Normal</option><option value="estreita">Estreita</option><option value="moderada">Moderada</option><option value="larga">Larga</option></select></label>
+            <label>Margem superior (cm) <input type="number" step="0.1" min="0" placeholder="padrão" value={bookLayout.mt} onChange={e => applyBookLayout({ mt: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)) })}/></label>
+            <label>Margem inferior (cm) <input type="number" step="0.1" min="0" placeholder="padrão" value={bookLayout.mb} onChange={e => applyBookLayout({ mb: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)) })}/></label>
+            <label>Medianiz (cm) <input type="number" step="0.1" min="0" placeholder="0" value={bookLayout.gutter} onChange={e => applyBookLayout({ gutter: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)) })}/></label>
+            <label><input type="checkbox" checked={bookLayout.mirror} onChange={e => applyBookLayout({ mirror: e.target.checked })}/> Margens espelhadas (esquerda = interna, direita = externa)</label>
+            <small>Medianiz e margens espelhadas valem no .docx e no PDF exportados (a tela mostra uma folha só).</small>
             <label>Orientação <select value={orientation} onChange={e => changePageSetting("orientation", e.target.value)}><option value="retrato">Retrato</option><option value="paisagem">Paisagem</option></select></label>
             <label>Papel <select value={pageSize} onChange={e => changePageSetting("page_size", e.target.value)}>{Object.keys(PAGE_SIZES).map(k => <option key={k} value={k}>{pageSizeLabel(k)}</option>)}</select></label>
           </WordModal>
@@ -26428,6 +26712,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   <div className="wordBackstageInfoRow"><span>Caracteres (com espaços)</span><b>{s.chars}</b></div>
                   <div className="wordBackstageInfoRow"><span>Caracteres (sem espaços)</span><b>{s.charsNoSpace}</b></div>
                   <div className="wordBackstageInfoRow"><span>Parágrafos</span><b>{s.paragraphs}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Capítulos (Título 1)</span><b>{s.chapters}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Páginas estimadas (~{s.wpp} palavras/pág.)</span><b>{s.bookPages}</b></div>
+                  <div className="wordBackstageInfoRow"><span>Tempo de leitura (~220 palavras/min)</span><b>{s.readMin >= 60 ? Math.floor(s.readMin / 60) + " h " + (s.readMin % 60) + " min" : s.readMin + " min"}</b></div>
                 </div>
               ); })()}
               <div className="wordTableDialogActions">

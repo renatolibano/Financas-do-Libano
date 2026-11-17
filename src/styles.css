@@ -1669,6 +1669,19 @@ h1{font-size:23px}
 /* de status, no mesmo espírito visual do Microsoft Word, com a paleta    */
 /* de cores do app.                                                       */
 /* ---------------------------------------------------------------------- */
+/* Estante do Word: miniaturas de folha (como a galeria de modelos do Word) */
+.wordShelf{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:24px 18px}
+.wordThumbTile{position:relative;display:flex;flex-direction:column;gap:8px;cursor:pointer;min-width:0}
+.wordThumbSlot{aspect-ratio:5/7;display:flex;align-items:center;justify-content:center;container-type:inline-size}
+.wordThumbPage{position:relative;background:#fff;color:#1a1a1a;border-radius:2px;box-shadow:0 4px 14px #0008;overflow:hidden;transition:transform .15s ease,box-shadow .15s ease;box-sizing:border-box}
+.wordThumbTile:hover .wordThumbPage{transform:translateY(-3px);box-shadow:0 0 0 2px var(--accent),0 10px 22px #0009}
+.wordThumbText{box-sizing:border-box;padding:9% 10%;font-family:Calibri,Arial,sans-serif;font-size:calc(3cqw * var(--k,1));line-height:1.5;color:#333;text-align:justify;overflow:hidden;height:100%;word-break:break-word}
+.wordThumbBlank{display:grid;place-items:center;color:#b3b8c2;font-size:12px}
+.wordThumbTile:hover .wordThumbBlank{color:var(--accent)}
+.wordThumbLabel{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:12.5px;color:var(--text-1)}
+.wordThumbLabel b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wordThumbLabel small{font-size:10.5px;color:var(--text-3)}
+.wordThumbTile .bookMenuBtn{top:6px;right:6px}
 .wordDocIcon{width:30px;height:30px;border-radius:8px;background:var(--accent);color:var(--accent-text-on);display:grid;place-items:center;margin-bottom:8px}
 
 .wordModal{grid-template-rows:auto auto auto 1fr auto!important}
@@ -1829,11 +1842,24 @@ h1{font-size:23px}
 .wordRichBody .word-cell-active{outline:2px solid var(--accent);outline-offset:-2px}
 .wordRichBody img.word-img-selected{outline:2px solid var(--accent);outline-offset:2px}
 .wordRichBody img.word-img-bordered{border:3px solid #444}
+/* Imagem em posição livre (à frente/atrás do texto) e suas alças de redimensionar/girar/mover */
+.wordRichBody img.word-img-free{position:absolute;margin:0;max-width:none}
+.wordImgFrame{position:absolute;z-index:6;pointer-events:none;box-sizing:border-box;transform-origin:50% 50%;box-shadow:0 0 0 1px var(--accent,#4c8dff)}
+.wordImgMove{position:absolute;inset:0;pointer-events:auto;touch-action:none}
+.wordImgHit{position:absolute;pointer-events:auto;touch-action:none;display:flex;align-items:center;justify-content:center}
+.wordImgHit>span{display:block;box-sizing:border-box;background:#fff;border-style:solid;border-color:var(--accent,#4c8dff);border-radius:50%}
+.wordImgRot>span{display:flex;align-items:center;justify-content:center;color:var(--accent,#4c8dff)}
+.wordImgRotLine{position:absolute;left:50%;transform:translateX(-50%);background:var(--accent,#4c8dff);pointer-events:none}
 .wordContextTab{background:var(--accent-soft-bg);color:var(--accent)!important;border-radius:4px 4px 0 0;margin:0 2px}
 .wordContextTab:hover,.wordContextTab.active{filter:brightness(1.08)}
 .wordRichBody img{max-width:100%;height:auto;display:block;margin:8px 0}
 .wordRichBody .word-page-break{position:relative;margin:22px 0;border-top:1px dashed #b9bec7;text-align:center;user-select:none}
 .wordRichBody .word-page-break span{position:relative;top:-9px;background:#fff;padding:0 8px;font-size:10px;color:#9aa0ab;text-transform:uppercase;letter-spacing:.05em}
+/* Separador entre páginas (como no Word): faixa escura na largura toda; a altura da quebra é ajustada por JS para que o texto seguinte
+   comece no topo da próxima página. Seções e o modo Rascunho mantêm o traço tracejado. */
+.wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break){margin:0;border:0;height:24px;text-align:left}
+.wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break) span{display:none}
+.wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break)::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--pb-pad,0px) - 9px);height:18px;background:var(--pb-bg,#54575c);box-shadow:0 0 0 100vmax var(--pb-bg,#54575c);clip-path:inset(0 -100vmax)}
 .wordRichBody .word-section-break{border-top:2px double #5b9dff}
 .wordRichBody .word-section-break span{color:#3766c9;font-weight:700}
 .wordRichBody mark.word-find-hit{background:#ffe066;color:inherit}
@@ -1874,6 +1900,9 @@ h1{font-size:23px}
   .wordPage .wordRichBody.word-show-codes .word-field .wf-code{display:inline!important}
   .wordPage .wordRichBody.word-show-codes .word-field .wf-result,.wordPage .wordRichBody .word-field[data-show-code="1"] .wf-result{display:none!important}
   .wordPage .wordRichBody .pdf-import-page{break-inside:avoid;break-after:page}
+  .wordPage .wordImgFrame{display:none!important}
+  .wordPage .wordRichBody .word-page-break:not(.word-section-break){height:0!important;margin:0!important;border:0!important;break-after:page}
+  .wordPage .wordRichBody .word-page-break:not(.word-section-break)::after,.wordPage .wordRichBody .word-page-break:not(.word-section-break) span{display:none!important}
   .wordPage .wordRichBody .pdf-import-page:last-of-type{break-after:auto}
 }
 .wordTableDialog{background:var(--bg-modal);border:1px solid var(--border);border-radius:14px;padding:20px;width:260px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 90px #000a}
@@ -1950,8 +1979,8 @@ h1{font-size:23px}
 
 /* Cabeçalho/Rodapé — faixa única (o editor não pagina em folhas separadas,
    então não se repete "por página" como no Word real; ver aviso no chat) */
-.wordRichBody .word-header-band{border-bottom:1px dashed #c9cdd6;padding-bottom:8px;margin-bottom:14px;color:#5b6472;font-size:9.5pt}
-.wordRichBody .word-footer-band{border-top:1px dashed #c9cdd6;padding-top:8px;margin-top:14px;color:#5b6472;font-size:9.5pt}
+.wordRichBody .word-header-band,.wordRichBody .word-header-band-first,.wordRichBody .word-header-band-even{border-bottom:1px dashed #c9cdd6;padding-bottom:8px;margin-bottom:14px;color:#5b6472;font-size:9.5pt}
+.wordRichBody .word-footer-band,.wordRichBody .word-footer-band-first,.wordRichBody .word-footer-band-even{border-top:1px dashed #c9cdd6;padding-top:8px;margin-top:14px;color:#5b6472;font-size:9.5pt}
 .wordRichBody .word-pagenum{display:inline-block;padding:0 5px;border:1px dashed #b9bec7;border-radius:3px;background:#f4f2ee;user-select:none}
 
 /* Modo de exibição "Rascunho" — tira a moldura/sombra de folha de papel e
@@ -2007,8 +2036,12 @@ h1{font-size:23px}
 .wordRichBody .word-toc-refresh{font-size:9pt;font-weight:400;color:#2f6fed;background:none;border:none;cursor:pointer;padding:2px 6px}
 .wordRichBody .word-toc-refresh:hover{text-decoration:underline}
 .wordRichBody .word-toc-body{display:flex;flex-direction:column;gap:4px}
-.wordRichBody .word-toc-entry{display:block;color:#1a1a1a;text-decoration:none;cursor:pointer;font-size:11pt}
+.wordRichBody .word-toc-entry{display:flex;align-items:baseline;gap:4px;color:#1a1a1a;text-decoration:none;cursor:pointer;font-size:11pt}
 .wordRichBody .word-toc-entry:hover{text-decoration:underline;color:#2f6fed}
+.wordRichBody .word-toc-entry .t{min-width:0}
+.wordRichBody .word-toc-entry .l{flex:1;overflow:hidden;white-space:nowrap;min-width:12px;color:#888;font-weight:400}
+.wordRichBody .word-toc-entry .l::after{content:". . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ."}
+.wordRichBody .word-toc-entry .p{font-weight:400;flex:none}
 .wordRichBody .word-toc-level1{font-weight:700}
 .wordRichBody .word-toc-level2{margin-left:18px;font-size:10.5pt}
 .wordRichBody .word-toc-level3{margin-left:36px;font-size:10pt;color:#444}
@@ -3105,8 +3138,29 @@ body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px
 .wordPage-a5.wordPage-paisagem{width:794px;min-height:559px}
 .wordPage-b5{width:665px;min-height:945px}
 .wordPage-b5.wordPage-paisagem{width:945px;min-height:665px}
+.wordPage-livro11x18{width:416px;min-height:680px}
+.wordPage-livro11x18.wordPage-paisagem{width:680px;min-height:416px}
+.wordPage-livro12x18{width:454px;min-height:680px}
+.wordPage-livro12x18.wordPage-paisagem{width:680px;min-height:454px}
+.wordPage-livro14x21{width:529px;min-height:794px}
+.wordPage-livro14x21.wordPage-paisagem{width:794px;min-height:529px}
+.wordPage-livro16x23{width:605px;min-height:869px}
+.wordPage-livro16x23.wordPage-paisagem{width:869px;min-height:605px}
+.wordPage-livro17x24{width:643px;min-height:907px}
+.wordPage-livro17x24.wordPage-paisagem{width:907px;min-height:643px}
+.wordPage-livro6x9{width:576px;min-height:864px}
+.wordPage-livro6x9.wordPage-paisagem{width:864px;min-height:576px}
+.wordPage-livro55x85{width:528px;min-height:816px}
+.wordPage-livro55x85.wordPage-paisagem{width:816px;min-height:528px}
 .wordMargin-moderada .wordRichBody{padding:62px}
 @media(max-width:760px){
+  .wordPage-livro11x18,.wordPage-livro11x18.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.635)}
+  .wordPage-livro12x18,.wordPage-livro12x18.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.498)}
+  .wordPage-livro14x21,.wordPage-livro14x21.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.501)}
+  .wordPage-livro16x23,.wordPage-livro16x23.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.436)}
+  .wordPage-livro17x24,.wordPage-livro17x24.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.411)}
+  .wordPage-livro6x9,.wordPage-livro6x9.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.5)}
+  .wordPage-livro55x85,.wordPage-livro55x85.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.545)}
   .wordPage-oficio,.wordPage-oficio.wordPage-paisagem,.wordPage-tabloide,.wordPage-tabloide.wordPage-paisagem,.wordPage-executivo,.wordPage-executivo.wordPage-paisagem,.wordPage-a3,.wordPage-a3.wordPage-paisagem,.wordPage-a5,.wordPage-a5.wordPage-paisagem,.wordPage-b5,.wordPage-b5.wordPage-paisagem{width:calc(100vw - 40px);min-height:calc((100vw - 40px) * 1.414)}
   .wordMargin-moderada .wordRichBody{padding:38px}
 }
@@ -3137,6 +3191,10 @@ body:has(.mobileTabBarPanel.open):has(.abMini:not(.muMini)) .muMini{bottom:206px
 /* Estilos extras da galeria */
 .rbStyle-h4 .rbStylePrev{font-size:13px;font-weight:700;font-style:italic;color:var(--text-2)}
 .rbStyle-quoteintense .rbStylePrev{font-style:italic;color:var(--accent);border-top:1.5px solid var(--accent);border-bottom:1.5px solid var(--accent);padding:1px 3px}
+.rbStyle-chapter .rbStylePrev{font-weight:700;text-align:center;letter-spacing:1px}
+.rbStyle-bookbody .rbStylePrev{text-indent:8px}
+.rbStyle-epigraph .rbStylePrev{font-style:italic;text-align:right}
+.rbStyle-scenebreak .rbStylePrev{letter-spacing:3px;text-align:center}
 .rbStyle-emphsubtle .rbStylePrev{font-style:italic;color:var(--text-3)}
 .rbStyle-emph .rbStylePrev{font-style:italic}
 .rbStyle-strong .rbStylePrev{font-weight:700}

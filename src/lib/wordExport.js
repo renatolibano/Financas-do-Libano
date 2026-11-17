@@ -1,11 +1,12 @@
 import { jsPDF } from "jspdf";
+import JSZip from "jszip";
 import {
   Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
   HeadingLevel, AlignmentType, LevelFormat, WidthType, PageBreak, PageOrientation,
   VerticalAlign, BorderStyle, Header, Footer, PageNumber,
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript, MathSubScript, MathSubSuperScript, MathSum, MathIntegral,
   MathRoundBrackets, MathSquareBrackets, MathCurlyBrackets, MathAngledBrackets, MathFunction, MathLimitLower, MathLimitUpper,
-  SimpleField,
+  SimpleField, TabStopType, LeaderType,
 } from "docx";
 import { parseEquation, toLinear } from "./wordMath";
 import { PAGE_SIZES } from "./wordPageSizes";
@@ -61,6 +62,32 @@ const HILITE_HEX_TO_DOCX = {
   ffe066: "yellow", a9e6a0: "green", a9d4ff: "cyan", e2b6ff: "magenta", ffb3ab: "red",
 };
 
+// Layout de livro (margem superior/inferior, medianiz, margens espelhadas) guardado no marcador word-page-meta.
+function contentWidthTwips(doc, book) {
+  const cmT = (cm) => Math.round(cm * 566.9291339);
+  const sz = PAGE_SIZES[doc.page_size] || PAGE_SIZES.a4;
+  const pw = doc.orientation === "paisagem" ? sz.cm[1] : sz.cm[0];
+  const m = MARGIN_TWIPS[doc.margins] || MARGIN_TWIPS.normal;
+  const l = doc.margin_left != null ? cmT(doc.margin_left) : m;
+  const r = doc.margin_right != null ? cmT(doc.margin_right) : m;
+  return cmT(pw) - l - r - (book.gutter ? cmT(book.gutter) : 0);
+}
+function readBookLayout(html) {
+  try {
+    const d = document.createElement("div");
+    d.innerHTML = html || "";
+    const raw = d.querySelector(".word-page-meta")?.dataset?.booklayout;
+    const o = raw ? JSON.parse(raw) : {};
+    const n = (v) => (v === "" || v == null || Number.isNaN(Number(v)) ? null : Math.max(0, Number(v)));
+    return { mt: n(o.mt), mb: n(o.mb), gutter: n(o.gutter), mirror: !!o.mirror };
+  } catch { return { mt: null, mb: null, gutter: null, mirror: false }; }
+}
+function parseFirstLine(el) {
+  const m = /^(-?[\d.]+)(cm|px|pt|in|em)$/.exec((el.style?.textIndent || "").trim());
+  if (!m) return undefined;
+  const v = parseFloat(m[1]) * ({ cm: 566.93, px: 15, pt: 20, in: 1440, em: 240 })[m[2]];
+  return v > 0 ? Math.round(v) : undefined;
+}
 function parseAlign(el) {
   const a = el.style?.textAlign || "";
   if (a === "center") return "center";
@@ -197,10 +224,10 @@ function parseBlocks(html) {
   const container = document.createElement("div");
   container.innerHTML = html || "";
   const blocks = [];
-  let header = null, headerFirst = null, footer = null, footerFirst = null;
+  let header = null, headerFirst = null, footer = null, footerFirst = null, headerEven = null, footerEven = null;
 
   const pushParagraphLike = (el, type = "paragraph", extra = {}) => {
-    blocks.push({ type, align: parseAlign(el), runs: collectRuns(el, {}), ...extra });
+    blocks.push({ type, align: parseAlign(el), firstLine: parseFirstLine(el), runs: collectRuns(el, {}), ...extra });
   };
 
   const walkListItems = (listEl, ordered, level = 0) => {
@@ -235,7 +262,10 @@ function parseBlocks(html) {
     if (el.classList?.contains("word-toc")) {
       blocks.push({ type: "heading", level: 2, align: "left", runs: [{ text: "Sumário" }] });
       Array.from(el.querySelectorAll(".word-toc-entry")).forEach((a) => {
-        blocks.push({ type: "paragraph", align: "left", runs: [{ text: a.textContent || "" }] });
+        const title = a.querySelector(".t")?.textContent ?? (a.textContent || "");
+        const page = a.querySelector(".p")?.textContent || "";
+        const level = /word-toc-level(\d)/.exec(a.className)?.[1] || "1";
+        blocks.push({ type: "toc", align: "left", level: Number(level), page, runs: [{ text: title }] });
       });
       return;
     }
@@ -262,6 +292,8 @@ function parseBlocks(html) {
       });
       return;
     }
+    if (el.classList?.contains("word-header-band-even")) { headerEven = { runs: collectRuns(el, {}) }; return; }
+    if (el.classList?.contains("word-footer-band-even")) { footerEven = { runs: collectRuns(el, {}) }; return; }
     if (el.classList?.contains("word-header-band-first")) { headerFirst = { runs: collectRuns(el, {}) }; return; }
     if (el.classList?.contains("word-header-band")) { header = { runs: collectRuns(el, {}) }; return; }
     if (el.classList?.contains("word-footer-band-first")) { footerFirst = { runs: collectRuns(el, {}) }; return; }
@@ -280,7 +312,7 @@ function parseBlocks(html) {
   });
 
   if (!blocks.length) blocks.push({ type: "paragraph", runs: [] });
-  return { blocks, header, headerFirst, footer, footerFirst };
+  return { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven };
 }
 
 // ---------------------------------------------------------------------------
@@ -412,13 +444,41 @@ function buildFieldParagraph(band) {
   return new Paragraph({ children: children.length ? children : [new TextRun("")] });
 }
 
+// A lib docx não expõe "margens espelhadas": liga w:mirrorMargins direto no settings.xml (na posição certa do esquema).
+async function addMirrorMargins(blob) {
+  try {
+    const zip = await JSZip.loadAsync(blob);
+    const f = zip.file("word/settings.xml");
+    if (!f) return blob;
+    let xml = await f.async("string");
+    if (xml.includes("<w:mirrorMargins")) return blob;
+    const before = /<w:(writeProtection|view|zoom|removePersonalInformation|removeDateAndTime|doNotDisplayPageBoundaries|displayBackgroundShape|printPostScriptOverText|printFractionalCharacterWidth|printFormsData|embedTrueTypeFonts|embedSystemFonts|saveSubsetFonts|saveFormsData)\b[^>]*\/>/g;
+    let at = -1, m;
+    while ((m = before.exec(xml))) at = m.index + m[0].length;
+    if (at < 0) { const o = /<w:settings\b[^>]*>/.exec(xml); if (!o) return blob; at = o.index + o[0].length; }
+    xml = xml.slice(0, at) + "<w:mirrorMargins/>" + xml.slice(at);
+    zip.file("word/settings.xml", xml);
+    return await zip.generateAsync({ type: "blob", mimeType: blob.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  } catch { return blob; }
+}
+
 export async function downloadWordDocx(doc) {
   const processedHtml = await preprocessExportHtml(doc.content);
-  const { blocks, header, headerFirst, footer, footerFirst } = parseBlocks(processedHtml);
+  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven } = parseBlocks(processedHtml);
+  const book = readBookLayout(doc.content);
   const children = [];
 
   for (const b of blocks) {
     if (b.type === "pagebreak") { children.push(new Paragraph({ children: [new PageBreak()] })); continue; }
+    if (b.type === "toc") {
+      const tx = (b.level || 1) === 1 ? { bold: true } : {};
+      children.push(new Paragraph({
+        indent: { left: ((b.level || 1) - 1) * 360 },
+        tabStops: b.page ? [{ type: TabStopType.RIGHT, position: contentWidthTwips(doc, book), leader: LeaderType.DOT }] : undefined,
+        children: b.page ? [new TextRun({ text: b.runs[0].text, ...tx }), new TextRun({ text: "\t" + b.page })] : [new TextRun({ text: b.runs[0].text, ...tx })],
+      }));
+      continue;
+    }
     if (b.type === "heading") {
       children.push(new Paragraph({
         heading: b.level === 1 ? HeadingLevel.HEADING_1 : b.level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3,
@@ -460,7 +520,7 @@ export async function downloadWordDocx(doc) {
       } catch { /* imagem corrompida — ignora e segue o documento */ }
       continue;
     }
-    children.push(new Paragraph({ alignment: alignMap(b.align), children: runsToTextRuns(b.runs) }));
+    children.push(new Paragraph({ alignment: alignMap(b.align), ...(b.firstLine ? { indent: { firstLine: b.firstLine } } : {}), children: runsToTextRuns(b.runs) }));
   }
 
   const marginTwips = MARGIN_TWIPS[doc.margins] || MARGIN_TWIPS.normal;
@@ -473,9 +533,15 @@ export async function downloadWordDocx(doc) {
   const headerFirstObj = headerFirst ? new Header({ children: [buildFieldParagraph(headerFirst)] }) : undefined;
   const footerObj = footer ? new Footer({ children: [buildFieldParagraph(footer)] }) : undefined;
   const footerFirstObj = footerFirst ? new Footer({ children: [buildFieldParagraph(footerFirst)] }) : undefined;
+  const headerEvenObj = headerEven ? new Header({ children: [buildFieldParagraph(headerEven)] }) : undefined;
+  const footerEvenObj = footerEven ? new Footer({ children: [buildFieldParagraph(footerEven)] }) : undefined;
+  const hasEvenOdd = !!(headerEvenObj || footerEvenObj);
   const hasFirstPage = !!(headerFirstObj || footerFirstObj);
+  const topTwips = book.mt != null ? cmToTwips(book.mt) : marginTwips;
+  const bottomTwips = book.mb != null ? cmToTwips(book.mb) : marginTwips;
 
   const document = new Document({
+    ...(hasEvenOdd ? { evenAndOddHeaderAndFooters: true } : {}),
     numbering: {
       config: [
         { reference: "ordered-list", levels: [0, 1, 2].map((level) => ({ level, format: LevelFormat.DECIMAL, text: `%${level + 1}.`, alignment: AlignmentType.START, style: { paragraph: { indent: { left: 360 * (level + 2), hanging: 360 } } } })) },
@@ -486,17 +552,18 @@ export async function downloadWordDocx(doc) {
       properties: {
         page: {
           size: { ...(PAGE_SIZES[doc.page_size] ? { width: cmToTwips(PAGE_SIZES[doc.page_size].cm[0]), height: cmToTwips(PAGE_SIZES[doc.page_size].cm[1]) } : {}), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-          margin: { top: marginTwips, bottom: marginTwips, left: leftTwips, right: rightTwips },
+          margin: { top: topTwips, bottom: bottomTwips, left: leftTwips, right: rightTwips, ...(book.gutter ? { gutter: cmToTwips(book.gutter) } : {}) },
         },
         titlePage: hasFirstPage,
       },
-      headers: (headerObj || headerFirstObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj } : undefined,
-      footers: (footerObj || footerFirstObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj } : undefined,
+      headers: (headerObj || headerFirstObj || headerEvenObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj, even: headerEvenObj } : undefined,
+      footers: (footerObj || footerFirstObj || footerEvenObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj, even: footerEvenObj } : undefined,
       children,
     }],
   });
 
-  const blob = await Packer.toBlob(document);
+  let blob = await Packer.toBlob(document);
+  if (book.mirror) blob = await addMirrorMargins(blob);
   downloadBlob(blob, `${safeFileName(doc.title)}.docx`);
 }
 
@@ -522,17 +589,24 @@ export async function downloadWordPdf(doc, opts = {}) {
   const pdf = new jsPDF({ unit: "pt", format, orientation: landscape ? "landscape" : "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const maxWidth = pageWidth - marginLeftPt - marginRightPt;
-  const { blocks, header, headerFirst, footer, footerFirst } = parseBlocks(await preprocessExportHtml(doc.content));
-  const hasHeader = !!(header || headerFirst), hasFooter = !!(footer || footerFirst);
-  let y = marginPt + (hasHeader ? 14 : 0);
+  const book = readBookLayout(doc.content);
+  const topPt = book.mt != null ? cmToPt(book.mt) : marginPt;
+  const botPt = book.mb != null ? cmToPt(book.mb) : marginPt;
+  const baseLeft = marginLeftPt + (book.gutter ? cmToPt(book.gutter) : 0);
+  const maxWidth = pageWidth - baseLeft - marginRightPt;
+  // Margens espelhadas: página ímpar usa a margem interna à esquerda; a par, a externa.
+  const leftFor = (p) => (book.mirror && p % 2 === 0 ? marginRightPt : baseLeft);
+  const curLeft = () => leftFor(pdf.internal.getNumberOfPages());
+  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven } = parseBlocks(await preprocessExportHtml(doc.content));
+  const hasHeader = !!(header || headerFirst || headerEven), hasFooter = !!(footer || footerFirst || footerEven);
+  let y = topPt + (hasHeader ? 14 : 0);
 
   const ensureSpace = (lineHeight) => {
-    if (y > pageHeight - marginPt - (hasFooter ? 14 : 0)) { pdf.addPage(); y = marginPt + (hasHeader ? 14 : 0); }
+    if (y > pageHeight - botPt - (hasFooter ? 14 : 0)) { pdf.addPage(); y = topPt + (hasHeader ? 14 : 0); }
   };
 
   blocks.forEach((b) => {
-    if (b.type === "pagebreak") { pdf.addPage(); y = marginPt; return; }
+    if (b.type === "pagebreak") { pdf.addPage(); y = topPt; return; }
     if (b.type === "table") {
       const cols = Math.max(...b.rows.map((r) => r.reduce((sum, c) => sum + (c.colspan || 1), 0)));
       const colWidth = maxWidth / cols;
@@ -549,7 +623,7 @@ export async function downloadWordPdf(doc, opts = {}) {
         if (dryRun) { pdf.setFont("helvetica", "normal"); return rowHeight; }
         ensureSpace(rowHeight);
         cellsAtCol.forEach((c, i) => {
-          const x = marginLeftPt + colWidth * c.col, w = colWidth * (c.colspan || 1);
+          const x = curLeft() + colWidth * c.col, w = colWidth * (c.colspan || 1);
           if (c.shading) { pdf.setFillColor(c.shading); pdf.rect(x, y, w, rowHeight, "F"); }
           if (!b.noBorder) pdf.rect(x, y, w, rowHeight);
           cellLines[i].forEach((line, li) => pdf.text(line, x + 4, y + 13 + li * 13));
@@ -563,7 +637,7 @@ export async function downloadWordPdf(doc, opts = {}) {
           // se essa linha não couber no que resta da página, quebra a
           // página e redesenha o cabeçalho antes dela, na ordem certa
           const needed = drawRow(row, false, true);
-          if (y + needed > pageHeight - marginPt) { pdf.addPage(); y = marginPt; drawRow(b.rows[0], true); }
+          if (y + needed > pageHeight - botPt) { pdf.addPage(); y = topPt; drawRow(b.rows[0], true); }
         }
         drawRow(row, b.repeatHeader && ri === 0);
       });
@@ -576,9 +650,25 @@ export async function downloadWordPdf(doc, opts = {}) {
         const w = Math.min(maxWidth, props.width);
         const h = (props.height * w) / props.width;
         ensureSpace(h);
-        pdf.addImage(b.src, "JPEG", marginLeftPt, y, w, h);
+        pdf.addImage(b.src, "JPEG", curLeft(), y, w, h);
         y += h + 10;
       } catch { /* ignora imagem inválida */ }
+      return;
+    }
+    if (b.type === "toc") {
+      const ind = ((b.level || 1) - 1) * 14, title = b.runs[0].text, left = curLeft() + ind;
+      pdf.setFont("helvetica", (b.level || 1) === 1 ? "bold" : "normal"); pdf.setFontSize(11);
+      ensureSpace(15);
+      pdf.text(title, left, y);
+      if (b.page) {
+        const tw = pdf.getTextWidth(title);
+        pdf.setFont("helvetica", "normal");
+        const right = curLeft() + maxWidth, pw = pdf.getTextWidth(b.page), dw = pdf.getTextWidth(". ");
+        const startX = left + tw + 6, endX = right - pw - 6;
+        if (endX - startX > dw) pdf.text(". ".repeat(Math.floor((endX - startX) / dw)), startX, y);
+        pdf.text(b.page, right, y, { align: "right" });
+      }
+      y += 15;
       return;
     }
     let size = 11, font = "normal", indent = 0;
@@ -590,7 +680,7 @@ export async function downloadWordPdf(doc, opts = {}) {
     blockToLines(b).forEach((rawLine) => {
       pdf.splitTextToSize(rawLine || " ", maxWidth - indent).forEach((line) => {
         ensureSpace(lineHeight);
-        pdf.text(line, marginLeftPt + indent, y);
+        pdf.text(line, curLeft() + indent, y);
         y += lineHeight;
       });
     });
@@ -612,10 +702,11 @@ export async function downloadWordPdf(doc, opts = {}) {
     for (let p = 1; p <= totalPages; p++) {
       pdf.setPage(p);
       const useFirst = p === 1;
-      const h = useFirst && headerFirst ? headerFirst : header;
-      const f = useFirst && footerFirst ? footerFirst : footer;
-      if (h) pdf.text(bandText(h, p, totalPages), marginLeftPt, marginPt - 8);
-      if (f) pdf.text(bandText(f, p, totalPages), marginLeftPt, pageHeight - marginPt + 18);
+      const useEven = p % 2 === 0;
+      const h = useFirst && headerFirst ? headerFirst : (useEven && headerEven ? headerEven : header);
+      const f = useFirst && footerFirst ? footerFirst : (useEven && footerEven ? footerEven : footer);
+      if (h) pdf.text(bandText(h, p, totalPages), leftFor(p), topPt - 8);
+      if (f) pdf.text(bandText(f, p, totalPages), leftFor(p), pageHeight - botPt + 18);
     }
   }
 
