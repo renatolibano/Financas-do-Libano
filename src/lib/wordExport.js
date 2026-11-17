@@ -6,7 +6,7 @@ import {
   VerticalAlign, BorderStyle, Header, Footer, PageNumber,
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript, MathSubScript, MathSubSuperScript, MathSum, MathIntegral,
   MathRoundBrackets, MathSquareBrackets, MathCurlyBrackets, MathAngledBrackets, MathFunction, MathLimitLower, MathLimitUpper,
-  SimpleField, TabStopType, LeaderType,
+  SimpleField, TabStopType, LeaderType, NumberFormat,
 } from "docx";
 import { parseEquation, toLinear } from "./wordMath";
 import { PAGE_SIZES } from "./wordPageSizes";
@@ -79,8 +79,8 @@ function readBookLayout(html) {
     const raw = d.querySelector(".word-page-meta")?.dataset?.booklayout;
     const o = raw ? JSON.parse(raw) : {};
     const n = (v) => (v === "" || v == null || Number.isNaN(Number(v)) ? null : Math.max(0, Number(v)));
-    return { mt: n(o.mt), mb: n(o.mb), gutter: n(o.gutter), mirror: !!o.mirror };
-  } catch { return { mt: null, mb: null, gutter: null, mirror: false }; }
+    return { mt: n(o.mt), mb: n(o.mb), gutter: n(o.gutter), mirror: !!o.mirror, pgfmt: o.pgfmt === "lower-roman" || o.pgfmt === "upper-roman" ? o.pgfmt : "", pgstart: n(o.pgstart) ? Math.floor(n(o.pgstart)) : null };
+  } catch { return { mt: null, mb: null, gutter: null, mirror: false, pgfmt: "", pgstart: null }; }
 }
 function parseFirstLine(el) {
   const m = /^(-?[\d.]+)(cm|px|pt|in|em)$/.exec((el.style?.textIndent || "").trim());
@@ -553,6 +553,7 @@ export async function downloadWordDocx(doc) {
         page: {
           size: { ...(PAGE_SIZES[doc.page_size] ? { width: cmToTwips(PAGE_SIZES[doc.page_size].cm[0]), height: cmToTwips(PAGE_SIZES[doc.page_size].cm[1]) } : {}), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
           margin: { top: topTwips, bottom: bottomTwips, left: leftTwips, right: rightTwips, ...(book.gutter ? { gutter: cmToTwips(book.gutter) } : {}) },
+          ...(book.pgfmt || book.pgstart ? { pageNumbers: { ...(book.pgstart ? { start: book.pgstart } : {}), formatType: book.pgfmt === "lower-roman" ? NumberFormat.LOWER_ROMAN : book.pgfmt === "upper-roman" ? NumberFormat.UPPER_ROMAN : NumberFormat.DECIMAL } } : {}),
         },
         titlePage: hasFirstPage,
       },
@@ -677,12 +678,28 @@ export async function downloadWordPdf(doc, opts = {}) {
     pdf.setFont("helvetica", font); pdf.setFontSize(size);
     const lineHeight = size * 1.35;
     if (b.type === "heading") y += 6;
+    // Alinhamento centralizado/à direita e recuo de primeira linha (usados nos estilos de livro).
+    const fl = b.firstLine ? b.firstLine / 20 : 0; // twips -> pt
+    const drawLine = (line, extra = 0, last = true) => {
+      ensureSpace(lineHeight);
+      if (b.align === "justify" && !last && line.includes(" ")) pdf.text(line, curLeft() + indent + extra, y, { align: "justify", maxWidth: maxWidth - indent - extra });
+      else if (b.align === "center") pdf.text(line, curLeft() + indent + (maxWidth - indent) / 2, y, { align: "center" });
+      else if (b.align === "right") pdf.text(line, curLeft() + maxWidth, y, { align: "right" });
+      else pdf.text(line, curLeft() + indent + extra, y);
+      y += lineHeight;
+    };
+    let firstLineDone = false;
     blockToLines(b).forEach((rawLine) => {
-      pdf.splitTextToSize(rawLine || " ", maxWidth - indent).forEach((line) => {
-        ensureSpace(lineHeight);
-        pdf.text(line, curLeft() + indent, y);
-        y += lineHeight;
-      });
+      let text = rawLine || " ";
+      if (fl && !firstLineDone && b.align !== "center" && b.align !== "right" && text.trim()) {
+        const head = pdf.splitTextToSize(text, maxWidth - indent - fl)[0] || "";
+        text = text.slice(head.length).trimStart();
+        drawLine(head, fl, !text);
+        firstLineDone = true;
+        if (!text) return;
+      }
+      const ls = pdf.splitTextToSize(text, maxWidth - indent);
+      ls.forEach((line, i) => drawLine(line, 0, i === ls.length - 1));
     });
     if (b.type === "heading") y += 4;
   });
@@ -690,10 +707,12 @@ export async function downloadWordPdf(doc, opts = {}) {
   // Cabeçalho/rodapé em cada página de verdade, com o número da página
   // calculado agora que já sabemos quantas páginas o documento tem.
   if (hasHeader || hasFooter) {
+    const roman = (n) => { const t = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]; let r = ""; for (const [v, s] of t) while (n >= v) { r += s; n -= v; } return r; };
+    const shown = (n) => { const x = n + ((book.pgstart || 1) - 1); return book.pgfmt === "lower-roman" ? roman(x).toLowerCase() : book.pgfmt === "upper-roman" ? roman(x) : String(x); };
     const bandText = (band, pageNum, totalPages) => (band?.runs || []).map((r) => {
-      if (r.pageField === "simple") return String(pageNum);
-      if (r.pageField === "labelof") return `Página ${pageNum} de ${totalPages}`;
-      if (r.pageField) return `Página ${pageNum}`;
+      if (r.pageField === "simple") return shown(pageNum);
+      if (r.pageField === "labelof") return `Página ${shown(pageNum)} de ${shown(totalPages)}`;
+      if (r.pageField) return `Página ${shown(pageNum)}`;
       return r.text || "";
     }).join("");
     const totalPages = pdf.internal.getNumberOfPages();

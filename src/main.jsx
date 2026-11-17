@@ -19268,12 +19268,12 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
   const setParagraphIndent = (cm) => {
     bodyRef.current?.focus();
     const block = currentBlock();
-    if (block) { block.style.marginLeft = cm + "cm"; onChange(); }
+    if (block) { block.style.marginLeft = cm + "cm"; onChange(); syncRulerState(); }
   };
   const setParagraphIndentRight = (cm) => {
     bodyRef.current?.focus();
     const block = currentBlock();
-    if (block) { block.style.marginRight = cm + "cm"; onChange(); }
+    if (block) { block.style.marginRight = cm + "cm"; onChange(); syncRulerState(); }
   };
   const setParagraphSpacing = (pt) => {
     bodyRef.current?.focus();
@@ -19291,7 +19291,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
   const setFirstLineIndent = (cm) => {
     bodyRef.current?.focus();
     const block = currentBlock();
-    if (block) { block.style.textIndent = cm + "cm"; onChange(); }
+    if (block) { block.style.textIndent = cm + "cm"; onChange(); syncRulerState(); }
   };
 
   // ---- régua: recuo do parágrafo atual + paradas de tabulação, mantidos
@@ -19316,13 +19316,21 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
   const tabIdRef = useRef(0);
   const nextTabId = () => "t" + (tabIdRef.current++) + "_" + Date.now().toString(36);
 
+  // Valor CSS (cm, mm, in, pt, px) -> cm, que é a unidade da régua (documentos importados costumam vir em pt/px).
+  const cssToCm = (v) => {
+    const m = /^\s*(-?[\d.]+)\s*(cm|mm|in|pt|px)?\s*$/.exec(v || "");
+    if (!m) return 0;
+    const n = parseFloat(m[1]);
+    const k = { cm: 1, mm: 0.1, in: 2.54, pt: 2.54 / 72, px: 2.54 / 96 }[m[2] || "cm"];
+    return Number.isFinite(n) ? n * k : 0;
+  };
   const syncRulerState = () => {
     const block = currentBlock();
     if (!block) { setParaIndent({ left: 0, right: 0, firstLine: 0 }); setTabStopsState([]); return; }
     setParaIndent({
-      left: parseFloat(block.style.marginLeft) || 0,
-      right: parseFloat(block.style.marginRight) || 0,
-      firstLine: parseFloat(block.style.textIndent) || 0,
+      left: cssToCm(block.style.marginLeft),
+      right: cssToCm(block.style.marginRight),
+      firstLine: cssToCm(block.style.textIndent),
     });
     setTabStopsState(getTabStops(block));
   };
@@ -20026,7 +20034,16 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       if (!ph) return "";
       const r = el.getBoundingClientRect();
       const sc = el.offsetWidth ? r.width / el.offsetWidth : 1;
-      return Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
+      const n = Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
+      // respeita "Começar a numeração em" e o formato (romano) definidos em Configurar Página
+      let bl = {};
+      try { bl = JSON.parse(el.querySelector(":scope > .word-page-meta")?.dataset.booklayout || "{}"); } catch {}
+      const x = n + ((Number(bl.pgstart) || 1) - 1);
+      if (bl.pgfmt === "lower-roman" || bl.pgfmt === "upper-roman") {
+        let v = x, r2 = ""; for (const [k, s] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) while (v >= k) { r2 += s; v -= k; }
+        return bl.pgfmt === "lower-roman" ? r2.toLowerCase() : r2;
+      }
+      return x;
     };
     const buildBody = () => headings.length
       ? headings.map(h => {
@@ -21246,6 +21263,7 @@ const BK_DEDICATION = '<p style="text-align:right;font-style:italic;margin:240px
 const BK_EPIGRAPH = '<blockquote style="text-align:right;font-style:italic;border-left:none;padding:0;margin:24px 0 24px 40%">[Epígrafe]<br>— [Autor da epígrafe]</blockquote>';
 const WORD_QUICKPART_BUILTINS = [
   { name: "Livro: Página de Créditos", html: BK_CREDITS },
+  ...[["❦", "Hera"], ["✦", "Estrela"], ["⁂", "Asterismo"], ["◆ ◆ ◆", "Losangos"], ["❧", "Folha"], ["—— ✧ ——", "Fio e estrela"]].map(([g, n]) => ({ name: `Livro: Ornamento ${g} (${n})`, html: `<p style="text-align:center;font-size:18pt;text-indent:0;margin:24px 0">${g}</p>` })),
   { name: "Livro: Dedicatória", html: BK_DEDICATION },
   { name: "Livro: Epígrafe", html: BK_EPIGRAPH },
   { name: "Livro: Quebra de Cena (* * *)", html: BK_SCENE },
@@ -21411,7 +21429,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [margins, setMargins] = useState(doc.margins || "normal");
   const [marginLeftCm, setMarginLeftCm] = useState(doc.margin_left ?? null);
   const [marginRightCm, setMarginRightCm] = useState(doc.margin_right ?? null);
-  const [bookLayout, setBookLayout] = useState({ mt: "", mb: "", gutter: "", mirror: false }); // margem superior/inferior (cm), medianiz (cm), espelhar
+  const [wordGoal, setWordGoal] = useState({ total: 0, daily: 0, day: "", base: 0 }); // meta de escrita: total do livro e por dia
+  const [bookLayout, setBookLayout] = useState({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "" }); // margem superior/inferior (cm), medianiz (cm), espelhar
   const [ribbonTab, setRibbonTab] = useState("home");
   const [rbMenu, setRbMenu] = useState(null);
   const [fmtState, setFmtState] = useState({ font: "Calibri", size: 11, bold: false, italic: false, underline: false, strike: false, sub: false, sup: false, align: "left", dir: "ltr" });
@@ -21573,6 +21592,25 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const imageInputRef = useRef(null);
   const saveTimer = useRef(null);
   const pageAreaRef = useRef(null);
+  // Zoom por pinça no touchpad (e Ctrl+roda): o navegador entrega a pinça como "wheel" com ctrlKey=true.
+  // Precisa ser listener nativo não passivo (o onWheel do React é passivo e não deixa bloquear o zoom da página inteira).
+  const zoomNowRef = useRef(100);
+  zoomNowRef.current = zoom;
+  const zoomAccRef = useRef(100);
+  useEffect(() => {
+    const el = pageAreaRef.current;
+    if (!el) return undefined;
+    const onWheelZoom = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (Math.abs(zoomAccRef.current - zoomNowRef.current) > 1) zoomAccRef.current = zoomNowRef.current;
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY; // 1 = linhas (roda do mouse), 0 = pixels (touchpad)
+      zoomAccRef.current = Math.min(200, Math.max(30, zoomAccRef.current * Math.exp(-dy * 0.01)));
+      setZoom(Math.round(zoomAccRef.current));
+    };
+    el.addEventListener("wheel", onWheelZoom, { passive: false });
+    return () => el.removeEventListener("wheel", onWheelZoom);
+  }, []);
   const pageRef = useRef(null);
   const ribbonTipTimer = useRef(null);
   // Desfazer/Refazer reais (histórico próprio, não o undo nativo do
@@ -21634,7 +21672,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     setDocLanguage(pageMetaEl?.dataset.lang || null);
     setLineNumbers(pageMetaEl?.dataset.linenumbers === "1");
     setHyphenation(pageMetaEl?.dataset.hyphens === "1");
-    try { const bl = pageMetaEl?.dataset.booklayout ? JSON.parse(pageMetaEl.dataset.booklayout) : {}; setBookLayout({ mt: bl.mt ?? "", mb: bl.mb ?? "", gutter: bl.gutter ?? "", mirror: !!bl.mirror }); } catch { setBookLayout({ mt: "", mb: "", gutter: "", mirror: false }); }
+    try {
+      const g = pageMetaEl?.dataset.wgoal ? JSON.parse(pageMetaEl.dataset.wgoal) : {};
+      const today = new Date().toLocaleDateString("sv-SE");
+      const cur = countWords(doc.content || "").words || 0;
+      const goal = { total: Number(g.total) || 0, daily: Number(g.daily) || 0, day: g.day || "", base: Number(g.base) || 0 };
+      if (goal.daily > 0 && goal.day !== today) {
+        // Novo dia: a contagem de hoje parte das palavras que o texto já tem agora.
+        goal.day = today; goal.base = cur;
+        setTimeout(() => persistPageMeta({ wgoal: JSON.stringify(goal) }), 0);
+      }
+      setWordGoal(goal);
+    } catch { setWordGoal({ total: 0, daily: 0, day: "", base: 0 }); }
+    try { const bl = pageMetaEl?.dataset.booklayout ? JSON.parse(pageMetaEl.dataset.booklayout) : {}; setBookLayout({ mt: bl.mt ?? "", mb: bl.mb ?? "", gutter: bl.gutter ?? "", mirror: !!bl.mirror, pgfmt: bl.pgfmt ?? "", pgstart: bl.pgstart ?? "" }); } catch { setBookLayout({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "" }); }
     setTextDir(pageMetaEl?.dataset.textdir || "horizontal");
     setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
@@ -21923,10 +21973,22 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     Object.entries(patch).forEach(([k, v]) => { metaEl.dataset[k] = v || ""; });
     handleBodyInput();
   };
+  const editWordGoal = () => {
+    const ask = (msg, cur) => { const v = prompt(msg, cur ? String(cur) : ""); return v === null ? null : Math.max(0, parseInt(String(v).replace(/\D/g, ""), 10) || 0); };
+    const total = ask("Meta de palavras do livro (0 = sem meta):", wordGoal.total);
+    if (total === null) return;
+    const daily = ask("Meta de palavras por dia (0 = sem meta):", wordGoal.daily);
+    if (daily === null) return;
+    const today = new Date().toLocaleDateString("sv-SE");
+    const keep = wordGoal.daily > 0 && wordGoal.day === today;
+    const next = { total, daily, day: today, base: keep ? wordGoal.base : wordCount.words };
+    setWordGoal(next);
+    persistPageMeta({ wgoal: total || daily ? JSON.stringify(next) : "" });
+  };
   const applyBookLayout = (patch) => {
     const next = { ...bookLayout, ...patch };
     setBookLayout(next);
-    const empty = next.mt === "" && next.mb === "" && next.gutter === "" && !next.mirror;
+    const empty = next.mt === "" && next.mb === "" && next.gutter === "" && !next.mirror && !next.pgfmt && next.pgstart === "";
     persistPageMeta({ booklayout: empty ? "" : JSON.stringify(next) });
   };
   const applyTheme = (key) => { setThemeKey(key); persistPageMeta({ theme: key }); setThemeOpen(false); };
@@ -24153,6 +24215,38 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const eachBlock = (fn) => { Array.from(bodyRef.current?.children || []).forEach(b => { if (!b.classList.contains("word-page-meta")) fn(b); }); };
   const applyThemeFont = (font) => { eachBlock(b => { b.style.fontFamily = font; }); try { localStorage.setItem("libano.word.defaultFont", font); } catch {} handleBodyInput(); };
   const applyParaSpacing = (before, after) => { eachBlock(b => { if (/^(P|DIV|UL|OL|H[1-6]|BLOCKQUOTE)$/.test(b.tagName)) { b.style.marginTop = before + "pt"; b.style.marginBottom = after + "pt"; } }); handleBodyInput(); };
+  // Formata o texto como livro: parágrafos comuns justificados, recuo de 1,25 cm e sem espaço entre eles;
+  // o 1º parágrafo depois de título, quebra de página, quebra de cena, imagem etc. fica sem recuo.
+  const bookUndoRef = useRef(null); // HTML de antes do Formato de Livro (a edição é direta no DOM e o Ctrl+Z não a desfaz)
+  const [canUndoBook, setCanUndoBook] = useState(false);
+  const undoFormatAsBook = () => {
+    const el = bodyRef.current;
+    if (!el || bookUndoRef.current == null) return;
+    el.innerHTML = bookUndoRef.current;
+    bookUndoRef.current = null;
+    setCanUndoBook(false);
+    handleBodyInput();
+  };
+  const formatAsBook = () => {
+    if (!confirm("Formatar o texto como livro?\n\nParágrafos comuns ficam justificados, com recuo de 1,25 cm e sem espaço entre eles; capítulos (Título 1) ficam centralizados. Capa, sumário, imagens, tabelas, listas, citações e textos já centralizados ou alinhados à direita não mudam.\n\nDepois você pode usar \"Desfazer Formato de Livro\" na aba Design.")) return;
+    bookUndoRef.current = bodyRef.current?.innerHTML ?? null;
+    setCanUndoBook(bookUndoRef.current != null);
+    let first = true;
+    eachBlock(b => {
+      const tag = b.tagName;
+      if (/^H[1-6]$/.test(tag)) { if (tag === "H1") b.style.textAlign = "center"; first = true; return; }
+      if (!/^(P|DIV)$/.test(tag) || /(^|\s)word-/.test(b.className || "") || b.querySelector("img, table, .word-shape, .word-chart, .word-textbox, .word-smartart")) { first = true; return; }
+      if (!(b.textContent || "").trim()) return;
+      const al = b.style.textAlign;
+      if (al === "center" || al === "right") { first = true; return; }
+      b.style.textAlign = "justify";
+      b.style.textIndent = first ? "0" : "1.25cm";
+      b.style.marginTop = "0";
+      b.style.marginBottom = "0";
+      first = false;
+    });
+    handleBodyInput();
+  };
   const applyImageEffect = (kind) => {
     const shadow = kind === "subtle" ? "0 1px 4px rgba(0,0,0,.25)" : kind === "strong" ? "0 4px 14px rgba(0,0,0,.45)" : "";
     bodyRef.current?.querySelectorAll("img").forEach(i => { i.style.boxShadow = shadow; });
@@ -25305,6 +25399,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </>)}
               </div>
               <div className="rbStack">
+                <RbSm icon={BookOpen} label="Formato de Livro" tip="Formato de Livro" desc="Formata o texto como livro: parágrafos justificados com recuo de primeira linha, sem espaço entre eles, e capítulos centralizados." onClick={formatAsBook}/>
+                {canUndoBook && <RbSm icon={Undo2} label="Desfazer Formato" tip="Desfazer Formato de Livro" desc="Volta o texto ao estado de antes do Formato de Livro (vale até você fechar o documento)." onClick={undoFormatAsBook}/>}
                 {rbm("effects2", (t) => <RbSm icon={Sparkle} label="Efeitos" chevron tip="Efeitos do Tema" desc="Aplica sombra às imagens do documento." onClick={t}/>, <>
                   <button onClick={() => applyImageEffect("none")}>Nenhum</button>
                   <button onClick={() => applyImageEffect("subtle")}>Sutil</button>
@@ -26225,6 +26321,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           <button className="wordStatusItem" data-tip="Ir Para" data-tipdesc="Abre a janela Ir Para, para pular direto a um título, indicador, tabela ou imagem." onClick={() => openDlg("goto")}>Página {pageInfo.page} de {pageInfo.pages}</button>
           <button className="wordStatusItem" data-tip="Contagem de Palavras" data-tipdesc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}>{selWords ? `${selWords} de ${wordCount.words} palavras` : `${wordCount.words} palavra${wordCount.words === 1 ? "" : "s"}`}</button>
           <span>{wordCount.chars} caractere{wordCount.chars === 1 ? "" : "s"}</span>
+          <button className="wordStatusItem" data-tip="Meta de Escrita" data-tipdesc="Define uma meta de palavras para o livro e/ou por dia e mostra o progresso." onClick={editWordGoal}>
+            {wordGoal.total > 0 || wordGoal.daily > 0
+              ? [wordGoal.total > 0 ? `${wordCount.words.toLocaleString("pt-BR")} / ${wordGoal.total.toLocaleString("pt-BR")} (${Math.min(100, Math.round(wordCount.words / wordGoal.total * 100))}%)` : "", wordGoal.daily > 0 ? `hoje ${Math.max(0, wordCount.words - wordGoal.base).toLocaleString("pt-BR")} / ${wordGoal.daily.toLocaleString("pt-BR")}` : ""].filter(Boolean).join(" · ")
+              : "Meta de escrita"}
+          </button>
           {trackChanges && <span className="wordStatusBadge"><Pencil size={11}/> Controlando Alterações</span>}
           {docProtected && <span className="wordStatusBadge"><Lock size={11}/> Protegido</span>}
           <span className="wordStatusSpacer"/>
@@ -26342,7 +26443,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <label>Margem inferior (cm) <input type="number" step="0.1" min="0" placeholder="padrão" value={bookLayout.mb} onChange={e => applyBookLayout({ mb: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)) })}/></label>
             <label>Medianiz (cm) <input type="number" step="0.1" min="0" placeholder="0" value={bookLayout.gutter} onChange={e => applyBookLayout({ gutter: e.target.value === "" ? "" : Math.max(0, Number(e.target.value)) })}/></label>
             <label><input type="checkbox" checked={bookLayout.mirror} onChange={e => applyBookLayout({ mirror: e.target.checked })}/> Margens espelhadas (esquerda = interna, direita = externa)</label>
-            <small>Medianiz e margens espelhadas valem no .docx e no PDF exportados (a tela mostra uma folha só).</small>
+            <label>Numeração das páginas <select value={bookLayout.pgfmt} onChange={e => applyBookLayout({ pgfmt: e.target.value })}><option value="">1, 2, 3…</option><option value="lower-roman">i, ii, iii…</option><option value="upper-roman">I, II, III…</option></select></label>
+            <label>Começar a numeração em <input type="number" step="1" min="1" placeholder="1" value={bookLayout.pgstart} onChange={e => applyBookLayout({ pgstart: e.target.value === "" ? "" : Math.max(1, Math.floor(Number(e.target.value))) })}/></label>
+            <small>Medianiz, margens espelhadas e numeração valem no .docx e no PDF exportados (a tela mostra uma folha só).</small>
             <label>Orientação <select value={orientation} onChange={e => changePageSetting("orientation", e.target.value)}><option value="retrato">Retrato</option><option value="paisagem">Paisagem</option></select></label>
             <label>Papel <select value={pageSize} onChange={e => changePageSetting("page_size", e.target.value)}>{Object.keys(PAGE_SIZES).map(k => <option key={k} value={k}>{pageSizeLabel(k)}</option>)}</select></label>
           </WordModal>
