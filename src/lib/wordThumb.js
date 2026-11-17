@@ -46,7 +46,7 @@ export async function renderWordThumb(bodyEl, { pageClass, pw, ph, bg = "#fff", 
   shell.appendChild(clone);
   page.appendChild(shell);
   const html = new XMLSerializer().serializeToString(page);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${pw}px;height:${ph}px"><style>${pageCss().replace(/]]>/g, "")}</style>${html}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${pw}px;height:${ph}px"><style><![CDATA[${pageCss().replace(/]]>/g, "")}]]></style>${html}</div></foreignObject></svg>`;
   if (svg.length > 30e6) return null;
   const im = await loadImg("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
   const scale = Math.min(1, targetW / pw);
@@ -84,7 +84,7 @@ export async function renderWordThumbFromDoc(doc, pw, ph) {
 }
 
 // Renderiza um HTML em várias páginas (quebrando entre blocos quando possível) → lista de JPEGs.
-export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff", targetW = 1100 }) {
+export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff", targetW = 1100, padding = null, imgSizes = null }) {
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;left:-99999px;top:0;pointer-events:none;visibility:hidden";
   const page = document.createElement("div");
@@ -96,6 +96,12 @@ export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff
   body.className = "noteRichBody wordRichBody";
   body.style.flex = "none"; body.style.width = pw + "px";
   body.innerHTML = html || "";
+  if (padding) body.style.padding = padding;
+  const fixStyle = document.createElement("style");
+  fixStyle.textContent = ".wordRichBody img{display:block;margin-left:auto;margin-right:auto}";
+  body.prepend(fixStyle);
+  const imgs0 = Array.from(body.querySelectorAll("img"));
+  if (imgSizes && imgSizes.length === imgs0.length) imgs0.forEach((im, i) => { im.style.maxWidth = "none"; im.style.width = imgSizes[i].w + "px"; im.style.height = imgSizes[i].h + "px"; });
   shell.appendChild(body); page.appendChild(shell); host.appendChild(page);
   document.body.appendChild(host);
   try {
@@ -109,9 +115,10 @@ export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff
     const starts = [0];
     const kids = Array.from(body.children);
     for (const k of kids) {
+      if (k === fixStyle) continue;
       const top = k.offsetTop, bottom = top + k.offsetHeight;
       let start = starts[starts.length - 1];
-      while (bottom > start + usable) {
+      while (bottom > start + usable + 12) {
         if (top > start + padT + 4) start = top - padT;      // quebra antes do bloco
         else start += usable - padT;                          // bloco maior que a página: corta
         starts.push(start);
@@ -129,7 +136,7 @@ export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff
       pg.style.cssText = `width:${pw}px;height:${ph}px;min-height:0;overflow:hidden;box-shadow:none;background:${bg};position:relative`;
       const sh = document.createElement("div"); sh.className = "wordBodyShell"; sh.appendChild(clone); pg.appendChild(sh);
       const xml = new XMLSerializer().serializeToString(pg);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${pw}px;height:${ph}px"><style>${pageCss().replace(/]]>/g, "")}</style>${xml}</div></foreignObject></svg>`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${pw}px;height:${ph}px"><style><![CDATA[${pageCss().replace(/]]>/g, "")}]]></style>${xml}</div></foreignObject></svg>`;
       const im = await loadImg("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
       const cv = document.createElement("canvas");
       cv.width = Math.round(pw * scale); cv.height = Math.round(ph * scale);
