@@ -42,6 +42,8 @@ function collectCss() {
     try { rules = sheet.cssRules; } catch { continue; }
     if (rules) walk(rules, "");
   }
+  // a faixa escura entre páginas é só da tela: no arquivo exportado as páginas ficam limpas
+  out.push(".word-page-break::after{display:none!important}");
   return stripExternal(out.join("\n"));
 }
 
@@ -181,6 +183,8 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
       if (!flow) { flow = { top: r.top - pr.top, bottom: r.bottom - pr.top, has }; pages.push(flow); }
       else { flow.bottom = Math.max(flow.bottom, r.bottom - pr.top); flow.has = flow.has || has; }
     }
+    // Documento sem páginas de PDF importado (ex.: com imagem solta): o corpo todo é fatiado do topo da página, de página em página.
+    if (!pages.some((p) => p.target)) { pages.length = 0; pages.push({ top: 0, bottom: totalH, has: true }); }
     const list = [];
     for (const p of pages) {
       if (p.target) { list.push(p); continue; }
