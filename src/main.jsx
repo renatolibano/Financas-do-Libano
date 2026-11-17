@@ -22684,12 +22684,15 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const pageIndex = Math.max(0, Math.floor(centerY / ph));
     imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
     const bw = body.offsetWidth;
+    const nw = img.naturalWidth || bw, nh = img.naturalHeight || ph;
+    const fit = Math.min(bw / nw, ph / nh); // maior tamanho que cabe na página, mantendo a proporção (sem cortar nem deformar)
+    const fw = Math.round(nw * fit), fh = Math.round(nh * fit);
     img.style.maxWidth = "none";
-    img.style.objectFit = "fill"; // ocupa a página inteira, sem cortar nada (ajusta o tamanho aos 4 lados)
-    img.style.width = bw + "px";
-    img.style.height = ph + "px";
-    img.style.left = "0px";
-    img.style.top = pageIndex * ph + "px";
+    img.style.objectFit = "";
+    img.style.width = fw + "px";
+    img.style.height = fh + "px";
+    img.style.left = Math.round((bw - fw) / 2) + "px";
+    img.style.top = Math.round(pageIndex * ph + (ph - fh) / 2) + "px";
     img.dataset.rotate = "0";
     img.style.transform = "";
     syncFreeImageSpacer();
@@ -22699,7 +22702,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // A página é de altura fixa (a do papel). Cada quebra de página ganha altura para que o conteúdo seguinte comece exatamente no
   // topo da próxima página (com a margem superior) e mostra uma faixa escura entre as duas páginas, como no Word.
   const gapLayerRef = useRef(null);
-  const syncPageBreaks = () => {
+  const syncPageBreaksRaw = () => {
     const body = bodyRef.current;
     const layer = gapLayerRef.current;
     const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (body && body.style.minHeight) body.style.minHeight = ""; };
@@ -22780,6 +22783,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const slack = 2 + body.querySelectorAll("table, img").length;
     if (n > Math.ceil(H0 / C) + slack) { clearGaps(); layoutBreaks(); }
   };
+  // O recálculo zera/reconstrói alturas (encolhe o documento por instantes) e o navegador ajusta o scrollTop da área de rolagem:
+  // a tela pulava para cima e o cursor aparecia longe do texto. Guarda e restaura a rolagem ao redor do recálculo.
+  const syncPageBreaks = () => {
+    const area = pageAreaRef.current;
+    const st = area ? area.scrollTop : 0, sl = area ? area.scrollLeft : 0;
+    try { syncPageBreaksRaw(); }
+    finally {
+      if (area) {
+        if (area.scrollTop !== st) area.scrollTop = st;
+        if (area.scrollLeft !== sl) area.scrollLeft = sl;
+      }
+    }
+  };
   const pbRaf = useRef(0);
   const schedulePageBreakSync = () => {
     cancelAnimationFrame(pbRaf.current);
@@ -22843,7 +22859,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     sel2.addRange(r);
     syncPageBreaks();
     handleBodyInput();
-    blank.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    blank.scrollIntoView?.({ block: "center" });
   };
 
   const imgSetWrap = (mode) => { // "inline" | "left" | "right"
