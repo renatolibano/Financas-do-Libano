@@ -82,3 +82,62 @@ export async function renderWordThumbFromDoc(doc, pw, ph) {
     host.remove();
   }
 }
+
+// Renderiza um HTML em várias páginas (quebrando entre blocos quando possível) → lista de JPEGs.
+export async function renderWordThumbPages(html, { pageClass, pw, ph, bg = "#fff", targetW = 1100 }) {
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-99999px;top:0;pointer-events:none;visibility:hidden";
+  const page = document.createElement("div");
+  page.className = pageClass;
+  page.style.cssText = `width:${pw}px;height:auto;min-height:0;box-shadow:none`;
+  const shell = document.createElement("div");
+  shell.className = "wordBodyShell";
+  const body = document.createElement("div");
+  body.className = "noteRichBody wordRichBody";
+  body.style.flex = "none"; body.style.width = pw + "px";
+  body.innerHTML = html || "";
+  shell.appendChild(body); page.appendChild(shell); host.appendChild(page);
+  document.body.appendChild(host);
+  try {
+    await new Promise(r => requestAnimationFrame(() => r()));
+    await Promise.all(Array.from(body.querySelectorAll("img")).map(im => im.complete ? 0 : new Promise(r => { im.onload = im.onerror = () => r(); })));
+    const cs = getComputedStyle(body);
+    const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
+    const usable = Math.max(100, ph - padB);
+    const total = body.scrollHeight;
+    // pontos de início de cada página
+    const starts = [0];
+    const kids = Array.from(body.children);
+    for (const k of kids) {
+      const top = k.offsetTop, bottom = top + k.offsetHeight;
+      let start = starts[starts.length - 1];
+      while (bottom > start + usable) {
+        if (top > start + padT + 4) start = top - padT;      // quebra antes do bloco
+        else start += usable - padT;                          // bloco maior que a página: corta
+        starts.push(start);
+        if (starts.length > 60) break;
+      }
+    }
+    const out = [];
+    const scale = Math.min(2, targetW / pw);
+    for (const st of starts) {
+      if (st >= total - 4 && out.length) break;
+      const clone = body.cloneNode(true);
+      clone.style.marginTop = (-st) + "px";
+      const pg = document.createElement("div");
+      pg.className = pageClass;
+      pg.style.cssText = `width:${pw}px;height:${ph}px;min-height:0;overflow:hidden;box-shadow:none;background:${bg};position:relative`;
+      const sh = document.createElement("div"); sh.className = "wordBodyShell"; sh.appendChild(clone); pg.appendChild(sh);
+      const xml = new XMLSerializer().serializeToString(pg);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${pw}px;height:${ph}px"><style>${pageCss().replace(/]]>/g, "")}</style>${xml}</div></foreignObject></svg>`;
+      const im = await loadImg("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg));
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(pw * scale); cv.height = Math.round(ph * scale);
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(im, 0, 0, cv.width, cv.height);
+      out.push(cv.toDataURL("image/jpeg", 0.85));
+    }
+    return out;
+  } finally { host.remove(); }
+}

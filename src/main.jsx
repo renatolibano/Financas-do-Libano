@@ -47,6 +47,7 @@ import { isOffline, pendingCount, subscribeOutbox, flushOutbox } from "./lib/off
 import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
 import { idbGet, idbSet, idbDelete } from "./lib/idbStorage";
+import { fileToPageImages, isImageFile, FILE_AS_IMAGE_ACCEPT } from "./lib/wordFileImages";
 import { getWordThumb, setWordThumb, deleteWordThumb, renderWordThumb, renderWordThumbFromDoc } from "./lib/wordThumb";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { parseRoute, buildPath } from "./lib/router";
@@ -19660,6 +19661,20 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
 
   const insertImageFile = async (file) => {
     if (!file) return;
+    if (!isImageFile(file)) {
+      // Documento (PDF, Word, ODT, RTF, HTML, texto...) → cada página entra como imagem
+      try {
+        const page = pageRef.current;
+        const pages = await fileToPageImages(file, { pageClass: page?.className || "wordPage", pw: page?.offsetWidth || 794, ph: pageHeightPx || 1123 });
+        if (!pages.length) throw new Error("o documento não tem conteúdo");
+        bodyRef.current?.focus();
+        document.execCommand("insertHTML", false, pages.map(u => `<p><img src="${u}" style="max-width:100%"></p>`).join(""));
+        onChange();
+      } catch (e) {
+        alert("Não foi possível inserir o documento como imagem: " + (e.message || e));
+      }
+      return;
+    }
     try {
       // Redimensiona/comprime antes de embutir no HTML — sem isso, uma foto
       // de celular facilmente passaria de vários MB em base64 dentro do
@@ -25347,7 +25362,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </>)}
                 <RbSm icon={BarChart3} label="Gráfico" tip="Gráfico" desc="Insere um gráfico de colunas, linhas ou pizza a partir de valores digitados." onClick={() => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })}/>
               </div>
-              <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={handleImagePick}/>
+              <input ref={imageInputRef} type="file" accept={FILE_AS_IMAGE_ACCEPT} hidden onChange={handleImagePick}/>
             </RbGroup>
             <RbGroup label="Mídia">
               <RbBig icon={Film} label={"Vídeo\nOnline"} tip="Vídeo Online" desc="Insere um vídeo do YouTube ou Vimeo a partir de um link." onClick={fmt.insertVideoEmbed}/>
