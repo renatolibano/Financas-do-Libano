@@ -1857,6 +1857,13 @@ h1{font-size:23px}
 .wordRichBody .word-page-break span{position:relative;top:-9px;background:#fff;padding:0 8px;font-size:10px;color:#9aa0ab;text-transform:uppercase;letter-spacing:.05em}
 /* Separador entre páginas (como no Word): faixa escura na largura toda; a altura da quebra é ajustada por JS para que o texto seguinte
    comece no topo da próxima página. Seções e o modo Rascunho mantêm o traço tracejado. */
+/* Páginas separadas (ver syncPageBreaks): o corpo fica dentro de um "shell" bloco, ao lado da camada de faixas */
+.wordBodyShell{flex:1;display:block;min-width:0}
+.wordPage-draft .wordBodyShell,.wordPage-web .wordBodyShell{display:flex;flex-direction:column}
+.wordGapLayer{height:0;position:relative;z-index:2;pointer-events:none}
+.wordGapLayer .wg-sp{float:left;clear:left;width:0}
+.wordGapLayer .wg-gap{float:left;clear:left;width:100%;position:relative}
+.wordGapLayer .wg-gap::after{content:"";position:absolute;left:0;right:0;top:calc(var(--wg-pb,0px) - 9px);height:18px;background:var(--pb-bg,#54575c);box-shadow:0 0 0 100vmax var(--pb-bg,#54575c);clip-path:inset(0 -100vmax)}
 .wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break){margin:0;border:0;height:24px;text-align:left}
 .wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break) span{display:none}
 .wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break)::after{content:"";position:absolute;left:0;right:0;bottom:calc(var(--pb-pad,0px) - 9px);height:18px;background:var(--pb-bg,#54575c);box-shadow:0 0 0 100vmax var(--pb-bg,#54575c);clip-path:inset(0 -100vmax)}
@@ -1901,6 +1908,8 @@ h1{font-size:23px}
   .wordPage .wordRichBody.word-show-codes .word-field .wf-result,.wordPage .wordRichBody .word-field[data-show-code="1"] .wf-result{display:none!important}
   .wordPage .wordRichBody .pdf-import-page{break-inside:avoid;break-after:page}
   .wordPage .wordImgFrame{display:none!important}
+  .wordGapLayer{display:none!important}
+  .wordPage .wordRichBody{min-height:0!important}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break){height:0!important;margin:0!important;border:0!important;break-after:page}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break)::after,.wordPage .wordRichBody .word-page-break:not(.word-section-break) span{display:none!important}
   .wordPage .wordRichBody .pdf-import-page:last-of-type{break-after:auto}

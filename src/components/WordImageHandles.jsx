@@ -11,7 +11,7 @@ const HANDLES = [
 const CURSORS = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize" };
 const MIN_SIZE = 20;
 
-export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEnd }) {
+export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEnd, onMakeFree }) {
   const [box, setBox] = useState(null);
   const dragRef = useRef(null);
   const rafRef = useRef(0);
@@ -70,6 +70,8 @@ export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEn
       w: img.offsetWidth, h: img.offsetHeight,
       left: parseFloat(img.style.left) || 0, top: parseFloat(img.style.top) || 0,
       free: img.classList.contains("word-img-free"),
+      pending: !img.classList.contains("word-img-free") && !!onMakeFree,
+      moved: false,
       rot: box.rot, scale: box.scale,
       cx: r.left + r.width / 2, cy: r.top + r.height / 2,
     };
@@ -80,6 +82,14 @@ export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEn
     const st = dragRef.current;
     if (!st) return;
     const dxv = (e.clientX - st.x) / st.scale, dyv = (e.clientY - st.y) / st.scale;
+    if (st.pending) {
+      if (Math.hypot(dxv, dyv) < 3) return;
+      onMakeFree();
+      st.pending = false;
+      st.free = true;
+      st.w = img.offsetWidth; st.h = img.offsetHeight;
+      st.left = parseFloat(img.style.left) || 0; st.top = parseFloat(img.style.top) || 0;
+    }
     if (st.kind === "resize") {
       // o movimento do dedo/mouse é projetado nos eixos da imagem (ela pode estar girada)
       const a = (-st.rot * Math.PI) / 180;
@@ -98,9 +108,15 @@ export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEn
       img.style.width = `${Math.round(w)}px`;
       img.style.height = `${Math.round(h)}px`;
       if (st.free) {
-        // mantém parado o lado oposto à alça
-        img.style.left = `${Math.round(st.left + (st.hx < 0 ? st.w - w : 0))}px`;
-        img.style.top = `${Math.round(st.top + (st.hy < 0 ? st.h - h : 0))}px`;
+        // mantém parado o lado/canto oposto à alça (a rotação é em torno do centro, então o centro é recalculado)
+        const rad = (st.rot * Math.PI) / 180, cs = Math.cos(rad), sn = Math.sin(rad);
+        const ax = -st.hx * st.w / 2, ay = -st.hy * st.h / 2;
+        const bx = -st.hx * w / 2, by = -st.hy * h / 2;
+        const ddx = ax - bx, ddy = ay - by;
+        const ncx = st.left + st.w / 2 + ddx * cs - ddy * sn;
+        const ncy = st.top + st.h / 2 + ddx * sn + ddy * cs;
+        img.style.left = `${Math.round(ncx - w / 2)}px`;
+        img.style.top = `${Math.round(ncy - h / 2)}px`;
       }
     } else if (st.kind === "move") {
       img.style.left = `${Math.round(st.left + dxv)}px`;
@@ -132,9 +148,7 @@ export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEn
       style={{ left: box.left, top: box.top, width: box.w, height: box.h, transform: box.rot ? `rotate(${box.rot}deg)` : undefined }}
       onMouseDown={(e) => e.preventDefault()}
     >
-      {box.free && (
-        <div className="wordImgMove" style={{ cursor: "move" }} onPointerDown={(e) => begin(e, "move")} {...common}/>
-      )}
+      <div className="wordImgMove" style={{ cursor: "move" }} onPointerDown={(e) => begin(e, "move")} {...common}/>
       <div className="wordImgRotLine" style={{ height: 18 * k, top: -18 * k, width: line }}/>
       <div
         className="wordImgHit wordImgRot"

@@ -47,6 +47,7 @@ import { isOffline, pendingCount, subscribeOutbox, flushOutbox } from "./lib/off
 import { hashPin } from "./lib/lock";
 import pkg from "../package.json";
 import { idbGet, idbSet, idbDelete } from "./lib/idbStorage";
+import { getWordThumb, setWordThumb, deleteWordThumb, renderWordThumb, renderWordThumbFromDoc } from "./lib/wordThumb";
 import { clearAllPdfCache } from "./lib/pdfCache";
 import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
@@ -18549,20 +18550,6 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openDocId, data]);
 
-  // Ao entrar na aba Word, abre direto o documento editado por último, em tela cheia (como o quadro
-  // infinito), sem parar na lista. Só acontece uma vez por visita; ao fechar o editor a lista aparece.
-  // Link direto (/word/id) tem prioridade. Sem documentos, mostra a lista normalmente.
-  const autoOpenDone = useRef(false);
-  useEffect(() => {
-    if (autoOpenDone.current) return;
-    if (activeDoc || openDocId) { autoOpenDone.current = true; return; }
-    if (!data.length) return;
-    autoOpenDone.current = true;
-    const ts = d => new Date(d.updated_at || d.created_at || 0).getTime() || 0;
-    openDoc([...data].sort((x, y) => ts(y) - ts(x))[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, activeDoc, openDocId]);
-
   const createDoc = async () => {
     setCreating(true);
     try {
@@ -18592,7 +18579,33 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
     if (!confirm(`Excluir "${doc.title}"? Essa ação não pode ser desfeita.`)) return;
     await remove(doc.id);
     deleteWordOriginals(doc.id);
+    deleteWordThumb(doc.id);
   };
+
+  // Miniaturas da 1ª página (guardadas só neste aparelho). Docs sem miniatura e com conteúdo já em memória são gerados em segundo plano, um por vez.
+  const [thumbs, setThumbs] = useState({});
+  const thumbFailed = useRef(new Set());
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const next = {};
+      for (const d of data) { const t = await getWordThumb(d.id); if (t) next[d.id] = t; }
+      if (dead) return;
+      setThumbs(next);
+      for (const d of data) {
+        if (dead) return;
+        if (next[d.id] || !d.content || thumbFailed.current.has(d.id)) continue;
+        thumbFailed.current.add(d.id);
+        try {
+          const px = (PAGE_SIZES[d.page_size] || PAGE_SIZES.a4).px;
+          const [pw, ph] = d.orientation === "paisagem" ? [px[1], px[0]] : [px[0], px[1]];
+          const t = await renderWordThumbFromDoc(d, pw, ph);
+          if (t) { await setWordThumb(d.id, t); if (!dead) setThumbs(m => ({ ...m, [d.id]: t })); }
+        } catch { /* sem miniatura: fica o trecho de texto */ }
+      }
+    })();
+    return () => { dead = true; };
+  }, [data, activeDoc]);
 
   const visibleDocs = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -18631,7 +18644,10 @@ function WordDocs({ entity, openDocId, onConsumeOpenDoc, onOpenChange, closeSign
           <div className="wordThumbTile" key={doc.id}>
             <div className="wordThumbSlot" onClick={() => openDoc(doc)}>
               <div className="wordThumbPage" style={{ width: (k * 100) + "%", aspectRatio: pw + " / " + ph, "--k": k }}>
-                <div className="wordThumbText">{openingId === doc.id ? "Abrindo..." : (doc.preview?.trim() || "")}</div>
+                {thumbs[doc.id]
+                  ? <img src={thumbs[doc.id]} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}/>
+                  : <div className="wordThumbText">{openingId === doc.id ? "Abrindo..." : (doc.preview?.trim() || "")}</div>}
+                {openingId === doc.id && thumbs[doc.id] && <div className="wordThumbText" style={{ position: "absolute", inset: 0, background: "#fffc", height: "auto", bottom: 0 }}>Abrindo...</div>}
               </div>
             </div>
             <div className="wordThumbLabel" onClick={() => openDoc(doc)}>
@@ -21739,9 +21755,23 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     lastSavedRef.current = { ...(last || {}), ...patch };
     onSave(out);
   };
+  const thumbTimer = useRef(null);
+  const scheduleThumb = (delay = 1500) => {
+    clearTimeout(thumbTimer.current);
+    thumbTimer.current = setTimeout(async () => {
+      const body = bodyRef.current, page = pageRef.current;
+      if (!body || !page) return;
+      try {
+        const t = await renderWordThumb(body, { pageClass: page.className, pw: page.offsetWidth, ph: currentPageDims().h, bg: pageColor || "#fff" });
+        if (t) setWordThumb(doc.id, t);
+      } catch { /* miniatura é opcional */ }
+    }, delay);
+  };
+  useEffect(() => { scheduleThumb(2500); return () => clearTimeout(thumbTimer.current); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [doc.id]);
   const scheduleSave = (patch) => {
     clearTimeout(saveTimer.current);
     savePending.current = true;
+    if (patch.content !== undefined) scheduleThumb();
     saveTimer.current = setTimeout(() => { savePending.current = false; persistPatch(patch); }, 600);
   };
 
@@ -22494,6 +22524,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedImg, activeCell, selectedShape]);
 
+  useEffect(() => {
+    if (!selectedImg) return undefined;
+    const onDown = (e) => {
+      const t = e.target;
+      const wrap = pageRef.current?.closest(".wordPageWrap")?.parentElement;
+      if (!t || !wrap || !wrap.contains(t)) return;
+      if (t.closest?.(".wordImgFrame") || bodyRef.current?.contains(t)) return;
+      setSelectedImg(null);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [selectedImg]);
+
   const handleContentSelectionClick = (e) => {
     const el = bodyRef.current;
     if (!el) return;
@@ -22625,12 +22668,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const centerY = (r.top + r.height / 2 - br.top) / sc;
     const pageIndex = Math.max(0, Math.floor(centerY / ph));
     imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
+    const bw = body.offsetWidth;
+    const nw = img.naturalWidth || bw, nh = img.naturalHeight || ph;
+    const fit = Math.min(bw / nw, ph / nh); // cabe inteira na página, sem cortar nem distorcer
+    const fw = Math.round(nw * fit), fh = Math.round(nh * fit);
     img.style.maxWidth = "none";
-    img.style.width = body.offsetWidth + "px";
-    img.style.height = ph + "px";
-    img.style.objectFit = "cover"; // preenche a página sem distorcer (corta o que passar)
-    img.style.left = "0px";
-    img.style.top = pageIndex * ph + "px";
+    img.style.objectFit = "";
+    img.style.width = fw + "px";
+    img.style.height = fh + "px";
+    img.style.left = Math.round((bw - fw) / 2) + "px";
+    img.style.top = Math.round(pageIndex * ph + (ph - fh) / 2) + "px";
     img.dataset.rotate = "0";
     img.style.transform = "";
     syncFreeImageSpacer();
@@ -22639,29 +22686,87 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // ---- Páginas: nova página acima/abaixo + separador entre páginas ------------------------------------------------------
   // A página é de altura fixa (a do papel). Cada quebra de página ganha altura para que o conteúdo seguinte comece exatamente no
   // topo da próxima página (com a margem superior) e mostra uma faixa escura entre as duas páginas, como no Word.
+  const gapLayerRef = useRef(null);
   const syncPageBreaks = () => {
     const body = bodyRef.current;
-    if (!body || body.closest(".wordPage-draft")) return;
+    const layer = gapLayerRef.current;
+    const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (body && body.style.minHeight) body.style.minHeight = ""; };
+    if (!body || body.closest(".wordPage-draft")) { clearGaps(); return; }
     const brs = Array.from(body.querySelectorAll(":scope > .word-page-break:not(.word-section-break)"));
-    if (!brs.length) return;
     const ph = currentPageDims().h;
     const sc = bodyScale();
-    const probe = document.createElement("div"); // mede a margem superior da página na mesma unidade do layout
-    probe.style.cssText = `position:absolute;visibility:hidden;width:1px;height:${getComputedStyle(body).paddingTop}`;
-    brs[0].appendChild(probe);
-    const padTop = probe.offsetHeight;
-    probe.remove();
+    const measure = (css) => { // mede uma margem da página na mesma unidade do layout
+      const host = layer || brs[0];
+      if (!host) return 0;
+      const probe = document.createElement("div");
+      probe.style.cssText = `position:absolute;visibility:hidden;width:1px;height:${css}`;
+      host.appendChild(probe);
+      const h = probe.offsetHeight;
+      probe.remove();
+      return h;
+    };
+    const cs = getComputedStyle(body);
+    const padTop = measure(cs.paddingTop), padBot = measure(cs.paddingBottom);
     const bg = pageAreaRef.current ? getComputedStyle(pageAreaRef.current).backgroundColor : "";
-    const bodyTop = body.getBoundingClientRect().top;
-    for (const br of brs) {
-      br.style.height = "0px";
-      const top = (br.getBoundingClientRect().top - bodyTop) / sc;
-      let next = (Math.floor((top + 0.5) / ph) + 1) * ph;
-      if (next - top < 24) next += ph; // sem espaço para a faixa: vai para a página seguinte
-      br.style.height = Math.round(next - top + padTop) + "px";
-      br.style.setProperty("--pb-pad", padTop + "px");
-      if (bg) br.style.setProperty("--pb-bg", bg);
+    const layoutBreaks = () => {
+      const bodyTop = body.getBoundingClientRect().top;
+      for (const br of brs) {
+        br.style.height = "0px";
+        const top = (br.getBoundingClientRect().top - bodyTop) / sc;
+        let next = (Math.floor((top + 0.5) / ph) + 1) * ph;
+        if (next - top < 24) next += ph; // sem espaço para a faixa: vai para a página seguinte
+        br.style.height = Math.round(next - top + padTop) + "px";
+        br.style.setProperty("--pb-pad", padTop + "px");
+        if (bg) br.style.setProperty("--pb-bg", bg);
+      }
+    };
+    // Páginas separadas: uma camada (fora do texto editável) com uma faixa flutuante entre cada par de páginas.
+    // As linhas do texto desviam das faixas, então nada fica sobre a margem inferior/superior nem sobre o espaço entre páginas.
+    const paged = !!layer && viewMode === "print" && !window.matchMedia("(max-width:760px)").matches && cs.writingMode === "horizontal-tb" && cs.columnCount === "auto";
+    const C = ph - padTop - padBot;
+    if (!paged || C < 120) { clearGaps(); if (brs.length) layoutBreaks(); return; }
+    layer.style.setProperty("--wg-pb", padBot + "px");
+    if (bg) layer.style.setProperty("--pb-bg", bg);
+    const sig = [ph, padTop, padBot].join("|");
+    const buildGaps = (n) => {
+      const key = sig + "|" + n;
+      if (layer.dataset.sig === key) return;
+      layer.textContent = "";
+      let prev = 0;
+      for (let k = 1; k < n; k++) {
+        const top = k * ph - padBot;
+        const sp = document.createElement("div"); sp.className = "wg-sp"; sp.style.height = (top - prev) + "px";
+        const gap = document.createElement("div"); gap.className = "wg-gap"; gap.style.height = (padBot + padTop) + "px";
+        layer.append(sp, gap);
+        prev = top + padBot + padTop;
+      }
+      layer.dataset.sig = key;
+      body.style.minHeight = n * ph + "px";
+    };
+    const inFlow = (n) => !(n.classList.contains("word-page-meta") || n.classList.contains("word-ink-layer") || n.classList.contains("word-img-spacer") || (n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    const contentBottom = () => {
+      const kids = Array.from(body.children).filter(inFlow);
+      const last = kids[kids.length - 1];
+      if (!last) return padTop + padBot;
+      return (last.getBoundingClientRect().bottom - body.getBoundingClientRect().top) / sc + padBot;
+    };
+    // 1) altura natural (sem faixas) para saber quantas páginas o texto deveria ter
+    layer.textContent = ""; delete layer.dataset.sig; body.style.minHeight = "";
+    layoutBreaks();
+    const H0 = contentBottom();
+    let n = Math.max(1, Math.ceil(H0 / ph));
+    // 2) com as faixas, até o número de páginas estabilizar
+    for (let i = 0; i < 6; i++) {
+      buildGaps(n);
+      layoutBreaks();
+      const need = Math.max(1, Math.ceil(contentBottom() / ph));
+      if (need === n) break;
+      n = need;
     }
+    // 3) segurança: blocos maiores que uma página (tabela/imagem altas) são empurrados para depois de todas as faixas;
+    //    se o número de páginas explodiu, volta ao layout contínuo em vez de quebrar o documento.
+    const slack = 2 + body.querySelectorAll("table, img").length;
+    if (n > Math.ceil(H0 / C) + slack) { clearGaps(); layoutBreaks(); }
   };
   const pbRaf = useRef(0);
   const schedulePageBreakSync = () => {
@@ -22676,7 +22781,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
     return () => { clearTimeout(t); cancelAnimationFrame(pbRaf.current); window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.id, pageSize, orientation, margins, viewMode]);
+  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb]);
 
   // Nova página em branco logo ACIMA ou ABAIXO da página onde está o cursor (nunca no meio do texto).
   const insertPage = (where) => { // "above" | "below"
@@ -26235,6 +26340,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...pageBorderStyle(pageBorder) }}
             >
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
+              <div className="wordBodyShell">
+              <div ref={gapLayerRef} className="wordGapLayer" aria-hidden="true"/>
               <div
                 ref={bodyRef}
                 className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "") + (showChangesMarkup ? "" : " wordHideChanges")}
@@ -26268,6 +26375,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 onContextMenu={handleBodyContextMenu}
                 data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
               />
+              </div>
               {drawTool !== "select" && !inkReplay && !docProtected && (
                 <WordInkCapture
                   bodyRef={bodyRef} mode={drawTool} color={drawColor} width={drawSize} inkToShape={inkToShape}
@@ -26279,6 +26387,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <WordImageHandles
                   img={selectedImg} bodyRef={bodyRef} pageRef={pageRef}
                   onBefore={commitHistoryCheckpoint}
+                  onMakeFree={() => imgSetFree(selectedImg.dataset.wrap === "behind" ? "behind" : "front")}
                   onEnd={() => { syncFreeImageSpacer(); handleBodyInput(); }}
                 />
               )}
