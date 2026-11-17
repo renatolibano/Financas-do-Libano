@@ -22669,15 +22669,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const pageIndex = Math.max(0, Math.floor(centerY / ph));
     imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
     const bw = body.offsetWidth;
-    const nw = img.naturalWidth || bw, nh = img.naturalHeight || ph;
-    const fit = Math.min(bw / nw, ph / nh); // cabe inteira na página, sem cortar nem distorcer
-    const fw = Math.round(nw * fit), fh = Math.round(nh * fit);
     img.style.maxWidth = "none";
-    img.style.objectFit = "";
-    img.style.width = fw + "px";
-    img.style.height = fh + "px";
-    img.style.left = Math.round((bw - fw) / 2) + "px";
-    img.style.top = Math.round(pageIndex * ph + (ph - fh) / 2) + "px";
+    img.style.objectFit = "fill"; // ocupa a página inteira, sem cortar nada (ajusta o tamanho aos 4 lados)
+    img.style.width = bw + "px";
+    img.style.height = ph + "px";
+    img.style.left = "0px";
+    img.style.top = pageIndex * ph + "px";
     img.dataset.rotate = "0";
     img.style.transform = "";
     syncFreeImageSpacer();
