@@ -22862,6 +22862,31 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     blank.scrollIntoView?.({ block: "center" });
   };
 
+  // Clicar na faixa/margem entre páginas (a quebra é contenteditable=false e ocupa essa área) deixava o cursor preso na borda
+  // direita da quebra. Move o cursor para o início da página seguinte (ou fim da anterior, se o clique foi acima da faixa).
+  const fixCaretOnPageBreak = (clientY) => {
+    const body = bodyRef.current;
+    const sel = window.getSelection();
+    if (!body || !sel || !sel.rangeCount || !sel.isCollapsed || !body.contains(sel.anchorNode)) return;
+    const isBr = (n) => !!n && n.nodeType === 1 && n.classList.contains("word-page-break") && !n.classList.contains("word-section-break");
+    const flow = (n) => n.nodeType !== 1 || !(n.classList.contains("word-page-meta") || n.classList.contains("word-ink-layer") || n.classList.contains("word-img-spacer") || (n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    let brk = null, blk = sel.anchorNode;
+    if (blk === body) { const c = body.childNodes[sel.anchorOffset], pv = body.childNodes[sel.anchorOffset - 1]; brk = isBr(c) ? c : isBr(pv) ? pv : null; }
+    else { while (blk && blk.parentNode !== body) blk = blk.parentNode; if (isBr(blk)) brk = blk; }
+    if (!brk) return;
+    let prev = brk.previousSibling; while (prev && !flow(prev)) prev = prev.previousSibling;
+    let next = brk.nextSibling; while (next && !flow(next)) next = next.nextSibling;
+    const r = document.createRange();
+    const rect = brk.getBoundingClientRect();
+    const pad = (parseFloat(brk.style.getPropertyValue("--pb-pad")) || 0) * bodyScale();
+    if (clientY != null && prev && !isBr(prev) && clientY < rect.bottom - pad) { r.selectNodeContents(prev); r.collapse(false); }
+    else {
+      if (!next || isBr(next)) { const d = document.createElement("div"); d.innerHTML = "<br>"; body.insertBefore(d, next || null); next = d; }
+      r.setStart(next, 0); r.collapse(true);
+    }
+    sel.removeAllRanges(); sel.addRange(r);
+  };
+
   const imgSetWrap = (mode) => { // "inline" | "left" | "right"
     if (!selectedImg) return;
     if (selectedImg.classList.contains("word-img-free")) { imgClearFree(selectedImg); selectedImg.style.objectFit = ""; syncFreeImageSpacer(); }
@@ -26396,8 +26421,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   handleContentSelectionClick(e);
                   fmt.handleBodyClick(e);
                 }}
-                onMouseUp={() => { fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
-                onKeyUp={(e) => { fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
+                onMouseUp={(e) => { const y = e.clientY; setTimeout(() => fixCaretOnPageBreak(y), 0); fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
+                onKeyUp={(e) => { if (e.key.startsWith("Arrow")) fixCaretOnPageBreak(null); fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
                 onKeyDown={handleEditorKeyDown}
                 onDoubleClick={(e) => { const fld = e.target.closest?.(".word-field"); if (fld && bodyRef.current?.contains(fld)) { e.preventDefault(); fieldEditRef.current = fld; openFieldDialog({ code: fld.dataset.code || "", editing: true }); return; } const eq = e.target.closest?.(".word-equation"); if (eq && !eq.classList.contains("word-math") && bodyRef.current?.contains(eq)) { e.preventDefault(); openEquationDialog(eq); } }}
                 onContextMenu={handleBodyContextMenu}
