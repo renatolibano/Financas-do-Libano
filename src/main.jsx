@@ -21798,30 +21798,49 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
 
   // Depois de digitar, o navegador às vezes rola a página sozinho (ex.: de volta para cima) mesmo com o cursor visível.
   // Se a rolagem mudar logo após uma digitação sem o usuário ter rolado, e o cursor continuava visível na posição anterior, desfaz.
-  const typeLock = useRef({ top: 0, until: 0 });
+  const typeLock = useRef({ top: 0, until: 0, visible: false });
   useEffect(() => {
-    const unlock = () => { typeLock.current.until = 0; };
-    const onScroll = (e) => {
-      const a = pageAreaRef.current, L = typeLock.current;
-      if (!a || e.target !== a || performance.now() > L.until || Math.abs(a.scrollTop - L.top) < 2) return;
+    console.info("[Libano] proteção de rolagem ao digitar ativa (v3)");
+    const caretRect = () => {
       const body = bodyRef.current, sel = window.getSelection();
-      if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return;
+      if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return null;
       const host = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
       const range = sel.getRangeAt(0).cloneRange(); range.collapse(false);
       let rect = range.getClientRects()[0];
       if (!rect || (!rect.width && !rect.height)) rect = host && host.getBoundingClientRect();
-      if (!rect) return;
-      const ar = a.getBoundingClientRect(), shift = a.scrollTop - L.top;
-      if (rect.top + shift >= ar.top && rect.bottom + shift <= ar.bottom) a.scrollTop = L.top;
+      return rect || null;
     };
+    const inView = (rect, a, shift = 0) => { const ar = a.getBoundingClientRect(); return rect.top + shift >= ar.top && rect.bottom + shift <= ar.bottom; };
+    const arm = (e) => {
+      const a = pageAreaRef.current, body = bodyRef.current;
+      if (!a || !body || !body.contains(e.target)) return;
+      if (e.type === "keydown" && !(e.key.length === 1 || e.key === "Enter" || e.key === "Backspace" || e.key === "Delete")) return;
+      if (e.type === "keydown" && (e.ctrlKey || e.metaKey)) return;
+      const L = typeLock.current, now = performance.now();
+      if (now > L.until) { const r = caretRect(); L.top = a.scrollTop; L.visible = !!r && inView(r, a); }
+      L.until = now + 700;
+    };
+    const unlock = () => { typeLock.current.until = 0; };
+    const onScroll = (e) => {
+      const a = pageAreaRef.current, L = typeLock.current;
+      if (!a || e.target !== a || performance.now() > L.until || Math.abs(a.scrollTop - L.top) < 2) return;
+      const r = caretRect();
+      const shift = a.scrollTop - L.top;
+      // restaura se o cursor estava visível antes de digitar e continua visível na posição antiga
+      if (L.visible && (!r || r.height > 200 || inView(r, a, shift))) a.scrollTop = L.top;
+    };
+    const navKey = (e) => { if (/^(Arrow|Page|Home|End)/.test(e.key)) unlock(); };
+    document.addEventListener("beforeinput", arm, true);
+    document.addEventListener("keydown", arm, true);
     document.addEventListener("scroll", onScroll, true);
     ["wheel", "touchmove", "pointerdown"].forEach(t => document.addEventListener(t, unlock, true));
-    const navKey = (e) => { if (/^(Arrow|Page|Home|End)/.test(e.key)) unlock(); };
     document.addEventListener("keydown", navKey, true);
     return () => {
-      document.removeEventListener("keydown", navKey, true);
+      document.removeEventListener("beforeinput", arm, true);
+      document.removeEventListener("keydown", arm, true);
       document.removeEventListener("scroll", onScroll, true);
       ["wheel", "touchmove", "pointerdown"].forEach(t => document.removeEventListener(t, unlock, true));
+      document.removeEventListener("keydown", navKey, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -26467,7 +26486,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 spellCheck={spellcheckOn}
                 lang={docLanguage || undefined}
                 onInput={handleBodyInput}
-                onBeforeInput={(e) => { typingRef.current = true; const a = pageAreaRef.current; if (a) { const L = typeLock.current, now = performance.now(); if (now > L.until) L.top = a.scrollTop; L.until = now + 700; } handleTrackedBeforeInput(e); }}
+                onBeforeInput={(e) => { typingRef.current = true; handleTrackedBeforeInput(e); }}
                 onPaste={(e) => { insertSanitizedPaste(e); handleBodyInput(); }}
                 onMouseDown={(e) => { lastMouseY.current = e.clientY; handleTableResizeMouseDown(e); }}
                 onClick={(e) => {
