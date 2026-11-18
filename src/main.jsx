@@ -22870,9 +22870,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!body || !sel || !sel.rangeCount || !sel.isCollapsed || !body.contains(sel.anchorNode)) return;
     const isBr = (n) => !!n && n.nodeType === 1 && n.classList.contains("word-page-break") && !n.classList.contains("word-section-break");
     const flow = (n) => n.nodeType !== 1 || !(n.classList.contains("word-page-meta") || n.classList.contains("word-ink-layer") || n.classList.contains("word-img-spacer") || (n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    const real = (n) => n && !(n.nodeType === 3 && !n.textContent) && flow(n);
     let brk = null, blk = sel.anchorNode;
-    if (blk === body) { const c = body.childNodes[sel.anchorOffset], pv = body.childNodes[sel.anchorOffset - 1]; brk = isBr(c) ? c : isBr(pv) ? pv : null; }
-    else { while (blk && blk.parentNode !== body) blk = blk.parentNode; if (isBr(blk)) brk = blk; }
+    if (blk === body) {
+      let i = sel.anchorOffset - 1; while (i >= 0 && !real(body.childNodes[i])) i--;
+      let j = sel.anchorOffset; while (j < body.childNodes.length && !real(body.childNodes[j])) j++;
+      brk = isBr(body.childNodes[i]) ? body.childNodes[i] : isBr(body.childNodes[j]) ? body.childNodes[j] : null;
+    } else { while (blk && blk.parentNode !== body) blk = blk.parentNode; if (isBr(blk)) brk = blk; }
     if (!brk) return;
     let prev = brk.previousSibling; while (prev && !flow(prev)) prev = prev.previousSibling;
     let next = brk.nextSibling; while (next && !flow(next)) next = next.nextSibling;
@@ -22882,10 +22886,18 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (clientY != null && prev && !isBr(prev) && clientY < rect.bottom - pad) { r.selectNodeContents(prev); r.collapse(false); }
     else {
       if (!next || isBr(next)) { const d = document.createElement("div"); d.innerHTML = "<br>"; body.insertBefore(d, next || null); next = d; }
-      r.setStart(next, 0); r.collapse(true);
+      let leaf = next; while (leaf.firstChild && leaf.firstChild.nodeName !== "BR") leaf = leaf.firstChild;
+      r.setStart(leaf, 0); r.collapse(true);
     }
     sel.removeAllRanges(); sel.addRange(r);
   };
+  const lastMouseY = useRef(null);
+  useEffect(() => {
+    const onSel = () => fixCaretOnPageBreak(lastMouseY.current);
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const imgSetWrap = (mode) => { // "inline" | "left" | "right"
     if (!selectedImg) return;
@@ -26412,7 +26424,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 onInput={handleBodyInput}
                 onBeforeInput={handleTrackedBeforeInput}
                 onPaste={(e) => { insertSanitizedPaste(e); handleBodyInput(); }}
-                onMouseDown={handleTableResizeMouseDown}
+                onMouseDown={(e) => { lastMouseY.current = e.clientY; handleTableResizeMouseDown(e); }}
                 onClick={(e) => {
                   const anchor = e.target.closest?.(".word-comment-anchor");
                   if (anchor && bodyRef.current?.contains(anchor)) { e.preventDefault(); openCommentPopover(anchor); return; }
@@ -26422,8 +26434,8 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   fmt.handleBodyClick(e);
                 }}
                 onMouseUp={(e) => { const y = e.clientY; setTimeout(() => fixCaretOnPageBreak(y), 0); fmt.updateLinkBar(); fmt.applyPaintFormat(); }}
-                onKeyUp={(e) => { if (e.key.startsWith("Arrow")) fixCaretOnPageBreak(null); fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
-                onKeyDown={handleEditorKeyDown}
+                onKeyUp={(e) => { fmt.updateLinkBar(); updateActiveCellFromCaret(); }}
+                onKeyDown={(e) => { lastMouseY.current = null; handleEditorKeyDown(e); }}
                 onDoubleClick={(e) => { const fld = e.target.closest?.(".word-field"); if (fld && bodyRef.current?.contains(fld)) { e.preventDefault(); fieldEditRef.current = fld; openFieldDialog({ code: fld.dataset.code || "", editing: true }); return; } const eq = e.target.closest?.(".word-equation"); if (eq && !eq.classList.contains("word-math") && bodyRef.current?.contains(eq)) { e.preventDefault(); openEquationDialog(eq); } }}
                 onContextMenu={handleBodyContextMenu}
                 data-placeholder={docProtected ? "Documento protegido contra edição." : "Comece a digitar..."}
