@@ -21796,6 +21796,35 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     scheduleSave({ title: v });
   };
 
+  // Depois de digitar, o navegador às vezes rola a página sozinho (ex.: de volta para cima) mesmo com o cursor visível.
+  // Se a rolagem mudar logo após uma digitação sem o usuário ter rolado, e o cursor continuava visível na posição anterior, desfaz.
+  const typeLock = useRef({ top: 0, until: 0 });
+  useEffect(() => {
+    const unlock = () => { typeLock.current.until = 0; };
+    const onScroll = (e) => {
+      const a = pageAreaRef.current, L = typeLock.current;
+      if (!a || e.target !== a || performance.now() > L.until || Math.abs(a.scrollTop - L.top) < 2) return;
+      const body = bodyRef.current, sel = window.getSelection();
+      if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return;
+      const host = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+      const range = sel.getRangeAt(0).cloneRange(); range.collapse(false);
+      let rect = range.getClientRects()[0];
+      if (!rect || (!rect.width && !rect.height)) rect = host && host.getBoundingClientRect();
+      if (!rect) return;
+      const ar = a.getBoundingClientRect(), shift = a.scrollTop - L.top;
+      if (rect.top + shift >= ar.top && rect.bottom + shift <= ar.bottom) a.scrollTop = L.top;
+    };
+    document.addEventListener("scroll", onScroll, true);
+    ["wheel", "touchmove", "pointerdown"].forEach(t => document.addEventListener(t, unlock, true));
+    const navKey = (e) => { if (/^(Arrow|Page|Home|End)/.test(e.key)) unlock(); };
+    document.addEventListener("keydown", navKey, true);
+    return () => {
+      document.removeEventListener("keydown", navKey, true);
+      document.removeEventListener("scroll", onScroll, true);
+      ["wheel", "touchmove", "pointerdown"].forEach(t => document.removeEventListener(t, unlock, true));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const handleBodyInput = () => {
     if (fmt.findHooks.current.busy) return; // substituindo vários achados: o onChange roda uma vez no fim
     if (fmt.findMatches.length) fmt.resetFindHighlights();
@@ -26438,7 +26467,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 spellCheck={spellcheckOn}
                 lang={docLanguage || undefined}
                 onInput={handleBodyInput}
-                onBeforeInput={(e) => { typingRef.current = true; handleTrackedBeforeInput(e); }}
+                onBeforeInput={(e) => { typingRef.current = true; const a = pageAreaRef.current; if (a) { const L = typeLock.current, now = performance.now(); if (now > L.until) L.top = a.scrollTop; L.until = now + 700; } handleTrackedBeforeInput(e); }}
                 onPaste={(e) => { insertSanitizedPaste(e); handleBodyInput(); }}
                 onMouseDown={(e) => { lastMouseY.current = e.clientY; handleTableResizeMouseDown(e); }}
                 onClick={(e) => {
