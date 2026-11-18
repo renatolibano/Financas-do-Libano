@@ -22786,20 +22786,36 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // O recálculo zera/reconstrói alturas (encolhe o documento por instantes) e o navegador ajusta o scrollTop da área de rolagem:
   // a tela pulava para cima e o cursor aparecia longe do texto. Guarda e restaura a rolagem ao redor do recálculo.
   const syncPageBreaks = () => {
-    const area = pageAreaRef.current;
-    const st = area ? area.scrollTop : 0, sl = area ? area.scrollLeft : 0;
+    const scrollers = [];
+    for (let n = bodyRef.current?.parentElement; n; n = n.parentElement) if (n.scrollTop || n.scrollLeft) scrollers.push([n, n.scrollTop, n.scrollLeft]);
     try { syncPageBreaksRaw(); }
     finally {
-      if (area) {
-        if (area.scrollTop !== st) area.scrollTop = st;
-        if (area.scrollLeft !== sl) area.scrollLeft = sl;
+      for (const [n, t, l] of scrollers) {
+        if (n.scrollTop !== t) n.scrollTop = t;
+        if (n.scrollLeft !== l) n.scrollLeft = l;
       }
     }
+  };
+  // Depois de digitar, se o navegador deixou o cursor fora da área visível (ex.: rolou para o topo), traz de volta até o cursor.
+  const typingRef = useRef(false);
+  const keepCaretVisible = () => {
+    const body = bodyRef.current, area = pageAreaRef.current, sel = window.getSelection();
+    if (!body || !area || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return;
+    const host = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+    const range = sel.getRangeAt(0).cloneRange(); range.collapse(false);
+    let rect = range.getClientRects()[0];
+    if (!rect || (!rect.width && !rect.height)) rect = host && host.getBoundingClientRect();
+    if (!rect || !host) return;
+    const ar = area.getBoundingClientRect();
+    if (rect.bottom < ar.top || rect.top > ar.bottom) host.scrollIntoView({ block: "center" });
   };
   const pbRaf = useRef(0);
   const schedulePageBreakSync = () => {
     cancelAnimationFrame(pbRaf.current);
-    pbRaf.current = requestAnimationFrame(syncPageBreaks);
+    pbRaf.current = requestAnimationFrame(() => {
+      syncPageBreaks();
+      if (typingRef.current) { typingRef.current = false; keepCaretVisible(); setTimeout(keepCaretVisible, 60); }
+    });
   };
   useEffect(() => {
     const body = bodyRef.current;
@@ -26422,7 +26438,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 spellCheck={spellcheckOn}
                 lang={docLanguage || undefined}
                 onInput={handleBodyInput}
-                onBeforeInput={handleTrackedBeforeInput}
+                onBeforeInput={(e) => { typingRef.current = true; handleTrackedBeforeInput(e); }}
                 onPaste={(e) => { insertSanitizedPaste(e); handleBodyInput(); }}
                 onMouseDown={(e) => { lastMouseY.current = e.clientY; handleTableResizeMouseDown(e); }}
                 onClick={(e) => {

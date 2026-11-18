@@ -1861,8 +1861,8 @@ h1{font-size:23px}
 .wordBodyShell{flex:1;display:block;min-width:0}
 .wordPage-draft .wordBodyShell,.wordPage-web .wordBodyShell{display:flex;flex-direction:column}
 .wordGapLayer{height:0;position:relative;z-index:2;pointer-events:none}
-.wordGapLayer .wg-sp{float:left;clear:left;width:0}
-.wordGapLayer .wg-gap{float:left;clear:left;width:100%;position:relative}
+.wordGapLayer .wg-sp{float:right;clear:right;width:0}
+.wordGapLayer .wg-gap{float:right;clear:right;width:100%;position:relative}
 .wordGapLayer .wg-gap::after{content:"";position:absolute;left:0;right:0;top:calc(var(--wg-pb,0px) - 9px);height:18px;background:var(--pb-bg,#54575c);box-shadow:0 0 0 100vmax var(--pb-bg,#54575c);clip-path:inset(0 -100vmax)}
 .wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break){margin:0;border:0;height:24px;text-align:left}
 .wordPage:not(.wordPage-draft) .wordRichBody .word-page-break:not(.word-section-break) span{display:none}
