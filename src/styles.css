@@ -1858,7 +1858,10 @@ h1{font-size:23px}
 /* Separador entre páginas (como no Word): faixa escura na largura toda; a altura da quebra é ajustada por JS para que o texto seguinte
    comece no topo da próxima página. Seções e o modo Rascunho mantêm o traço tracejado. */
 /* Páginas separadas (ver syncPageBreaks): o corpo fica dentro de um "shell" bloco, ao lado da camada de faixas */
-.wordBodyShell{flex:1;display:block;min-width:0}
+.wordBodyShell{flex:1;display:block;min-width:0;position:relative}
+.wordMarksLayer{position:absolute;left:0;top:0;width:100%;height:0;z-index:4;pointer-events:none;overflow:visible}
+.wordMarksLayer span{position:absolute;text-align:center;color:#8ea0c9;opacity:.8;font-family:Calibri,Arial,sans-serif;user-select:none;white-space:pre}
+.wordPage:not(.wordPage-draft) .wordRichBody.wordShowMarks .word-page-break:not(.word-section-break) span{display:inline-block}
 .wordPage-draft .wordBodyShell,.wordPage-web .wordBodyShell{display:flex;flex-direction:column}
 .wordGapLayer{height:0;position:relative;z-index:2;pointer-events:none}
 .wordGapLayer .wg-sp{float:right;clear:right;width:0}
@@ -1908,7 +1911,7 @@ h1{font-size:23px}
   .wordPage .wordRichBody.word-show-codes .word-field .wf-result,.wordPage .wordRichBody .word-field[data-show-code="1"] .wf-result{display:none!important}
   .wordPage .wordRichBody .pdf-import-page{break-inside:avoid;break-after:page}
   .wordPage .wordImgFrame{display:none!important}
-  .wordGapLayer{display:none!important}
+  .wordGapLayer,.wordMarksLayer{display:none!important}
   .wordPage .wordRichBody{min-height:0!important}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break){height:0!important;margin:0!important;border:0!important;break-after:page}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break)::after,.wordPage .wordRichBody .word-page-break:not(.word-section-break) span{display:none!important}

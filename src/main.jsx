@@ -18985,7 +18985,26 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     onChange();
     setHiliteOpen(false);
   };
-  const applyFont = (font) => { exec("fontName", font); setFontOpen(false); };
+  const applyFont = (font) => {
+    const body = bodyRef.current;
+    if (wordMacroRec) wordMacroRec.push(["fontName", font]);
+    body?.focus();
+    // Com CSS (span style="font-family") em vez de <font face>: o <font> perde para qualquer font-family inline já existente no texto.
+    try { document.execCommand("styleWithCSS", false, true); } catch {}
+    document.execCommand("fontName", false, font);
+    try { document.execCommand("styleWithCSS", false, false); } catch {}
+    const sel = window.getSelection();
+    if (body && sel && sel.rangeCount && !sel.isCollapsed) {
+      // Trechos dentro da seleção que já tinham fonte própria (documento importado/colado) ganhariam da nova: força a escolhida.
+      body.querySelectorAll('[style*="font-family"], font[face]').forEach(el => {
+        if (!sel.containsNode(el, false)) return;
+        if (el.tagName === "FONT") el.removeAttribute("face");
+        el.style.fontFamily = font;
+      });
+    }
+    onChange();
+    setFontOpen(false);
+  };
 
   // O execCommand("fontSize") só entende a escala 1-7 do HTML antigo — aqui
   // aplicamos com o maior valor (7) e trocamos o atributo pelo tamanho em pt
@@ -22732,9 +22751,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const pageIndex = Math.max(0, Math.floor(centerY / ph));
     imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
     const bw = body.offsetWidth;
-    // Cobre a página toda (de borda a borda): preenche sem distorcer, cortando o excesso.
+    // Cobre a página toda (de borda a borda) mostrando a imagem inteira, sem cortar nada.
     img.style.maxWidth = "none";
-    img.style.objectFit = "cover";
+    img.style.objectFit = "fill";
     img.style.width = bw + "px";
     img.style.height = ph + "px";
     img.style.left = "0px";
@@ -23874,6 +23893,84 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     <RbMenu id={id} menu={rbMenu} setMenu={setRbMenu} trigger={trigger} popClass={popClass}>{items}</RbMenu>
   );
 
+  // Mostrar Tudo: além do ¶ (CSS), desenha sobre o texto os espaços (·), espaços não separáveis (°), tabs (→) e quebras de linha (↵).
+  // São desenhados numa camada à parte (fora do corpo editável), só na área visível, então não entram no documento salvo.
+  const marksLayerRef = useRef(null);
+  useEffect(() => {
+    const layer = marksLayerRef.current;
+    if (!layer) return undefined;
+    layer.textContent = "";
+    if (!showMarks) return undefined;
+    const draw = () => {
+      const body = bodyRef.current;
+      layer.textContent = "";
+      if (!body) return;
+      const lr = layer.getBoundingClientRect();
+      const sc = layer.offsetWidth ? lr.width / layer.offsetWidth : 1;
+      const vh = window.innerHeight;
+      const frag = document.createDocumentFragment();
+      let count = 0;
+      const put = (rect, ch, fs) => {
+        const h = rect.height / sc;
+        const sp = document.createElement("span");
+        sp.textContent = ch;
+        sp.style.cssText = `left:${(rect.left - lr.left) / sc}px;top:${(rect.top - lr.top) / sc}px;width:${Math.max(rect.width / sc, 6)}px;height:${h}px;line-height:${h}px;font-size:${fs}px`;
+        frag.appendChild(sp);
+        count++;
+      };
+      const range = document.createRange();
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode()) && count < 6000) {
+        const txt = node.nodeValue;
+        if (!txt || !/[ \t\u00a0]/.test(txt)) continue;
+        const el = node.parentElement;
+        if (!el) continue;
+        range.selectNodeContents(node);
+        const nr = range.getBoundingClientRect();
+        if (nr.bottom < -600 || nr.top > vh + 600) continue;
+        const fs = parseFloat(getComputedStyle(el).fontSize) || 15;
+        for (let i = 0; i < txt.length; i++) {
+          const c = txt[i];
+          if (c !== " " && c !== "\t" && c !== "\u00a0") continue;
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const r = range.getClientRects()[0]; // espaço recolhido pelo CSS (sem largura) não aparece, como no Word
+          if (!r || r.width < 0.5 || r.bottom < -50 || r.top > vh + 50) continue;
+          put(r, c === " " ? "·" : c === "\t" ? "→" : "°", fs);
+        }
+      }
+      body.querySelectorAll("br").forEach(br => {
+        if (!br.nextSibling) return; // <br> final do parágrafo é só espaço reservado
+        const r = br.getClientRects()[0];
+        if (!r || r.bottom < -50 || r.top > vh + 50) return;
+        put(r, "↵", parseFloat(getComputedStyle(br.parentElement || body).fontSize) || 15);
+      });
+      body.querySelectorAll(".word-tab").forEach(tb => {
+        const r = tb.getClientRects()[0];
+        if (!r || r.bottom < -50 || r.top > vh + 50) return;
+        put(r, "→", parseFloat(getComputedStyle(tb.parentElement || body).fontSize) || 15);
+      });
+      layer.appendChild(frag);
+    };
+    let raf = 0;
+    const sched = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(draw); };
+    sched();
+    const t = setTimeout(sched, 300);
+    const body = bodyRef.current, area = pageAreaRef.current;
+    const mo = new MutationObserver(sched);
+    if (body) mo.observe(body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["style", "class"] });
+    area?.addEventListener("scroll", sched, { passive: true });
+    window.addEventListener("resize", sched);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+      mo.disconnect();
+      area?.removeEventListener("scroll", sched);
+      window.removeEventListener("resize", sched);
+      layer.textContent = "";
+    };
+  }, [showMarks, zoom, pageSize, orientation, margins, viewMode]);
   useEffect(() => { setRbMenu(null); }, [ribbonTab]);
   useEffect(() => {
     if (!rbMenu) return undefined;
@@ -26152,7 +26249,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <span className="wordRibbonDivider"/>
             <div className="wordRibbonGroup">
               <div className="wordRibbonRow">
-                <button className="wordTextBtn" data-tip="Página Inteira" data-tipdesc="A imagem ocupa a página inteira, sem margens, na página em que está (preenche sem distorcer, cortando o excesso)." onClick={imgFullPage}><Maximize2 size={14}/> Página inteira</button>
+                <button className="wordTextBtn" data-tip="Página Inteira" data-tipdesc="A imagem ocupa a página inteira, sem margens e sem cortes, na página em que está (ajusta às dimensões da página)." onClick={imgFullPage}><Maximize2 size={14}/> Página inteira</button>
               </div>
               <span className="wordRibbonGroupLabel">Ajustar</span>
             </div>
@@ -26469,6 +26566,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
               <div className="wordBodyShell">
               <div ref={gapLayerRef} className="wordGapLayer" aria-hidden="true"/>
+              <div ref={marksLayerRef} className="wordMarksLayer" aria-hidden="true"/>
               <div
                 ref={bodyRef}
                 className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "") + (showChangesMarkup ? "" : " wordHideChanges")}
