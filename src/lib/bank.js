@@ -25,11 +25,12 @@ export async function syncPluggyItem(itemId) {
 export async function syncAllBankConnections() {
   const { data, error } = await supabase.from("bank_connections").select("item_id");
   if (error) throw error;
-  let imported = 0, balances = 0;
+  let imported = 0, balances = 0, debts = 0;
   for (const c of data || []) {
     const r = await syncPluggyItem(c.item_id);
     imported += r.imported || 0;
     balances += r.balances || 0;
+    debts += r.debts || 0;
   }
-  return { connections: (data || []).length, imported, balances };
+  return { connections: (data || []).length, imported, balances, debts };
 }

@@ -107,6 +107,7 @@ export default function WordImageHandles({ img, bodyRef, pageRef, onBefore, onEn
       img.style.maxWidth = "none";
       img.style.width = `${Math.round(w)}px`;
       img.style.height = `${Math.round(h)}px`;
+      img.style.objectFit = "";
       if (st.free) {
         // mantém parado o lado/canto oposto à alça (a rotação é em torno do centro, então o centro é recalculado)
         const rad = (st.rot * Math.PI) / 180, cs = Math.cos(rad), sn = Math.sin(rad);

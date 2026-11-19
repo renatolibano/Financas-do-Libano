@@ -884,7 +884,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
   // Só roda nessas duas telas — abrir o app direto em "Notas", por exemplo,
   // não deveria puxar o mês financeiro.
   useEffect(() => {
-    if (page !== "Visão Geral" && page !== "Orçamento") return;
+    if (page !== "Visão Geral" && page !== "Orçamento" && page !== "Movimentações") return;
     transactions.loadMonth(selectedMonth);
   }, [page, selectedMonth, transactions.loadMonth]);
 
@@ -1388,7 +1388,7 @@ function App({session,theme,setTheme,pinHash,setPinHash,autoLockMinutes,setAutoL
       <header><div><h1>{page}</h1><p>{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"})}</p></div>{page==="Visão Geral" && currentHeaderQuote && <div className="headerQuote"><span className="headerQuoteMark headerQuoteMarkOpen">&ldquo;</span><span className="headerQuoteText">{currentHeaderQuote}</span><span className="headerQuoteMark headerQuoteMarkClose">&rdquo;</span></div>}<div className="headerActions"><div className="notifWrap"><button className="notifBellBtn" title="Novidades do app" onClick={()=>{ setShowUpdatesModal(true); appUpdates.refresh(); }}><Megaphone size={19}/>{unseenUpdatesCount>0 && <span className="notifBadge">{unseenUpdatesCount>9?"9+":unseenUpdatesCount}</span>}</button></div><NotificationsBell items={notifItems} goTo={goTo}/>{page==="Visão Geral" && <button className="add" onClick={()=>setShowOverviewEdit(true)}><Pencil size={17}/> Editar valores</button>}</div></header>
 
       {page==="Visão Geral" && <Dashboard balance={effectiveBalance} income={effectiveIncome} expense={effectiveExpense} cardBill={effectiveCardBill} manualFields={overview} debtRemaining={debtRemaining} fixedTotal={fixedTotal} reminders={reminders.data} notes={notes.data} setPage={setPage} openNote={(id)=>{ setOpenNoteId(id); setPage("Notas"); }} askAI={askAI} aiInsight={aiInsight} aiLoading={aiLoading} aiError={aiError} aiAvailable={aiAvailable} month={selectedMonth} setMonth={setSelectedMonth} budgets={budgets.data} goals={goals.data} hideValues={hideValues} setHideValues={setHideValues} budgetAvailable={budgetAvailable} shoppingItems={shoppingItems.data} fixedCount={fixed.data.length} debtsCount={debts.data.length} transactions={monthTransactions} bankAccounts={bankAccounts.data}/>}
-      {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={()=>{ transactions.refresh(); bankAccounts.refresh(); }}/>}
+      {page==="Movimentações" && <Transactions entity={transactions} session={session} bankAvailable={cloudConfigured && !!session} onImported={()=>{ transactions.refresh(); bankAccounts.refresh(); cardPurchases.refresh(); debts.refresh(); }}/>}
       {page==="Pagamentos Fixos" && <Fixed entity={fixed} total={fixedTotal}/>}
       {page==="Dívidas" && <Debts entity={debts} remaining={debtRemaining}/>}
       {page==="Cartões" && <Cards entity={cardPurchases} bill={hasBankCards ? bankSum("CREDIT") : cardBill} bankCards={bankAccounts.data.filter(a=>a.type==="CREDIT")}/>}
@@ -2078,7 +2078,7 @@ function BankConnect({onImported}){
     try{
       const itemId = itemData?.item?.id;
       const result = await syncPluggyItem(itemId);
-      setMessage({type:"success", text: `${result.institutionName}: ${result.imported} movimentações e ${result.balances||0} saldos/contas atualizados.`});
+      setMessage({type:"success", text: `${result.institutionName}: ${result.imported} movimentações, ${result.balances||0} saldos/contas e ${result.debts||0} dívidas atualizados.${result.pending ? " O banco ainda está carregando dados — toque em Atualizar saldos em alguns minutos." : ""}`});
       onImported && onImported();
     }catch(err){
       setMessage({type:"error", text: err.message || "Banco conectado, mas a importação falhou."});
@@ -2185,7 +2185,7 @@ function Debts({entity,remaining}){
           key={x.id}
           icon={<CircleDollarSign size={18}/>}
           title={x.name}
-          subtitle={"Próximo pagamento: "+x.next}
+          subtitle={"Próximo pagamento: "+x.next+(x.source==="pluggy" ? " · do banco" : "")}
           days={daysUntil(x.next)}
           menuOpen={openMenuId===x.id}
           onToggleMenu={()=>setOpenMenuId(id=>id===x.id?null:x.id)}
@@ -2222,7 +2222,7 @@ function Cards({entity,bill,bankCards=[]}){
         <input value={value} onChange={e=>setValue(e.target.value)} type="number" step="0.01" min="0" placeholder="Valor"/>
         <button onClick={submit}><Plus/></button>
       </div>
-      {data.slice().sort((a,b)=>(Number(b.value)||0)-(Number(a.value)||0)).map((x,i)=>{ const tot = data.reduce((a,b)=>a+(Number(b.value)||0),0)||1, pct=Math.round((Number(x.value)||0)/tot*100); return <div className="transaction" key={x.id}><div className="txMain" style={{flex:1}}><span className="txDot out"><CreditCard size={15}/></span><div style={{flex:1}}><b>{x.cat}</b><div className="progress" style={{marginTop:7,height:6}}><i style={{width:pct+"%", background:FIN_COLORS[i%FIN_COLORS.length]}}/></div></div></div><strong>{money(x.value)}<em className="txPct">{pct}%</em></strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>; })}
+      {data.slice().sort((a,b)=>(Number(b.value)||0)-(Number(a.value)||0)).map((x,i)=>{ const tot = data.reduce((a,b)=>a+(Number(b.value)||0),0)||1, pct=Math.round((Number(x.value)||0)/tot*100); return <div className="transaction" key={x.id}><div className="txMain" style={{flex:1}}><span className="txDot out"><CreditCard size={15}/></span><div style={{flex:1}}><b>{x.cat}{x.source==="pluggy" && <small> · do banco</small>}</b><div className="progress" style={{marginTop:7,height:6}}><i style={{width:pct+"%", background:FIN_COLORS[i%FIN_COLORS.length]}}/></div></div></div><strong>{money(x.value)}<em className="txPct">{pct}%</em></strong><button onClick={()=>remove(x.id)}><Trash2 size={16}/></button></div>; })}
       {data.length===0 && <p className="emptyHint">Nenhuma compra no cartão ainda.</p>}
     </div>
   </div>
@@ -22732,15 +22732,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const pageIndex = Math.max(0, Math.floor(centerY / ph));
     imgSetFree(img.dataset.wrap === "behind" ? "behind" : "front");
     const bw = body.offsetWidth;
-    const nw = img.naturalWidth || bw, nh = img.naturalHeight || ph;
-    const fit = Math.min(bw / nw, ph / nh); // maior tamanho que cabe na página, mantendo a proporção (sem cortar nem deformar)
-    const fw = Math.round(nw * fit), fh = Math.round(nh * fit);
+    // Cobre a página toda (de borda a borda): preenche sem distorcer, cortando o excesso.
     img.style.maxWidth = "none";
-    img.style.objectFit = "";
-    img.style.width = fw + "px";
-    img.style.height = fh + "px";
-    img.style.left = Math.round((bw - fw) / 2) + "px";
-    img.style.top = Math.round(pageIndex * ph + (ph - fh) / 2) + "px";
+    img.style.objectFit = "cover";
+    img.style.width = bw + "px";
+    img.style.height = ph + "px";
+    img.style.left = "0px";
+    img.style.top = Math.round(pageIndex * ph) + "px";
     img.dataset.rotate = "0";
     img.style.transform = "";
     syncFreeImageSpacer();

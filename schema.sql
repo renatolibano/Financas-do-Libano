@@ -1473,3 +1473,14 @@ do $$ declare t text; begin foreach t in array array['bank_accounts'] loop
  execute format('create policy "update_own_%1$s" on %1$s for update using(auth.uid()=user_id)',t);
  execute format('create policy "delete_own_%1$s" on %1$s for delete using(auth.uid()=user_id)',t);
 end loop; end $$;
+
+
+-- Atualização: Pluggy passa a puxar também cartões (compras da fatura por categoria), dívidas (empréstimos) e histórico de 12 meses.
+alter table bank_connections add column if not exists history_synced boolean not null default false;
+alter table card_purchases add column if not exists source text not null default 'manual';
+alter table card_purchases add column if not exists bank_connection_id uuid references bank_connections(id) on delete cascade;
+alter table debts add column if not exists source text not null default 'manual';
+alter table debts add column if not exists pluggy_id text;
+alter table debts add column if not exists bank_connection_id uuid references bank_connections(id) on delete cascade;
+alter table debts drop constraint if exists debts_pluggy_id_key;
+alter table debts add constraint debts_pluggy_id_key unique (pluggy_id);
