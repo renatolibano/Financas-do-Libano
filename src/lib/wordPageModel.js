@@ -40,13 +40,16 @@ export function paginate(blocks, { pageHeight, minLines = 2 } = {}) {
   };
   const room = () => pageHeight - used[p];
 
-  // Altura mínima que precisa caber na página atual para começar um bloco (1ª parte, se for divisível)
+  // Altura mínima que precisa caber na página atual para começar um bloco.
+  // Parágrafo divisível: as primeiras minLines linhas — mas se ele tem menos de 2*minLines linhas não pode ser dividido
+  // sem criar viúva/órfã, então precisa caber inteiro.
   const headNeed = (b) => {
-    if (b.lines && !b.keepTogether && b.widowControl !== false && b.lines.length > 1) {
-      const n = Math.min(minLines, b.lines.length);
-      return b.lines.slice(0, n).reduce((a, x) => a + x, 0);
+    if (b.lines && !b.keepTogether) {
+      if (b.widowControl === false) return b.lines[0] || b.height;
+      if (b.lines.length < 2 * minLines) return b.height;
+      return b.lines.slice(0, minLines).reduce((a, x) => a + x, 0);
     }
-    return b.lines && !b.keepTogether ? (b.lines[0] || b.height) : b.height;
+    return b.height;
   };
 
   for (let i = 0; i < blocks.length; i++) {

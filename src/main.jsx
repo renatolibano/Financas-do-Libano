@@ -100,6 +100,7 @@ import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOr
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
 import { PAGE_SIZES, pageSizeLabel, pageSizeCmText } from "./lib/wordPageSizes";
+import { paginate } from "./lib/wordPageModel";
 import WordRuler from "./components/WordRuler";
 import { compileFind, findAll, parseReplace, expandReplace, expandRegexReplace, replaceNeedsClipboard, DEFAULT_FIND_OPTS } from "./lib/wordFindPattern";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
@@ -20078,13 +20079,16 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     el.focus();
     const headings = collectHeadings();
     headings.forEach((h, i) => { if (!h.id) h.id = "word-heading-" + Date.now().toString(36) + i; });
+    try { el.__syncPageBreaks?.(); } catch {} // motor "modelo": página real de cada título
     // Nº da página de cada título: mesma conta das quebras de página do editor (altura da folha = altura do papel).
     const pageOf = (h) => {
       const ph = pageHeightPx;
       if (!ph) return "";
       const r = el.getBoundingClientRect();
       const sc = el.offsetWidth ? r.width / el.offsetWidth : 1;
-      const n = Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
+      let blk = h; while (blk && blk.parentNode !== el) blk = blk.parentNode;
+      const mp = el.__pageModel?.pageByEl?.get(blk);
+      const n = mp != null ? mp + 1 : Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
       // respeita "Começar a numeração em" e o formato (romano) definidos em Configurar Página
       let bl = {};
       try { bl = JSON.parse(el.querySelector(":scope > .word-page-meta")?.dataset.booklayout || "{}"); } catch {}
@@ -21543,6 +21547,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [comments, setComments] = useState([]);
   const [commentPopover, setCommentPopover] = useState(null);
   const [viewMode, setViewMode] = useState("print"); // "print" (Layout de Impressão) | "draft" (Rascunho)
+  // Motor de paginação: "classic" (medição por faixas, padrão) | "model" (lib/wordPageModel: órfãs/viúvas, manter junto, capítulos). Preferência do aparelho.
+  const [pageEngine, setPageEngineState] = useState(() => { try { return localStorage.getItem("libano.word.pageEngine") === "model" ? "model" : "classic"; } catch { return "classic"; } });
+  const setPageEngine = (v) => { setPageEngineState(v); try { localStorage.setItem("libano.word.pageEngine", v); } catch {} };
   const [ribbonTip, setRibbonTip] = useState(null); // { label, desc, x, y } - tooltip estilo Word
   // Aba "Design" — guardadas dentro do próprio content (ver persistPageMeta),
   // sem precisar de coluna nova no banco.
@@ -22770,7 +22777,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const syncPageBreaksRaw = () => {
     const body = bodyRef.current;
     const layer = gapLayerRef.current;
-    const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (body && body.style.minHeight) body.style.minHeight = ""; };
+    const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (layer) layer.classList.remove("wgModel"); if (body) { body.__pageModel = null; if (body.style.minHeight) body.style.minHeight = ""; } };
     if (!body || body.closest(".wordPage-draft")) { clearGaps(); return; }
     const brs = Array.from(body.querySelectorAll(":scope > .word-page-break:not(.word-section-break)"));
     const ph = currentPageDims().h;
@@ -22830,6 +22837,91 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       if (!last) return padTop + padBot;
       return (last.getBoundingClientRect().bottom - body.getBoundingClientRect().top) / sc + padBot;
     };
+    // Motor "modelo": mede a altura natural de cada bloco, deixa paginate() decidir as páginas (órfãs/viúvas, manter junto,
+    // título com o próximo, capítulo em página ímpar) e desenha UMA faixa por página já com o espaço sobrando. Se algo não
+    // bater (bloco maior que a página, nº de páginas diferente do previsto, erro), devolve false e o motor clássico assume.
+    const layoutWithPageModel = () => {
+      layer.classList.add("wgModel"); // quebras manuais passam a ter altura 0: quem empurra o conteúdo é a faixa
+      const prevDisplay = layer.style.display;
+      layer.style.display = "none"; // sem faixas = altura natural
+      body.style.minHeight = "";
+      const kids = Array.from(body.children).filter(inFlow);
+      if (!kids.length) { layer.style.display = prevDisplay; return false; }
+      const px = (v) => parseFloat(v) || 0;
+      const bodyTop = body.getBoundingClientRect().top;
+      const tops = kids.map(k => (k.getBoundingClientRect().top - bodyTop) / sc);
+      const lastEl = kids[kids.length - 1];
+      const lastBottom = (lastEl.getBoundingClientRect().bottom - bodyTop) / sc + px(getComputedStyle(lastEl).marginBottom);
+      const NON_TEXT = "img,table,svg,canvas,video,iframe,div,p,ul,ol,blockquote,pre,h1,h2,h3,h4,h5,h6,.word-shape,.word-textbox";
+      const blocks = [];
+      let parity = null; // quebra de seção em página ímpar/par: vale para o próximo bloco
+      kids.forEach((k, i) => {
+        const cl = k.classList;
+        if (cl.contains("word-page-break") && !cl.contains("word-section-break")) {
+          if (k.hasAttribute("style")) { k.style.height = ""; k.style.removeProperty("--pb-pad"); k.style.removeProperty("--pb-bg"); }
+          blocks.push({ id: i, kind: "break", height: 0 });
+          return;
+        }
+        const ds = k.dataset, tag = k.tagName;
+        const b = { id: i, height: Math.max(0, (i + 1 < kids.length ? tops[i + 1] : lastBottom) - tops[i]) };
+        const heading = /^H[1-6]$/.test(tag);
+        if (heading) { b.keepTogether = true; if (ds.keepNext !== "0") b.keepNext = true; }
+        if (ds.keepNext === "1") b.keepNext = true;
+        if (ds.keepTogether === "1") b.keepTogether = true;
+        if (ds.widow === "off") b.widowControl = false;
+        if (ds.chapter) b.breakBefore = ds.chapter === "odd" || ds.chapter === "even" ? ds.chapter : "next";
+        if (parity) { b.breakBefore = parity; parity = null; }
+        if (cl.contains("word-section-break")) {
+          const kind = ds.section;
+          if (kind === "nextpage" || kind === "oddpage" || kind === "evenpage") { b.pageBreakAfter = true; parity = kind === "oddpage" ? "odd" : kind === "evenpage" ? "even" : null; }
+        } else if (!b.keepTogether && (tag === "P" || tag === "DIV") && !k.querySelector(NON_TEXT)) {
+          // parágrafo de texto: pode ser dividido por linhas
+          const cs2 = getComputedStyle(k);
+          const fs = px(cs2.fontSize);
+          const lh = cs2.lineHeight === "normal" ? fs * 1.2 : px(cs2.lineHeight);
+          const inner = k.getBoundingClientRect().height / sc - px(cs2.paddingTop) - px(cs2.paddingBottom) - px(cs2.borderTopWidth) - px(cs2.borderBottomWidth);
+          const nl = lh > 0 ? Math.round(inner / lh) : 0;
+          if (nl > 1) {
+            const extra = b.height - nl * lh;
+            b.lines = Array(nl).fill(extra >= 0 ? lh : b.height / nl);
+            if (extra > 0) b.lines[nl - 1] += extra;
+          }
+        }
+        blocks.push(b);
+      });
+      if (blocks.length && blocks[0].kind !== "break" && tops[0] > padTop) blocks[0].height += tops[0] - padTop; // margem superior do 1º bloco
+      const res = paginate(blocks, { pageHeight: C });
+      if (res.oversize.length) { layer.style.display = prevDisplay; return false; } // bloco indivisível maior que a página
+      const np = res.pageCount;
+      const msig = ["m", ph, padTop, padBot, np, res.used.map(u => Math.round(u * 10)).join(",")].join("|");
+      if (layer.dataset.sig !== msig) {
+        layer.textContent = "";
+        let prev = 0;
+        for (let k = 0; k < np - 1; k++) {
+          const start = k * ph + padTop + res.used[k]; // onde termina o conteúdo da página k
+          const sp = document.createElement("div"); sp.className = "wg-sp"; sp.style.height = (start - prev) + "px";
+          const gap = document.createElement("div"); gap.className = "wg-gap"; gap.style.height = (ph - res.used[k]) + "px";
+          gap.style.setProperty("--wg-pb", (ph - padTop - res.used[k]) + "px"); // faixa escura centrada na divisa real das folhas
+          layer.append(sp, gap);
+          prev = start + (ph - res.used[k]);
+        }
+        layer.dataset.sig = msig;
+      }
+      body.style.minHeight = np * ph + "px";
+      layer.style.display = prevDisplay;
+      const need = Math.max(1, Math.ceil(contentBottom() / ph));
+      if (Math.abs(need - np) > 1) { console.info("[Libano] motor de páginas (modelo): previsto", np, "obtido", need, "- usando o clássico"); return false; }
+      const pageByEl = new Map();
+      kids.forEach((k, i) => pageByEl.set(k, res.where.get(i)));
+      body.__pageModel = { pageByEl, pageCount: np };
+      return true;
+    };
+    if (pageEngine === "model") {
+      let applied = false;
+      try { applied = layoutWithPageModel(); } catch (err) { console.warn("[Libano] motor de páginas (modelo) falhou, usando o clássico:", err); }
+      if (applied) return;
+      clearGaps();
+    }
     // 1) altura natural (sem faixas) para saber quantas páginas o texto deveria ter
     layer.textContent = ""; delete layer.dataset.sig; body.style.minHeight = "";
     layoutBreaks();
@@ -22884,13 +22976,14 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   useEffect(() => {
     const body = bodyRef.current;
+    if (body) body.__syncPageBreaks = syncPageBreaks; // usado pelo sumário para ler a página real de cada título
     const t = setTimeout(syncPageBreaks, 80);
     document.fonts?.ready?.then(schedulePageBreakSync).catch?.(() => {});
     window.addEventListener("resize", schedulePageBreakSync);
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
-    return () => { clearTimeout(t); cancelAnimationFrame(pbRaf.current); window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
+    return () => { clearTimeout(t); cancelAnimationFrame(pbRaf.current); if (body) body.__syncPageBreaks = null; window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb]);
+  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine]);
 
   // Nova página em branco logo ACIMA ou ABAIXO da página onde está o cursor (nunca no meio do texto).
   const insertPage = (where) => { // "above" | "below"
@@ -26175,6 +26268,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <RbSm icon={Columns2} label="Várias Páginas" tip="Várias Páginas" desc="Reduz o zoom para ver várias páginas ao mesmo tempo." onClick={() => setZoom(50)}/>
                 <RbSm icon={RectangleHorizontal} label="Largura da Página" tip="Largura da Página" desc="Ajusta o zoom para que a largura da página preencha a janela." onClick={fitZoomToWidth}/>
               </div>
+            </RbGroup>
+            <RbGroup label="Páginas">
+              <RbBig icon={Rows3} label={"Motor de páginas:\n" + (pageEngine === "model" ? "Novo" : "Clássico")} tip="Motor de páginas" desc="Novo: controla viúvas e órfãs, títulos junto do texto seguinte e capítulos em página ímpar. Se algum documento ficar estranho, volte ao Clássico." active={pageEngine === "model"} onClick={() => setPageEngine(pageEngine === "model" ? "classic" : "model")}/>
             </RbGroup>
             <RbGroup label="Modo Escuro">
               <RbBig icon={Contrast} label={"Modo\nEscuro"} tip="Modo Escuro" desc="Inverte as cores da página (fundo escuro, texto claro) para ler com menos brilho." active={darkPage} onClick={() => setDarkPage(d => !d)}/>
