@@ -24715,12 +24715,30 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
 
   // ====== Portado do wordcraft: atalhos, mini barra, acesso rápido, pesquisa, dicas de tecla ======
   const stepSizePt = (d) => fmt.applyFontSize(Math.max(1, (Number(fmtState.size) || 11) + d));
+  // Ctrl+T / Ctrl+Shift+T do Word: recuo deslocado (move o recuo esquerdo de 1,25 cm mantendo a 1ª linha no lugar).
+  const hangingIndent = (dir) => {
+    const left = Number(fmt.paraIndent.left) || 0, first = Number(fmt.paraIndent.firstLine) || 0;
+    const firstPos = left + first;
+    const newLeft = dir > 0 ? left + 1.25 : Math.max(firstPos, left - 1.25);
+    fmt.setParagraphIndent(+newLeft.toFixed(2));
+    fmt.setFirstLineIndent(+(firstPos - newLeft).toFixed(2));
+  };
+  // Ctrl+Q do Word: remove a formatação de parágrafo (recuos, alinhamento, espaçamento).
+  const clearParagraphFormat = () => {
+    const b = fmt.currentBlock();
+    if (!b || /^(TABLE|UL|OL)$/.test(b.tagName)) return;
+    b.style.marginLeft = b.style.marginRight = b.style.marginTop = b.style.marginBottom = "";
+    b.style.textIndent = b.style.textAlign = b.style.lineHeight = "";
+    handleBodyInput();
+    fmt.syncRulerState();
+  };
   const handleWordcraftKeys = (e) => {
     const k = e.key;
     const kl = k.length === 1 ? k.toLowerCase() : k;
     const mod = e.ctrlKey || e.metaKey;
     const run = (fn) => { e.preventDefault(); fn(); return true; };
     if (k === "F7" && !mod) return run(() => setSpellcheckOn(s => !s));
+    if (k === "F12" && !e.altKey) return run(() => { if (mod && e.shiftKey) printDoc(); else if (mod) fileMenuOpenFile(); else if (e.shiftKey) flushSave(); else fileMenuSaveAs(); });
     if (!mod) return false;
     const shift = e.shiftKey;
     if (e.altKey) {
@@ -24749,6 +24767,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       if (kl === "k") return run(() => applyTextEffect("smallcaps"));
       if (kl === "e") return run(toggleTrackChanges);
       if (kl === "f" || kl === "p") return run(() => openDlg("font", { ...fmtState, color: "#1a1a1a" }));
+      if (kl === "t") return run(() => hangingIndent(-1));
+      if (kl === "d") return run(() => fmt.underlineStyle("double"));
+      if (kl === "l") return run(() => fmt.exec("insertUnorderedList"));
+      if (k === "*" || e.code === "Digit8") return run(() => setShowMarks(v => !v));
       return false;
     }
     if (k === "Enter") return run(() => insertPage("below"));
@@ -24758,6 +24780,15 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (k === "[") return run(() => stepSizePt(-1));
     if (k === " ") return run(fmt.clearFormatting);
     switch (kl) {
+      case "b": return run(() => fmt.exec("bold"));
+      case "i": return run(() => fmt.exec("italic"));
+      case "u": return run(() => fmt.exec("underline"));
+      case "t": return run(() => hangingIndent(1));
+      case "q": return run(clearParagraphFormat);
+      case "g": return run(() => openDlg("goto"));
+      case "o": return run(fileMenuOpenFile);
+      case "n": return run(fileMenuNew);
+      case "w": return run(handleClose);
       case "l": return run(() => fmt.exec("justifyLeft"));
       case "e": return run(() => fmt.exec("justifyCenter"));
       case "r": return run(() => fmt.exec("justifyRight"));
@@ -24776,6 +24807,35 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       default: return false;
     }
   };
+
+  // Atalhos do Word também com o foco fora do texto (faixa de opções, barra de localizar…), na fase de captura,
+  // para o app ganhar do navegador (Ctrl+S/P/O/F/H/G/D/K…). Ctrl+N/T/W (e com Shift) são reservados pelo navegador
+  // numa aba comum; só chegam aqui no app instalado/APK.
+  const globalKeysRef = useRef(null);
+  globalKeysRef.current = (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod && e.key !== "F12") return;
+    const t = e.target;
+    if (dlg || fileMenuOpen || !bodyRef.current || bodyRef.current.contains(t)) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (t?.closest?.("input,textarea,select,[contenteditable='true']")) {
+      if (e.key !== "F12" && !(!e.shiftKey && !e.altKey && "spfhgo".includes(k))) return;
+    } else if (mod && !e.altKey && !e.shiftKey && "abiu".includes(k)) {
+      e.preventDefault();
+      if (k === "a") fmt.selectAll(); else fmt.exec(k === "b" ? "bold" : k === "i" ? "italic" : "underline");
+      return;
+    } else if (mod && !e.altKey && (k === "z" || k === "y")) {
+      e.preventDefault();
+      if (k === "y" || e.shiftKey) redo(); else undo();
+      return;
+    }
+    handleWordcraftKeys(e);
+  };
+  useEffect(() => {
+    const onKey = (e) => globalKeysRef.current?.(e);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
 
   // ---- Barra de Acesso Rápido ----
   const QAT_CMDS = {
