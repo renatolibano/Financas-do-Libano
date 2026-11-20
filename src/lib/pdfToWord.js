@@ -1,4 +1,5 @@
 import { pdfjsLib, pdfWasmUrl } from "./pdf";
+import { mergeRuns } from "./pdfRunMerge";
 
 // Importação de PDF para o editor "Word" com o layout preservado: cada página do PDF vira um bloco
 // do tamanho da página, com (1) os gráficos vetoriais (bordas, linhas, retângulos, tracejados,
@@ -217,25 +218,8 @@ function pageRuns(page, tc, vp) {
     raw.push({ str: it.str, x: t[4], y: t[5], size, ang, w: (it.width || 0) * vp.scale, font: it.fontName, rtl: it.dir === "rtl" });
   }
 
-  // junta pedaços da mesma linha (mesma fonte/tamanho/linha de base, sem grande vão) numa linha só
-  const runs = [];
-  let cur = null;
-  const push = () => { if (cur && cur.text.trim()) runs.push(cur); cur = null; };
-  for (const it of raw) {
-    if (cur && !it.rtl && !cur.rtl && it.font === cur.font && Math.abs(it.size - cur.size) < 0.3 && Math.abs(it.ang - cur.ang) < 0.02 && Math.abs(it.ang) < 0.02) {
-      const sameLine = Math.abs(it.y - cur.y) < cur.size * 0.25;
-      const gap = it.x - (cur.x + cur.w);
-      if (sameLine && gap > -cur.size * 0.3 && gap < cur.size * 0.5) {
-        if (gap > cur.size * 0.1 && !/\s$/.test(cur.text) && !/^\s/.test(it.str)) cur.text += " ";
-        cur.text += it.str;
-        cur.w = it.x + it.w - cur.x;
-        continue;
-      }
-    }
-    push();
-    cur = { text: it.str, x: it.x, y: it.y, size: it.size, ang: it.ang, w: it.w, font: it.font, rtl: it.rtl };
-  }
-  push();
+  // junta pedaços da mesma linha (vão largo entre colunas/células quebra a linha: ver lib/pdfRunMerge.js)
+  const runs = mergeRuns(raw);
 
   return runs.map((r) => {
     const fs = fontStyle(page, tc.styles, r.font, cache);

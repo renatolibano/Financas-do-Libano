@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { paginate, formatPageNumber } from "./wordPageModel.js";
+import { paginate, formatPageNumber } from "../src/lib/wordPageModel.js";
 
 const H = 100;
 const para = (id, n, lh = 10, extra = {}) => ({ id, lines: Array(n).fill(lh), height: n * lh, ...extra });

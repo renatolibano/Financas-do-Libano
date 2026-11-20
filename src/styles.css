@@ -1919,6 +1919,8 @@ h1{font-size:23px}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break){height:0!important;margin:0!important;border:0!important;break-after:page}
   .wordPage .wordRichBody .word-page-break:not(.word-section-break)::after,.wordPage .wordRichBody .word-page-break:not(.word-section-break) span{display:none!important}
   .wordPage .wordRichBody .pdf-import-page:last-of-type{break-after:auto}
+  .wordPage .wordRichBody:has(>.pdf-import-page){background:none!important}
+  .wordPage .wordRichBody:has(>.pdf-import-page)>.pdf-import-page+.pdf-import-page{margin-top:0!important}
 }
 .wordTableDialog{background:var(--bg-modal);border:1px solid var(--border);border-radius:14px;padding:20px;width:260px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 90px #000a}
 .wordTableDialog h3{margin:0;font-size:15px}
@@ -2079,6 +2081,9 @@ h1{font-size:23px}
 .wordRichBody .word-shape{display:inline-block;vertical-align:middle;line-height:0}
 /* PDF importado com layout fiel: cada página do PDF é um bloco do tamanho da página, sem margens extras */
 .wordRichBody:has(>.pdf-import-page){padding:0!important}
+/* folhas separadas como num editor: faixa escura (cor da mesa) entre uma página e a próxima */
+.wordRichBody:has(>.pdf-import-page){background:var(--pb-bg,#54575c)}
+.wordRichBody:has(>.pdf-import-page)>.pdf-import-page+.pdf-import-page{margin-top:18px}
 .wordRichBody .pdf-import-page{position:relative;overflow:hidden;background:#fff;color:#000;line-height:1}
 .wordRichBody .pdf-run{position:absolute;white-space:pre;line-height:1;margin:0;padding:0;font-kerning:none}
 .wordRichBody .word-shape.word-shape-selected{outline:2px dashed var(--accent);outline-offset:3px}

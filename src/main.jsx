@@ -22779,6 +22779,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const layer = gapLayerRef.current;
     const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (layer) layer.classList.remove("wgModel"); if (body) { body.__pageModel = null; if (body.style.minHeight) body.style.minHeight = ""; } };
     if (!body || body.closest(".wordPage-draft")) { clearGaps(); return; }
+    if (body.querySelector(":scope > .pdf-import-page")) { // PDF importado: cada folha é um bloco e a separação é por margem (CSS), sem a camada de faixas
+      clearGaps();
+      const pb = pageAreaRef.current ? getComputedStyle(pageAreaRef.current).backgroundColor : "";
+      if (pb) body.style.setProperty("--pb-bg", pb);
+      return;
+    }
     const brs = Array.from(body.querySelectorAll(":scope > .word-page-break:not(.word-section-break)"));
     const ph = currentPageDims().h;
     const sc = bodyScale();
@@ -25066,15 +25072,21 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       // Documento de páginas de PDF importadas: uma página por bloco (não depende de arredondamentos de 1 px); sobra de conteúdo depois do último bloco conta à parte.
       const pdfBlocks = body.querySelectorAll(":scope > .pdf-import-page");
       let pages = Math.max(1, Math.ceil((br.height - 2) / ph));
+      let pdfPage = 0;
       if (pdfBlocks.length) {
         let tail = false;
         for (let n = pdfBlocks[pdfBlocks.length - 1].nextElementSibling; n; n = n.nextElementSibling) {
           if (n.classList.contains("word-page-meta")) continue;
           if ((n.textContent || "").trim() || n.querySelector("img, table, svg")) { tail = true; break; }
         }
-        if (!tail) pages = pdfBlocks.length;
+        if (!tail) {
+          pages = pdfBlocks.length;
+          const mid = ar.top + ar.height / 2; // folhas separadas por margem: a página atual é o bloco sob o meio da tela
+          pdfPage = pdfBlocks.length;
+          for (let i = 0; i < pdfBlocks.length; i++) if (pdfBlocks[i].getBoundingClientRect().bottom >= mid) { pdfPage = i + 1; break; }
+        }
       }
-      let page = Math.floor((ar.top + ar.height / 2 - br.top) / ph) + 1;
+      let page = pdfPage || Math.floor((ar.top + ar.height / 2 - br.top) / ph) + 1;
       page = Math.min(Math.max(page, 1), pages);
       setPageInfo(p => (p.page === page && p.pages === pages ? p : { page, pages }));
       const s = window.getSelection();
