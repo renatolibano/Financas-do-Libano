@@ -3718,6 +3718,31 @@ function findTopLevelChild(el, node) {
   return cur && cur.parentNode === el ? cur : null;
 }
 
+// Contêiner "transparente" (div/section simples que só embrulha parágrafos, comum em texto colado ou importado):
+// o motor de páginas enxerga os parágrafos de dentro, senão o documento inteiro seria um único bloco.
+const PAGE_BLOCK_SEL = "p,div,h1,h2,h3,h4,h5,h6,ul,ol,table,blockquote,pre,hr,section,article";
+function isWrapperEl(el) {
+  if (!el || el.nodeType !== 1 || !/^(DIV|SECTION|ARTICLE|MAIN)$/.test(el.tagName)) return false;
+  if (/(^|\s)(word-|pdf-import)/.test(el.className || "") || el.dataset.section || el.id) return false;
+  if (!el.firstElementChild) return false;
+  for (const c of el.childNodes) {
+    if (c.nodeType === 3 && c.nodeValue.trim()) return false; // texto próprio: é um parágrafo, não contêiner
+    if (c.nodeType === 1 && c.tagName !== "BR" && !c.matches(PAGE_BLOCK_SEL)) return false; // mistura com inline
+  }
+  return true;
+}
+function flatPageBlocks(root) {
+  const out = [];
+  const walk = (parent) => { for (const c of parent.children) { if (isWrapperEl(c)) walk(c); else out.push(c); } };
+  walk(root);
+  return out;
+}
+function deepPageBlock(root, node) {
+  let cur = findTopLevelChild(root, node);
+  while (cur && isWrapperEl(cur)) { const inner = findTopLevelChild(cur, node); if (!inner) break; cur = inner; }
+  return cur;
+}
+
 // Hook com toda a lógica de formatação de um corpo editável (bodyRef).
 // onChange é chamado sempre que o conteúdo muda, pra quem estiver usando
 // agendar o autosave.
@@ -20086,8 +20111,9 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       if (!ph) return "";
       const r = el.getBoundingClientRect();
       const sc = el.offsetWidth ? r.width / el.offsetWidth : 1;
-      let blk = h; while (blk && blk.parentNode !== el) blk = blk.parentNode;
-      const mp = el.__pageModel?.pageByEl?.get(blk);
+      const pm = el.__pageModel?.pageByEl;
+      let blk = h; while (blk && blk !== el && !(pm && pm.has(blk))) blk = blk.parentNode;
+      const mp = pm?.get(blk);
       const n = mp != null ? mp + 1 : Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
       // respeita "Começar a numeração em" e o formato (romano) definidos em Configurar Página
       let bl = {};
@@ -22853,7 +22879,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       const prevDisplay = layer.style.display;
       layer.style.display = "none"; // sem faixas = altura natural
       body.style.minHeight = "";
-      const kids = Array.from(body.children).filter(inFlow);
+      const kids = flatPageBlocks(body).filter(inFlow);
       if (!kids.length) { layer.style.display = prevDisplay; return false; }
       const px = (v) => parseFloat(v) || 0;
       const bodyTop = body.getBoundingClientRect().top;
@@ -24000,12 +24026,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const pageCtl = (key, value) => {
     const body = bodyRef.current, sel = window.getSelection();
     if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return;
-    const r = sel.getRangeAt(0);
-    const first = findTopLevelChild(body, r.startContainer);
-    const last = findTopLevelChild(body, r.endContainer) || first;
-    if (!first) return;
-    const blocks = [];
-    for (let n = first; n; n = n.nextElementSibling) { if (!n.classList.contains("word-page-meta")) blocks.push(n); if (n === last) break; }
+    const blocks = pageCtlBlocks(body, sel.getRangeAt(0));
     if (!blocks.length) return;
     const all = blocks.every(b => b.dataset[key] === value);
     blocks.forEach(b => { if (all) delete b.dataset[key]; else b.dataset[key] = value; });
@@ -24024,15 +24045,23 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       alert(why);
     }, 500);
   };
+  // Blocos (parágrafos) tocados pela seleção, na ordem do documento, enxergando dentro de contêineres simples.
+  const pageCtlBlocks = (body, r) => {
+    const flat = flatPageBlocks(body).filter(n => !n.classList.contains("word-page-meta"));
+    const endNode = r.endContainer.nodeType === 1 && r.endOffset > 0 && r.endContainer.childNodes[r.endOffset - 1] ? r.endContainer.childNodes[r.endOffset - 1] : r.endContainer;
+    const startNode = r.startContainer.nodeType === 1 && r.startContainer.childNodes[r.startOffset] ? r.startContainer.childNodes[r.startOffset] : r.startContainer;
+    const a = flat.findIndex(n => n === deepPageBlock(body, startNode) || n.contains(startNode));
+    let z = flat.findIndex(n => n === deepPageBlock(body, endNode) || n.contains(endNode));
+    if (a < 0) return [];
+    if (z < a) z = a;
+    return flat.slice(a, z + 1);
+  };
   const pageCtlOn = (key, value) => {
     try {
       const body = bodyRef.current, sel = window.getSelection();
       if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return false;
-      const r = sel.getRangeAt(0);
-      const first = findTopLevelChild(body, r.startContainer), last = findTopLevelChild(body, r.endContainer) || first;
-      if (!first) return false;
-      for (let n = first; n; n = n.nextElementSibling) { if (!n.classList.contains("word-page-meta") && n.dataset[key] !== value) return false; if (n === last) break; }
-      return true;
+      const blocks = pageCtlBlocks(body, sel.getRangeAt(0));
+      return blocks.length > 0 && blocks.every(b => b.dataset[key] === value);
     } catch { return false; }
   };
   const rbm = (id, trigger, items, popClass) => (
