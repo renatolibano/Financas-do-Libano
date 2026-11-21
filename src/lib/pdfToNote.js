@@ -4,7 +4,7 @@ const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, 
 
 // Agrupa os itens de texto de uma página em linhas (mesma posição Y) e as
 // linhas em parágrafos (quando o espaçamento vertical é maior que o normal).
-export function pageToParagraphs(items) {
+export function pageToParagraphsY(items) {
   const rows = [];
   items.forEach((it) => {
     if (typeof it.str !== "string" || !it.transform) return;
@@ -32,19 +32,26 @@ export function pageToParagraphs(items) {
     })
     .filter((l) => l.text);
 
-  const paragraphs = [];
-  let cur = [];
+  const paragraphs = []; // { text, y }: y = linha de base da 1ª linha (coordenada do PDF, cresce para cima)
+  let cur = [], curY = 0;
   lines.forEach((l, i) => {
     const prev = lines[i - 1];
     if (prev && prev.y - l.y > Math.max(prev.h, l.h) * 1.8 && cur.length) {
-      paragraphs.push(cur.join(" "));
+      paragraphs.push({ text: cur.join(" "), y: curY });
       cur = [];
     }
+    if (!cur.length) curY = l.y;
     cur.push(l.text);
   });
-  if (cur.length) paragraphs.push(cur.join(" "));
+  if (cur.length) paragraphs.push({ text: cur.join(" "), y: curY });
   return paragraphs;
 }
+
+export function pageToParagraphs(items) {
+  return pageToParagraphsY(items).map((p) => p.text);
+}
+
+
 
 // Reproduz a página fielmente: uma linha por <div>, linhas em branco conforme o
 // espaçamento vertical original e espaços/recuos preservados (&nbsp;).

@@ -1,0 +1,17 @@
+import puppeteer from 'puppeteer-core'; import chromium from '@sparticuz/chromium';
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const b = await puppeteer.launch({ args: chromium.args.concat(['--no-sandbox']), executablePath: await chromium.executablePath(), headless: 'shell' });
+const p = await b.newPage(); await p.setViewport({ width: 1200, height: 900 });
+p.on('pageerror', e => console.log('PAGEERR', e.message.slice(0,200)));
+p.on('console', m => { if (['error','warning'].includes(m.type())) console.log('CONSOLE', m.type(), m.text().slice(0,160)); });
+await p.goto('http://localhost:8765/index.html'); await sleep(500);
+await p.evaluate(() => { localStorage.setItem('bookReflowOn','true'); window.__mountReader({ id: 'b1', title: 'Livro teste', author: 'X', file_path: 'x.pdf', current_page: 1, total_pages: 2, notes: [], favorite_pages: [], important_pages: [], favorite_excerpts: [], drawings: {} }); });
+await sleep(3500);
+await p.evaluate(() => [...document.querySelectorAll('button')].find(b => /Modo leitura/.test(b.title||''))?.click()); await sleep(3500);
+const info = () => p.evaluate(() => { const r=document.querySelector('.reflowPage'); if(!r) return { reflow: false, body: document.body.innerText.slice(0,200) }; return { reflow: true, order: [...r.children].filter(e=>e.tagName==='P'||e.tagName==='IMG').map(e=>e.tagName==='IMG'?('IMG '+e.naturalWidth+'x'+e.naturalHeight):e.textContent.slice(0,22)) }; });
+console.log('pág 1', JSON.stringify(await info()));
+await p.screenshot({ path: '/tmp/bt/kin1.png' });
+await p.evaluate(() => { const bs=[...document.querySelectorAll('button')]; bs.find(b=>/Próxima/.test(b.textContent))?.click(); }); await sleep(3000);
+console.log('pág 2?', JSON.stringify(await info()));
+await p.screenshot({ path: '/tmp/bt/kin2.png' });
+await b.close();

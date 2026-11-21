@@ -11,6 +11,7 @@
 //   breakBefore?,             // true | "next" | "odd" | "even": começa em nova página (capítulo)
 //   pageBreakAfter?,          // quebra manual depois do bloco
 //   kind?,                    // "break" = quebra manual como bloco próprio (altura ignorada)
+//   tail?,                    // px finais (margem inferior) que podem passar do fim da página, como no Word
 // }
 // opções = { pageHeight, minLines = 2 }
 
@@ -37,6 +38,8 @@ export function paginate(blocks, { pageHeight, minLines = 2 } = {}) {
     if (!where.has(b.id)) where.set(b.id, p);
     pages[p].push({ id: b.id, from, to, offset: used[p], height: h });
     used[p] += h;
+    // a margem inferior pode ultrapassar o fim da página: a página fica cheia, não estourada
+    if (used[p] > pageHeight && used[p] - pageHeight <= (b.tail || 0) + 1e-6) used[p] = pageHeight;
   };
   const room = () => pageHeight - used[p];
 
@@ -68,7 +71,7 @@ export function paginate(blocks, { pageHeight, minLines = 2 } = {}) {
     }
 
     const h = b.height;
-    if (h <= room()) { place(b, 0, b.lines ? b.lines.length : null, h); }
+    if (h - (b.tail || 0) <= room() + 1e-6) { place(b, 0, b.lines ? b.lines.length : null, h); }
     else if (b.lines && !b.keepTogether && b.lines.length > 1) {
       // divide por linhas, respeitando viúvas/órfãs
       let start = 0;
@@ -76,7 +79,7 @@ export function paginate(blocks, { pageHeight, minLines = 2 } = {}) {
       let safety = total + 5;
       while (start < total && safety-- > 0) {
         let n = 0, acc = 0;
-        while (start + n < total && acc + b.lines[start + n] <= room()) { acc += b.lines[start + n]; n++; }
+        while (start + n < total && acc + b.lines[start + n] - (start + n === total - 1 ? (b.tail || 0) : 0) <= room() + 1e-6) { acc += b.lines[start + n]; n++; }
         const left = total - start - n;
         if (left === 0) { place(b, start, total, acc); start = total; break; }
         if (b.widowControl !== false) {

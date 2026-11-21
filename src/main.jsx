@@ -54,7 +54,8 @@ import { parseRoute, buildPath } from "./lib/router";
 import { useCachedImageUrl, clearAllImageCache } from "./lib/imageCache";
 import { pdfjsLib, pdfWasmUrl } from "./lib/pdf";
 import { downloadNotePdf, downloadAllNotesPdf } from "./lib/notesPdf";
-import { pdfFileToNote, pageToParagraphs } from "./lib/pdfToNote";
+import { pdfFileToNote, pageToParagraphs, pageToParagraphsY } from "./lib/pdfToNote";
+import { pageImagesForReflow } from "./lib/pdfReflowImages";
 // Tipos aceitos ao importar notas (extensões + tipos MIME, para o seletor de arquivos do Android também mostrá-los).
 const NOTE_IMPORT_ACCEPT = ".pdf,.txt,.md,.markdown,.docx,.odt,.rtf,.html,.htm,.tex,application/pdf,text/plain,text/markdown,text/html,application/rtf,text/rtf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/x-tex";
 import { findExcerptRanges, excerptLineRects } from "./lib/excerptHighlight";
@@ -4284,8 +4285,10 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
   const [rf, setRf] = usePersistentState("bookReflowPrefs", { size: 20, lh: 1.7, width: 640, font: "serif", align: "justify", theme: "sepia" });
   const [rfOpen, setRfOpen] = useState(false);
   const [reflowParas, setReflowParas] = useState(null); // null = carregando
+  const [reflowImgs, setReflowImgs] = useState([]); // imagens da página [{src, w, h, after}] — "after" = índice do parágrafo que vem antes (-1 = no topo)
   const reflowRef = useRef(null);
-  const reflowCache = useRef(new Map());
+  const reflowCache = useRef(new Map()); // página -> { paras, ys }
+  const reflowImgCache = useRef(new Map());
   // Páginas já contadas como lidas neste ciclo de leitura (cada página conta
   // uma vez). Livros antigos (read_pages nulo) começam com 1..página atual.
   const readPagesRef = useRef(new Set(book.read_pages ?? Array.from({ length: Math.max(0, (book.current_page || 1)) }, (_, n) => n + 1)));
@@ -4437,16 +4440,33 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
     if (!pdf || !reflow) return;
     let active = true;
     const cached = reflowCache.current.get(pageNum);
-    if (cached) { setReflowParas(cached); } else {
+    const imgCached = reflowImgCache.current.get(pageNum);
+    setReflowImgs(imgCached || []);
+    // Imagens da página (figuras do livro), posicionadas entre os parágrafos pela altura em que aparecem no PDF.
+    const loadImgs = async (page, ys) => {
+      if (imgCached) return;
+      try {
+        const imgs = await pageImagesForReflow(page);
+        const placed = imgs.map(im => ({ ...im, after: ys.filter(y => y > im.yTop - 2).length - 1 }));
+        reflowImgCache.current.set(pageNum, placed);
+        if (active) setReflowImgs(placed);
+      } catch (e) { /* sem imagens: o texto continua normal */ }
+    };
+    if (cached) {
+      setReflowParas(cached.paras);
+      if (!imgCached) (async () => { try { await loadImgs(await pdf.getPage(pageNum), cached.ys); } catch (e) {} })();
+    } else {
       setReflowParas(null);
       (async () => {
         try {
           const page = await pdf.getPage(pageNum);
           const tc = await page.getTextContent();
           // junta palavras hifenizadas na quebra de linha ("harmo- niosamente")
-          const paras = pageToParagraphs(tc.items).map(t => t.replace(/(\p{L})-\s(\p{Ll})/gu, "$1$2"));
-          reflowCache.current.set(pageNum, paras);
+          const py = pageToParagraphsY(tc.items).map(p => ({ ...p, text: p.text.replace(/(\p{L})-\s(\p{Ll})/gu, "$1$2") }));
+          const paras = py.map(p => p.text), ys = py.map(p => p.y);
+          reflowCache.current.set(pageNum, { paras, ys });
           if (active) setReflowParas(paras);
+          await loadImgs(page, ys);
         } catch (e) { if (active) setReflowParas([]); }
       })();
     }
@@ -5230,8 +5250,14 @@ function PdfReader({ book, onClose, onProgress, onNotesChange, onFavoritesChange
                 style={{maxWidth: rf.width, fontSize: rf.size, lineHeight: rf.lh, textAlign: rf.align}}
                 onMouseUp={handleReflowSelect} onTouchEnd={handleReflowSelect} onContextMenu={blockNativeSelectionMenu}>
                 {reflowParas === null && <p>Carregando texto...</p>}
-                {reflowParas && reflowParas.length === 0 && <p>Esta página não tem texto selecionável (PDF escaneado?). Volte ao PDF original.</p>}
-                {reflowParas && reflowParas.map((t, i) => <p key={i}>{t}</p>)}
+                {reflowParas && reflowParas.length === 0 && reflowImgs.length === 0 && <p>Esta página não tem texto selecionável (PDF escaneado?). Volte ao PDF original.</p>}
+                {reflowParas && reflowImgs.filter(im => im.after < 0).map((im, j) => <img key={"t" + j} className="reflowImg" src={im.src} alt="" loading="lazy" draggable={false}/>)}
+                {reflowParas && reflowParas.map((t, i) => (
+                  <React.Fragment key={i}>
+                    <p>{t}</p>
+                    {reflowImgs.filter(im => im.after === i).map((im, j) => <img key={j} className="reflowImg" src={im.src} alt="" loading="lazy" draggable={false}/>)}
+                  </React.Fragment>
+                ))}
                 {excerptLayer}
               </div>
             )}
@@ -18939,7 +18965,7 @@ const SENSITIVITY_LABELS = ["Nenhum", "Pessoal", "Geral", "Confidencial", "Altam
 // d'água. "app" é o padrão e usa a própria paleta do app (var(--accent));
 // as demais são variações fixas, do jeito que o Word oferece uma galeria.
 const WORD_THEMES = [
-  { key: "app", label: "Padrão do app", accent: "var(--accent)" },
+  { key: "app", label: "Padrão", accent: "currentColor", swatch: "#1a1a1a" }, // títulos na cor do texto (antes seguia o vermelho do app, que tingia qualquer estilo)
   { key: "azul", label: "Azul", accent: "#2f6fed" },
   { key: "verde", label: "Verde", accent: "#1f9d55" },
   { key: "grafite", label: "Grafite", accent: "#3a3f4b" },
@@ -19725,8 +19751,40 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       // de celular facilmente passaria de vários MB em base64 dentro do
       // documento, pesando tanto pra salvar quanto pra abrir depois.
       const dataUrl = await resizeImageToDataUrl(file, 1000, 1400, 0.75);
-      bodyRef.current?.focus();
+      const dim = await new Promise(res => { const im = new Image(); im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = () => res(null); im.src = dataUrl; });
+      const body = bodyRef.current;
+      body?.focus();
+      const before = new Set(body ? body.querySelectorAll("img") : []);
       document.execCommand("insertImage", false, dataUrl);
+      // Dimensiona a imagem para caber na folha em que o cursor está (antes entrava no tamanho original e, quase sempre, não cabia no
+      // espaço que sobrava e ia para a folha seguinte).
+      try {
+        const img = body && Array.from(body.querySelectorAll("img")).find(i => !before.has(i));
+        if (img && dim && dim.w && dim.h) {
+          const cs = getComputedStyle(body);
+          const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
+          const contentW = body.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+          const ph = pageHeightPx || 1123, contentH = ph - padT - padB;
+          const br = body.getBoundingClientRect();
+          const sc = br.width && body.offsetWidth ? br.width / body.offsetWidth : 1;
+          // Mede sem as faixas entre folhas (layout contínuo) e ajusta até a imagem terminar dentro da folha do cursor.
+          const layer = pageRef.current?.querySelector(".wordGapLayer");
+          const prevDisp = layer ? layer.style.display : "";
+          if (layer) layer.style.display = "none";
+          const place = (h) => { let w = dim.w * h / dim.h; if (w > contentW) w = contentW; img.style.width = Math.round(w) + "px"; img.style.height = "auto"; img.style.maxWidth = "100%"; };
+          const metrics = () => { const r = img.getBoundingClientRect(); const top = (r.top - br.top) / sc, bot = (r.bottom - br.top) / sc; const pg = Math.max(0, Math.floor((top - padT + 1) / ph)); return { top, bot, limit: (pg + 1) * ph - padB - 4 }; };
+          let h = Math.min(contentH, dim.h);
+          place(h);
+          for (let i = 0; i < 5; i++) {
+            const m = metrics();
+            if (m.bot <= m.limit + 0.5) break;
+            const roomNow = m.limit - m.top;
+            if (roomNow < 240) { place(Math.min(contentH * 0.6, dim.h)); break; } // quase sem espaço: tamanho moderado (vai para a folha seguinte)
+            h = Math.min(h, roomNow); place(h);
+          }
+          if (layer) layer.style.display = prevDisp;
+        }
+      } catch {}
       onChange();
     } catch (e) {
       alert("Não foi possível inserir a imagem: " + (e.message || e));
@@ -22898,6 +22956,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
         }
         const ds = k.dataset, tag = k.tagName;
         const b = { id: i, height: Math.max(0, (i + 1 < kids.length ? tops[i + 1] : lastBottom) - tops[i]) };
+        b.tail = Math.min(40, parseFloat(getComputedStyle(k).marginBottom) || 0); // a margem inferior pode passar do fim da folha, como no Word
         const heading = /^H[1-6]$/.test(tag);
         if (heading) { b.keepTogether = true; if (ds.keepNext !== "0") b.keepNext = true; }
         if (ds.keepNext === "1") b.keepNext = true;
@@ -23073,6 +23132,107 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     syncPageBreaks();
     handleBodyInput();
     blank.scrollIntoView?.({ block: "center" });
+  };
+
+  // Excluir Página: apaga todo o conteúdo da folha em que está o cursor (e a quebra manual que a fecha), como "Excluir página" do Word.
+  // Em PDF importado, remove a folha do PDF. Ctrl+Z desfaz.
+  const deleteCurrentPage = () => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.focus();
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !body.contains(sel.anchorNode)) { alert("Coloque o cursor na página que deseja excluir."); return; }
+    const rg0 = sel.getRangeAt(0);
+    const anchorBlock = deepPageBlock(body, rg0.startContainer);
+    // PDF importado: cada folha é um bloco
+    const pdfPage = anchorBlock && anchorBlock.classList?.contains("pdf-import-page") ? anchorBlock : null;
+    if (pdfPage) {
+      const all = Array.from(body.querySelectorAll(":scope > .pdf-import-page"));
+      if (!confirm(`Excluir a página ${all.indexOf(pdfPage) + 1} do PDF importado?`)) return;
+      const next = pdfPage.nextElementSibling || pdfPage.previousElementSibling;
+      pdfPage.remove();
+      if (!body.querySelector(":scope > .pdf-import-page")) { const d = document.createElement("div"); d.innerHTML = "<br>"; body.append(d); }
+      const r = document.createRange(); const t = next || body.firstElementChild; r.selectNodeContents(t); r.collapse(true); sel.removeAllRanges(); sel.addRange(r);
+      syncPageBreaks(); handleBodyInput();
+      return;
+    }
+    const ph = currentPageDims().h, sc = bodyScale();
+    const cs = getComputedStyle(body);
+    const padT = parseFloat(cs.paddingTop) || 0;
+    const bodyTop = body.getBoundingClientRect().top;
+    const rel = (y) => (y - bodyTop) / sc;
+    const pageOf = (y) => Math.floor((rel(y) - padT + 1) / ph); // folha de uma linha
+    const isBreak = (n) => n.classList.contains("word-page-break") && !n.classList.contains("word-section-break");
+    const lineTops = (b) => {
+      const r = document.createRange(); r.selectNodeContents(b);
+      const out = [];
+      for (const x of r.getClientRects()) { if (x.height < 1) continue; if (!out.some(o => Math.abs(o - x.top) < 4)) out.push(x.top); }
+      return out.length ? out : [b.getBoundingClientRect().top];
+    };
+    // folha do cursor
+    const caretRects = Array.from(rg0.getClientRects()).filter(x => x.height > 1);
+    let k;
+    if (caretRects.length) k = pageOf(caretRects[0].top);
+    else if (anchorBlock) k = pageOf(lineTops(anchorBlock)[0]);
+    else return;
+    k = Math.max(0, k);
+    const blocks = flatPageBlocks(body).filter(n => !n.classList.contains("word-page-meta") && !n.classList.contains("word-ink-layer") && !n.classList.contains("word-img-spacer") && !n.classList.contains("word-section-break") && !(n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    const toRemove = [], partial = [];
+    blocks.forEach((b) => {
+      const r = b.getBoundingClientRect();
+      if (rel(r.bottom) < (k - 1) * ph || rel(r.top) > (k + 2) * ph) return; // longe da folha
+      const pages = isBreak(b) ? [pageOf(r.top)] : lineTops(b).map(pageOf);
+      if (!pages.includes(k)) return;
+      if (pages.every(p => p === k)) toRemove.push(b); else partial.push(b);
+    });
+    if (!toRemove.length && !partial.length) { alert("Não há conteúdo nesta página."); return; }
+    if (!confirm(`Excluir todo o conteúdo da página ${k + 1}?`)) return;
+    // blocos que atravessam a folha: apaga só o trecho de texto que está nela
+    const charPage = (node, o) => {
+      const rr = document.createRange();
+      for (let i = o; i < Math.min(node.length, o + 6); i++) {
+        rr.setStart(node, i); rr.setEnd(node, i + 1);
+        const q = Array.from(rr.getClientRects()).find(x => x.height > 1);
+        if (q) return pageOf(q.top);
+      }
+      return null;
+    };
+    partial.forEach((b) => {
+      const w = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+      let sN = null, sO = 0, eN = null, eO = 0, n;
+      while ((n = w.nextNode())) {
+        if (!n.length) continue;
+        const pf = charPage(n, 0); const pl = charPage(n, Math.max(0, n.length - 1));
+        if (pf == null && pl == null) continue;
+        const first = pf ?? pl, last = pl ?? pf;
+        if (last < k || first > k) continue;
+        let lo = 0, hi = n.length; // primeiro offset com folha >= k
+        if (first < k) { let a = 0, z = n.length - 1; while (a < z) { const m = (a + z) >> 1; const pm = charPage(n, m); if (pm != null && pm < k) a = m + 1; else z = m; } lo = a; }
+        if (last > k) { let a = 0, z = n.length - 1; while (a < z) { const m = (a + z) >> 1; const pm = charPage(n, m); if (pm != null && pm <= k) a = m + 1; else z = m; } hi = a; }
+        if (!sN) { sN = n; sO = lo; }
+        eN = n; eO = hi;
+      }
+      if (sN && eN) { const d = document.createRange(); d.setStart(sN, sO); d.setEnd(eN, eO); d.deleteContents(); }
+    });
+    // ponto para o cursor: o bloco que vem depois dos removidos
+    const removed = new Set(toRemove);
+    const idx = blocks.findIndex(b => removed.has(b));
+    const refAfter = idx >= 0 ? blocks.slice(idx).find(b => !removed.has(b)) : null;
+    const refBefore = idx > 0 ? blocks.slice(0, idx).reverse().find(b => !removed.has(b)) : null;
+    toRemove.forEach(b => b.remove());
+    body.querySelectorAll(":scope > div:empty, :scope > p:empty").forEach(e => { if (!e.querySelector("br,img")) e.remove(); });
+    const live = () => Array.from(body.children).filter(n => !n.classList.contains("word-page-meta") && !n.classList.contains("word-ink-layer") && !n.classList.contains("word-img-spacer") && !(n.tagName === "IMG" && n.classList.contains("word-img-free")));
+    // quebra manual solta no fim do documento criaria uma página em branco
+    let L = live(); while (L.length && isBreak(L[L.length - 1]) && L.length > 1) { L[L.length - 1].remove(); L = live(); }
+    if (!L.length) { const d = document.createElement("div"); d.innerHTML = "<br>"; body.append(d); L = live(); }
+    const target = (refAfter && body.contains(refAfter) && refAfter) || (refBefore && body.contains(refBefore) && refBefore) || L[0];
+    const r = document.createRange();
+    r.selectNodeContents(target);
+    r.collapse(target !== refBefore); // depois dos removidos: início do bloco seguinte; senão: fim do anterior
+    sel.removeAllRanges(); sel.addRange(r);
+    syncPageBreaks();
+    handleBodyInput();
+    target.scrollIntoView?.({ block: "center" });
   };
 
   // Clicar na faixa/margem entre páginas (a quebra é contenteditable=false e ocupa essa área) deixava o cursor preso na borda
@@ -24859,7 +25019,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     ["Marcadores", () => fmt.exec("insertUnorderedList")], ["Numeração", () => fmt.exec("insertOrderedList")], ["Aumentar Recuo", () => fmt.exec("indent")], ["Diminuir Recuo", () => fmt.exec("outdent")],
     ["Título 1", () => fmt.applyHeading("H1")], ["Título 2", () => fmt.applyHeading("H2")], ["Título 3", () => fmt.applyHeading("H3")], ["Parágrafo Normal", () => fmt.applyHeading("P")],
     ["Localizar", () => focusFind("find")], ["Substituir", () => focusFind("replace")], ["Selecionar Tudo", () => fmt.selectAll()],
-    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Nova Página Acima", () => insertPage("above")], ["Nova Página Abaixo", () => insertPage("below")], ["Inserir Sumário", () => fmt.insertTOC()],
+    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Nova Página Acima", () => insertPage("above")], ["Nova Página Abaixo", () => insertPage("below")], ["Excluir Página", () => deleteCurrentPage()], ["Inserir Sumário", () => fmt.insertTOC()],
     ["Inserir Nota de Rodapé", () => fmt.insertFootnote()], ["Inserir Nota de Fim", () => fmt.insertEndnote()], ["Inserir Gráfico…", () => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })],
     ["Inserir Assinatura", () => fmt.insertSignatureLine()], ["Data e Hora", () => fmt.insertDateTime()], ["Caixa de Texto", () => fmt.insertTextBox()],
     ["Controlar Alterações", () => toggleTrackChanges()], ["Contagem de Palavras", () => setWordCountDialogOpen(true)], ["Ler em Voz Alta", () => toggleReadAloud()],
@@ -25768,6 +25928,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </>)}
                 <RbSm icon={FilePlus} label="Página Acima" tip="Nova Página Acima" desc="Insere uma página em branco logo acima da página onde está o cursor." onClick={() => insertPage("above")}/>
                 <RbSm icon={FilePlus2} label="Página Abaixo" tip="Nova Página Abaixo (Ctrl+Enter)" desc="Insere uma página em branco logo abaixo da página onde está o cursor." onClick={() => insertPage("below")}/>
+                <RbSm icon={Trash2} label="Excluir Página" tip="Excluir Página" desc="Apaga todo o conteúdo da página onde está o cursor. Ctrl+Z desfaz." onClick={deleteCurrentPage}/>
               </div>
             </RbGroup>
             <RbGroup label="Tabelas">
@@ -25948,7 +26109,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 {themeOpen && <div className="wordDropdownMenu wordThemeMenu">
                   {WORD_THEMES.map(t => (
                     <button key={t.key} className={themeKey === t.key ? "active" : ""} onClick={() => applyTheme(t.key)}>
-                      <span className="wordThemeSwatch" style={{ background: t.accent }}/> {t.label}
+                      <span className="wordThemeSwatch" style={{ background: t.swatch || t.accent }}/> {t.label}
                     </button>
                   ))}
                   <ColorMore label="Cor personalizada…" current={/^#/.test(themeKey) ? themeKey : undefined} onPick={applyTheme}/>
@@ -25958,7 +26119,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <RbGroup label="Formatação do Documento" wide>
               <div className="rbStack">
                 {rbm("themecolors", (t) => <RbSm icon={Palette} label="Cores" chevron tip="Cores do Tema" desc="Troca o conjunto de cores usado nos títulos e destaques do documento." onClick={t}/>, <>
-                  {WORD_THEMES.map(th => <button key={th.key} className={themeKey === th.key ? "active" : ""} onClick={() => applyTheme(th.key)}><span className="wordThemeSwatch" style={{ background: th.accent }}/> {th.label}</button>)}
+                  {WORD_THEMES.map(th => <button key={th.key} className={themeKey === th.key ? "active" : ""} onClick={() => applyTheme(th.key)}><span className="wordThemeSwatch" style={{ background: th.swatch || th.accent }}/> {th.label}</button>)}
                   <ColorMore label="Cor personalizada…" current={/^#/.test(themeKey) ? themeKey : undefined} onPick={applyTheme}/>
                 </>)}
                 {rbm("themefonts", (t) => <RbSm icon={CaseSensitive} label="Fontes" chevron tip="Fontes do Tema" desc="Aplica uma mesma fonte a todos os blocos do documento." onClick={t}/>, <>
@@ -26029,6 +26190,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <div className="wordDropdownEmpty">Quebras de Página</div>
                 <button onClick={() => { insertPage("above"); setRbMenu(null); }}>Nova página acima</button>
                 <button onClick={() => { insertPage("below"); setRbMenu(null); }}>Nova página abaixo</button>
+                <button onClick={() => { deleteCurrentPage(); setRbMenu(null); }}>Excluir página atual</button>
                 <button onClick={() => { fmt.insertPageBreak(); applyBlockStyle("chapter"); setRbMenu(null); }}>Novo capítulo (página + título)</button>
                 <div className="wordDropdownEmpty">Quebras de Seção</div>
                 <button onClick={() => fmt.insertSectionBreak("nextpage")}>Próxima Página</button>

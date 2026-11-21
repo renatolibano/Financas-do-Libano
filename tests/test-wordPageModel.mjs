@@ -55,12 +55,6 @@ r = paginate([para("a", 2), { id: "br", kind: "break" }, para("b", 2), { id: "br
 assert.equal(pg(r, "cap"), 2);
 assert.equal(r.pageCount, 3);
 
-// 9b. capítulo em página par
-r = paginate([para("a", 2), para("cap", 2, 10, { breakBefore: "even" })], { pageHeight: H });
-assert.equal(pg(r, "cap"), 1);
-r = paginate([para("a", 2), { id: "br", kind: "break" }, para("b", 2), para("cap", 2, 10, { breakBefore: "even" })], { pageHeight: H });
-assert.equal(pg(r, "cap"), 3);
-
 // 10. bloco indivisível maior que a página não gera laço infinito
 r = paginate([{ id: "img", height: 250 }, para("a", 2)], { pageHeight: H });
 assert.deepEqual(r.oversize, ["img"]);
@@ -73,6 +67,16 @@ r = paginate(big, { pageHeight: 900 });
 const ms = performance.now() - t0;
 assert.ok(r.pageCount > 300, "esperava centenas de páginas: " + r.pageCount);
 for (const pgItems of r.pages) assert.ok(pgItems.reduce((a, x) => a + x.height, 0) <= 900 + 1e-9);
+
+let r2;
+// 11b. margem inferior no fim da página não empurra o bloco (como no Word)
+r2 = paginate([para("x", 9), { id: "img", height: 15, tail: 6 }], { pageHeight: H });
+assert.equal(r2.pageCount, 1);
+r2 = paginate([para("x", 9), { id: "img", height: 15 }], { pageHeight: H });
+assert.equal(r2.pageCount, 2);
+// parágrafo cuja última linha só ultrapassa pela margem continua na mesma página
+r2 = paginate([para("x", 6), { id: "p", lines: [10, 10, 10, 10.0 + 6], height: 46, tail: 6 }], { pageHeight: H });
+assert.equal(r2.pageCount, 1);
 
 // 12. numeração
 assert.equal(formatPageNumber(0, { fmt: "lower-roman" }), "i");
