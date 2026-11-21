@@ -1740,6 +1740,10 @@ h1{font-size:23px}
 .wordDropdownBtn{display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;font-size:11.5px;color:var(--text-2);white-space:nowrap}
 .wordDropdownBtn:hover{background:var(--bg-surface-3);color:var(--text-1)}
 .wordDropdownMenu{position:absolute;top:calc(100% + 6px);left:0;z-index:8;background:var(--bg-modal);border:1px solid var(--border);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:1px;min-width:150px;max-height:260px;overflow-y:auto;box-shadow:0 20px 60px #000a}
+.wordDropdownMenu{z-index:60}
+.rbPop{z-index:60}
+.wordPageCtlMenu{min-width:240px;max-height:none;overflow:visible}
+.wordPageCtlMenu button{white-space:nowrap}
 .wordDropdownMenu button{padding:7px 9px;border-radius:6px;text-align:left;font-size:12.5px;color:var(--text-1)}
 .wordDropdownMenu button:hover{background:var(--bg-hover-2)}
 .wordDropdownMenu button.active{color:var(--accent);font-weight:700}
@@ -2410,7 +2414,7 @@ h1{font-size:23px}
 .rbCheck{display:flex;align-items:center;gap:6px;height:22px;font-size:11px;color:var(--text-2);cursor:pointer;white-space:nowrap}
 .rbCheck input{accent-color:var(--accent);margin:0}
 .rbGrid3{display:grid;grid-template-columns:repeat(3,26px);gap:2px;align-content:center}
-.rbPop{z-index:9}
+.rbPop{z-index:60}
 .rbHelpList{display:flex;flex-direction:column;gap:3px;min-width:240px}
 .rbHelpRow{display:flex;justify-content:space-between;gap:16px;font-size:12px;color:var(--text-2)}
 .rbHelpRow b{color:var(--text-1);font-weight:600}

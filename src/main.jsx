@@ -22778,9 +22778,11 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const body = bodyRef.current;
     const layer = gapLayerRef.current;
     const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (layer) layer.classList.remove("wgModel"); if (body) { body.__pageModel = null; if (body.style.minHeight) body.style.minHeight = ""; } };
-    if (!body || body.closest(".wordPage-draft")) { clearGaps(); return; }
+    if (body) body.__pageWhy = "";
+    if (!body || body.closest(".wordPage-draft")) { if (body) body.__pageWhy = "layout"; clearGaps(); return; }
     if (body.querySelector(":scope > .pdf-import-page")) { // PDF importado: cada folha é um bloco e a separação é por margem (CSS), sem a camada de faixas
       clearGaps();
+      body.__pageWhy = "pdf";
       const pb = pageAreaRef.current ? getComputedStyle(pageAreaRef.current).backgroundColor : "";
       if (pb) body.style.setProperty("--pb-bg", pb);
       return;
@@ -22817,7 +22819,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     // As linhas do texto desviam das faixas, então nada fica sobre a margem inferior/superior nem sobre o espaço entre páginas.
     const paged = !!layer && viewMode === "print" && !window.matchMedia("(max-width:760px)").matches && cs.writingMode === "horizontal-tb" && cs.columnCount === "auto";
     const C = ph - padTop - padBot;
-    if (!paged || C < 120) { clearGaps(); if (brs.length) layoutBreaks(); return; }
+    if (!paged || C < 120) { body.__pageWhy = "layout"; clearGaps(); if (brs.length) layoutBreaks(); return; }
     layer.style.setProperty("--wg-pb", padBot + "px");
     if (bg) layer.style.setProperty("--pb-bg", bg);
     const sig = [ph, padTop, padBot].join("|");
@@ -22897,7 +22899,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       });
       if (blocks.length && blocks[0].kind !== "break" && tops[0] > padTop) blocks[0].height += tops[0] - padTop; // margem superior do 1º bloco
       const res = paginate(blocks, { pageHeight: C });
-      if (res.oversize.length) { layer.style.display = prevDisplay; return false; } // bloco indivisível maior que a página
+      if (res.oversize.length) { layer.style.display = prevDisplay; body.__pageWhy = "oversize"; return false; } // bloco indivisível maior que a página
       const np = res.pageCount;
       const msig = ["m", ph, padTop, padBot, np, res.used.map(u => Math.round(u * 10)).join(",")].join("|");
       if (layer.dataset.sig !== msig) {
@@ -22916,7 +22918,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       body.style.minHeight = np * ph + "px";
       layer.style.display = prevDisplay;
       const need = Math.max(1, Math.ceil(contentBottom() / ph));
-      if (Math.abs(need - np) > 1) { console.info("[Libano] motor de páginas (modelo): previsto", np, "obtido", need, "- usando o clássico"); return false; }
+      if (Math.abs(need - np) > 1) { console.info("[Libano] motor de páginas (modelo): previsto", np, "obtido", need, "- usando o clássico"); body.__pageWhy = "mismatch"; return false; }
       const pageByEl = new Map();
       kids.forEach((k, i) => pageByEl.set(k, res.where.get(i)));
       body.__pageModel = { pageByEl, pageCount: np };
@@ -22924,7 +22926,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     };
     if (pageEngine === "model") {
       let applied = false;
-      try { applied = layoutWithPageModel(); } catch (err) { console.warn("[Libano] motor de páginas (modelo) falhou, usando o clássico:", err); }
+      try { applied = layoutWithPageModel(); } catch (err) { console.warn("[Libano] motor de páginas (modelo) falhou, usando o clássico:", err); body.__pageWhy = "error"; }
       if (applied) return;
       clearGaps();
     }
@@ -24009,6 +24011,29 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     blocks.forEach(b => { if (all) delete b.dataset[key]; else b.dataset[key] = value; });
     if (pageEngine !== "model") setPageEngine("model"); // o controle só tem efeito no motor Novo
     handleBodyInput();
+    if (all) return;
+    // Se o motor Novo não puder paginar este documento, diz o motivo em vez de não fazer nada.
+    setTimeout(() => {
+      const b = bodyRef.current;
+      if (!b || b.__pageModel) return;
+      const why = {
+        pdf: "Este documento é um PDF importado: as páginas já vêm prontas e não se reorganizam. O controle de página vale para textos digitados, colados ou importados de Word.",
+        oversize: "Há uma tabela ou imagem maior que uma página neste documento. Nesse caso o motor de páginas Novo ainda não consegue paginar e o controle não tem efeito. Reduza o elemento para caber numa página.",
+        layout: "O controle de página só funciona no Layout de Impressão, em tela larga e com a página sem colunas.",
+      }[b.__pageWhy] || "Não foi possível calcular as páginas deste documento com o motor Novo (ele voltou ao Clássico), então o controle não teve efeito.";
+      alert(why);
+    }, 500);
+  };
+  const pageCtlOn = (key, value) => {
+    try {
+      const body = bodyRef.current, sel = window.getSelection();
+      if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return false;
+      const r = sel.getRangeAt(0);
+      const first = findTopLevelChild(body, r.startContainer), last = findTopLevelChild(body, r.endContainer) || first;
+      if (!first) return false;
+      for (let n = first; n; n = n.nextElementSibling) { if (!n.classList.contains("word-page-meta") && n.dataset[key] !== value) return false; if (n === last) break; }
+      return true;
+    } catch { return false; }
   };
   const rbm = (id, trigger, items, popClass) => (
     <RbMenu id={id} menu={rbMenu} setMenu={setRbMenu} trigger={trigger} popClass={popClass}>{items}</RbMenu>
@@ -26008,13 +26033,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             </RbGroup>
             <RbGroup label="Paginação">
               {rbm("pagectl", (t) => <RbBig icon={Rows3} label={"Controle de\nPágina"} chevron tip="Controle de Página" desc="Define como o parágrafo se comporta nas quebras de página (usa o motor de páginas Novo, que é ativado ao escolher uma opção)." onClick={t}/>, <>
-                <button onClick={() => pageCtl("keepTogether", "1")}>Manter linhas juntas</button>
-                <button onClick={() => pageCtl("keepNext", "1")}>Manter com o próximo</button>
-                <button onClick={() => pageCtl("widow", "off")}>Sem controle de viúvas e órfãs</button>
-                <button onClick={() => pageCtl("chapter", "next")}>Iniciar em nova página</button>
-                <button onClick={() => pageCtl("chapter", "odd")}>Iniciar em página ímpar</button>
-                <button onClick={() => pageCtl("chapter", "even")}>Iniciar em página par</button>
-              </>)}
+                {[["keepTogether", "1", "Manter linhas juntas"], ["keepNext", "1", "Manter com o próximo"], ["widow", "off", "Sem controle de viúvas e órfãs"], ["chapter", "next", "Iniciar em nova página"], ["chapter", "odd", "Iniciar em página ímpar"], ["chapter", "even", "Iniciar em página par"]].map(([k, v, l]) => (
+                  <button key={k + v} className={pageCtlOn(k, v) ? "active" : ""} onClick={() => pageCtl(k, v)}>{pageCtlOn(k, v) ? "✓ " : ""}{l}</button>
+                ))}
+              </>, "wordDropdownMenu wordPageCtlMenu")}
             </RbGroup>
             <RbGroup label="Organizar" wide>
               {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página: em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
