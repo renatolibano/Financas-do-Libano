@@ -22973,12 +22973,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (rect.bottom < ar.top || rect.top > ar.bottom) host.scrollIntoView({ block: "center" });
   };
   const pbRaf = useRef(0);
+  const pbTimer = useRef(0);
   const schedulePageBreakSync = () => {
     cancelAnimationFrame(pbRaf.current);
-    pbRaf.current = requestAnimationFrame(() => {
+    clearTimeout(pbTimer.current);
+    const run = () => {
       syncPageBreaks();
       if (typingRef.current) { typingRef.current = false; keepCaretVisible(); setTimeout(keepCaretVisible, 60); }
-    });
+    };
+    // Documento grande (~140+ páginas): o recálculo completo leva centenas de ms; espera uma pausa na digitação em vez de rodar a cada tecla.
+    if ((bodyRef.current?.childElementCount || 0) > 1200) pbTimer.current = setTimeout(run, 160);
+    else pbRaf.current = requestAnimationFrame(run);
   };
   useEffect(() => {
     const body = bodyRef.current;
@@ -22987,7 +22992,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     document.fonts?.ready?.then(schedulePageBreakSync).catch?.(() => {});
     window.addEventListener("resize", schedulePageBreakSync);
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
-    return () => { clearTimeout(t); cancelAnimationFrame(pbRaf.current); if (body) body.__syncPageBreaks = null; window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
+    return () => { clearTimeout(t); clearTimeout(pbTimer.current); cancelAnimationFrame(pbRaf.current); if (body) body.__syncPageBreaks = null; window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine]);
 
@@ -23988,6 +23993,23 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     } catch (err) { alert(err?.message || "Falha ao reconhecer a escrita."); }
   };
 
+  // Controle de paginação por parágrafo (lido pelo motor de páginas "Novo"): atributos data-* no bloco de nível superior.
+  // Clicar de novo com o mesmo valor em todos os blocos selecionados remove o controle.
+  const pageCtl = (key, value) => {
+    const body = bodyRef.current, sel = window.getSelection();
+    if (!body || !sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return;
+    const r = sel.getRangeAt(0);
+    const first = findTopLevelChild(body, r.startContainer);
+    const last = findTopLevelChild(body, r.endContainer) || first;
+    if (!first) return;
+    const blocks = [];
+    for (let n = first; n; n = n.nextElementSibling) { if (!n.classList.contains("word-page-meta")) blocks.push(n); if (n === last) break; }
+    if (!blocks.length) return;
+    const all = blocks.every(b => b.dataset[key] === value);
+    blocks.forEach(b => { if (all) delete b.dataset[key]; else b.dataset[key] = value; });
+    if (pageEngine !== "model") setPageEngine("model"); // o controle só tem efeito no motor Novo
+    handleBodyInput();
+  };
   const rbm = (id, trigger, items, popClass) => (
     <RbMenu id={id} menu={rbMenu} setMenu={setRbMenu} trigger={trigger} popClass={popClass}>{items}</RbMenu>
   );
@@ -25983,6 +26005,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <label className="wordNumberField" data-tip="Espaçamento Antes" data-tipdesc="Espaço em branco adicionado acima do parágrafo, em pontos." >Antes <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacingBefore(Number(e.target.value) || 0)}/> pt</label>
                 <label className="wordNumberField" data-tip="Espaçamento Depois" data-tipdesc="Espaço em branco adicionado abaixo do parágrafo, em pontos.">Depois <input type="number" step="2" min="0" max="72" defaultValue={0} onChange={e => fmt.setParagraphSpacing(Number(e.target.value) || 0)}/> pt</label>
               </div>
+            </RbGroup>
+            <RbGroup label="Paginação">
+              {rbm("pagectl", (t) => <RbBig icon={Rows3} label={"Controle de\nPágina"} chevron tip="Controle de Página" desc="Define como o parágrafo se comporta nas quebras de página (usa o motor de páginas Novo, que é ativado ao escolher uma opção)." onClick={t}/>, <>
+                <button onClick={() => pageCtl("keepTogether", "1")}>Manter linhas juntas</button>
+                <button onClick={() => pageCtl("keepNext", "1")}>Manter com o próximo</button>
+                <button onClick={() => pageCtl("widow", "off")}>Sem controle de viúvas e órfãs</button>
+                <button onClick={() => pageCtl("chapter", "next")}>Iniciar em nova página</button>
+                <button onClick={() => pageCtl("chapter", "odd")}>Iniciar em página ímpar</button>
+                <button onClick={() => pageCtl("chapter", "even")}>Iniciar em página par</button>
+              </>)}
             </RbGroup>
             <RbGroup label="Organizar" wide>
               {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página: em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
