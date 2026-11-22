@@ -22220,6 +22220,45 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     handleBodyInput();
     return true;
   };
+  // Backspace num bloco estilizado VAZIO (citação, título/parágrafo com bordas): apaga o bloco de vez. Sem isso o navegador
+  // "junta" o bloco vazio com o anterior e o estilo sobe junto (parecia que o bloco subia de página em vez de sumir).
+  const deleteEmptyStyledBlockOnBackspace = (e) => {
+    if (e.key !== "Backspace" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return false;
+    const body = bodyRef.current, sel = window.getSelection();
+    if (!body || !sel || !sel.rangeCount || !sel.isCollapsed || !body.contains(sel.anchorNode)) return false;
+    const rg = sel.getRangeAt(0);
+    const node = rg.startContainer.nodeType === 3 ? rg.startContainer.parentElement : rg.startContainer;
+    if (!node || node.closest("li, table, .check-text, .word-toc, .word-footnotes")) return false;
+    const blk = deepPageBlock(body, rg.startContainer);
+    if (!blk || blk === body || blk.classList.contains("word-page-meta")) return false;
+    const tag = blk.tagName;
+    let styled = tag === "BLOCKQUOTE" || blk.classList.contains("word-title") || blk.classList.contains("word-subtitle");
+    if (!styled && (tag === "DIV" || tag === "P")) { const cs = getComputedStyle(blk); styled = parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderBottomWidth) > 0; }
+    if (!styled) return false;
+    if ((blk.textContent || "").trim() || blk.querySelector("img, table, hr, svg, .word-field, .word-math")) return false;
+    e.preventDefault();
+    const flat = flatPageBlocks(body), bi = flat.indexOf(blk);
+    const prev = bi > 0 ? flat[bi - 1] : null;
+    if (prev && /^(P|DIV|H[1-6]|BLOCKQUOTE)$/.test(prev.tagName) && !prev.classList.contains("word-page-meta") && !prev.classList.contains("word-ink-layer") && !prev.classList.contains("pdf-import-page") && !prev.classList.contains("word-page-break")) {
+      blk.remove();
+      let last = prev;
+      while (last.lastChild && last.lastChild.nodeType === 1 && last.lastChild.nodeName !== "BR") last = last.lastChild;
+      const r = document.createRange();
+      if (last.lastChild && last.lastChild.nodeType === 3) r.setStart(last.lastChild, last.lastChild.nodeValue.length);
+      else r.setStart(last, last.nodeName === "BR" ? 0 : last.childNodes.length);
+      r.collapse(true);
+      sel.removeAllRanges(); sel.addRange(r);
+    } else {
+      const clean = document.createElement("div");
+      clean.innerHTML = "<br>";
+      blk.replaceWith(clean);
+      const r = document.createRange();
+      r.setStart(clean, 0); r.collapse(true);
+      sel.removeAllRanges(); sel.addRange(r);
+    }
+    handleBodyInput();
+    return true;
+  };
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (e.altKey && !mod && (e.key === "=" || e.code === "Equal")) { e.preventDefault(); insertEquationInline(); return; }
@@ -22239,6 +22278,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     }
     if (handleWordcraftKeys(e)) return;
     if (exitStyledBlockOnEnter(e)) return;
+    if (deleteEmptyStyledBlockOnBackspace(e)) return;
     fmt.handleBodyKeyDown(e);
   };
 

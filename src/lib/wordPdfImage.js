@@ -156,8 +156,20 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
     const body = idoc.importNode(bodyEl, false);
     body.className = String(bodyEl.className).split(/\s+/).filter((c) => c && c !== "wordShowMarks" && c !== "wordPainting").join(" ");
     ["contenteditable", "spellcheck"].forEach((a) => body.removeAttribute(a));
+    // O corpo não é filho direto da página (fica dentro de .wordBodyShell): recria só a cadeia de contêineres até ele,
+    // sem as camadas de tela (régua de quebras, marcas).
+    const chain = [];
+    for (let a = bodyEl.parentElement; a && a !== pageEl; a = a.parentElement) chain.unshift(a);
+    let holder = null, shellTop = null;
+    for (const a of chain) {
+      const c = idoc.importNode(a, false);
+      if (holder) holder.appendChild(c); else shellTop = c;
+      holder = c;
+    }
+    if (holder) holder.appendChild(body); else shellTop = body;
+    const topSrc = chain[0] || bodyEl;
     for (const n of Array.from(pageEl.childNodes)) {
-      if (n === bodyEl) page.appendChild(body);
+      if (n === topSrc) page.appendChild(shellTop);
       else if (n.nodeType === 1 && n.classList.contains("wordWatermark")) page.appendChild(idoc.importNode(n, true));
     }
     for (const n of Array.from(bodyEl.childNodes)) body.appendChild(idoc.importNode(n, true));
@@ -203,19 +215,23 @@ export async function downloadWordPdfAsImages({ pageEl, bodyEl, width, height, t
       onProgress?.(i + 1, list.length);
       const p = list[i];
       // Só o bloco da página atual vai inteiro; os outros blocos viram caixas vazias do mesmo tamanho (mantêm o layout).
-      const pg = page.cloneNode(false);
-      for (const c of Array.from(page.childNodes)) {
-        if (c !== body) { pg.appendChild(c.cloneNode(true)); continue; }
-        const bd = body.cloneNode(false);
-        for (const n of Array.from(body.childNodes)) {
-          if (n.nodeType === 1 && n.classList.contains("pdf-import-page") && n !== p.target) {
-            const ghost = n.cloneNode(false);
-            ghost.style.visibility = "hidden";
-            bd.appendChild(ghost);
-          } else bd.appendChild(n.cloneNode(true));
-        }
-        pg.appendChild(bd);
+      const bd = body.cloneNode(false);
+      for (const n of Array.from(body.childNodes)) {
+        if (n.nodeType === 1 && n.classList.contains("pdf-import-page") && n !== p.target) {
+          const ghost = n.cloneNode(false);
+          ghost.style.visibility = "hidden";
+          bd.appendChild(ghost);
+        } else bd.appendChild(n.cloneNode(true));
       }
+      const withBody = (node) => {
+        if (node === body) return bd;
+        if (!node.contains(body)) return node.cloneNode(true);
+        const c = node.cloneNode(false);
+        for (const ch of Array.from(node.childNodes)) c.appendChild(withBody(ch));
+        return c;
+      };
+      const pg = page.cloneNode(false);
+      for (const c of Array.from(page.childNodes)) pg.appendChild(withBody(c));
       const html = stripExternal(serializer.serializeToString(pg));
 
       const k = Math.min(SCALE, Math.sqrt(MAX_PIXELS / (p.w * p.h)));
