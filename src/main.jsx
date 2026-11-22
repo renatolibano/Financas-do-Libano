@@ -21577,7 +21577,7 @@ function RbMenu({ id, menu, setMenu, trigger, children, popClass }) {
   return (
     <div className="wordDropdownWrap">
       {trigger(() => setMenu(open ? null : id), open)}
-      {open && <div className={popClass || "wordDropdownMenu"} onClick={() => setMenu(null)}>{children}</div>}
+      {open && <div className={popClass || "wordDropdownMenu"} onClick={() => setMenu(null)}>{typeof children === "function" ? children() : children}</div>}
     </div>
   );
 }
@@ -21754,6 +21754,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const modalRef = useRef(null);
   const imageInputRef = useRef(null);
   const saveTimer = useRef(null);
+  const statsTimer = useRef(null);
   const pageAreaRef = useRef(null);
   // Zoom por pinça no touchpad (e Ctrl+roda): o navegador entrega a pinça como "wheel" com ctrlKey=true.
   // Precisa ser listener nativo não passivo (o onWheel do React é passivo e não deixa bloquear o zoom da página inteira).
@@ -21784,6 +21785,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const historyRef = useRef([]);
   const redoStackRef = useRef([]);
   const historyBaselineRef = useRef(doc.content || "");
+  const docDirtyRef = useRef(false); // conteúdo diferente da linha de base do histórico (evita serializar o HTML a cada render)
   const historyTimer = useRef(null);
   const HISTORY_LIMIT = 100;
   const HISTORY_CHAR_BUDGET = 24e6; // ~24 milhões de caracteres somados no histórico de desfazer
@@ -21858,6 +21860,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     historyRef.current = [];
     redoStackRef.current = [];
     historyBaselineRef.current = doc.content || "";
+    docDirtyRef.current = false;
     clearTimeout(historyTimer.current);
     setSelectedImg(null);
     setActiveCell(null);
@@ -21905,6 +21908,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const thumbTimer = useRef(null);
   const scheduleThumb = (delay = 1500) => {
     clearTimeout(thumbTimer.current);
+    if ((bodyRef.current?.childElementCount || 0) > 400) delay = Math.max(delay, 8000); // documento grande: a miniatura (1ª página) pode esperar
     thumbTimer.current = setTimeout(async () => {
       const body = bodyRef.current, page = pageRef.current;
       if (!body || !page) return;
@@ -21919,7 +21923,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     clearTimeout(saveTimer.current);
     savePending.current = true;
     if (patch.content !== undefined) scheduleThumb();
-    saveTimer.current = setTimeout(() => { savePending.current = false; persistPatch(patch); }, 600);
+    saveTimer.current = setTimeout(() => { savePending.current = false; persistPatch(typeof patch.content === "function" ? { ...patch, content: patch.content() } : patch); }, 600);
   };
 
   const handleTitleChange = (e) => {
@@ -21976,17 +21980,20 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const handleBodyInput = () => {
+  const handleBodyInput = (e) => {
     if (fmt.findHooks.current.busy) return; // substituindo vários achados: o onChange roda uma vez no fim
     if (fmt.findMatches.length) fmt.resetFindHighlights();
     fmt.recalcTabsInBlock?.(fmt.currentBlock?.());
-    const html = bodyRef.current?.innerHTML || "";
-    setWordCount(countWords(html));
-    scheduleSave({ content: html });
-    refreshNavHeadings();
+    docDirtyRef.current = true;
+    // Contagem de palavras e painel de títulos re-renderizam o editor inteiro: em documento grande, só depois de uma pausa na digitação.
+    const bigDoc = (bodyRef.current?.childElementCount || 0) > 400;
+    clearTimeout(statsTimer.current);
+    const refreshStats = () => { const el = bodyRef.current; if (!el) return; setWordCount(countWords(el.innerHTML)); refreshNavHeadings(); };
+    if (bigDoc) statsTimer.current = setTimeout(refreshStats, 400); else refreshStats();
+    scheduleSave({ content: () => bodyRef.current?.innerHTML || "" }); // o HTML só é lido quando o salvamento dispara (600 ms depois)
     clearTimeout(historyTimer.current);
     historyTimer.current = setTimeout(commitHistoryCheckpoint, HISTORY_DEBOUNCE_MS);
-    schedulePageBreakSync();
+    schedulePageBreakSync(!!(e && e.nativeEvent && /^(insertText|insertCompositionText|deleteContent|insertReplacementText)/.test(e.nativeEvent.inputType || "")));
   };
 
   // Painel de Navegação > Títulos — refeito a cada edição, igual à
@@ -22018,7 +22025,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // o que tinha sido desfeito antes.
   const commitHistoryCheckpoint = () => {
     const html = bodyRef.current?.innerHTML || "";
-    if (html === historyBaselineRef.current) return;
+    if (html === historyBaselineRef.current) { docDirtyRef.current = false; return; }
     historyRef.current.push(historyBaselineRef.current);
     // Cada passo guarda o HTML inteiro: em documento grande (PDF importado, vários MB) 100 passos estourariam a memória do
     // celular. Limita também pelo tamanho total, descartando os passos mais antigos (sempre sobra ao menos 1).
@@ -22026,6 +22033,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     for (const h of historyRef.current) total += h.length;
     while (historyRef.current.length > HISTORY_LIMIT || (total > HISTORY_CHAR_BUDGET && historyRef.current.length > 1)) total -= historyRef.current.shift().length;
     historyBaselineRef.current = html;
+    docDirtyRef.current = false;
     redoStackRef.current = [];
   };
 
@@ -22114,6 +22122,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!historyRef.current.length) return;
     redoStackRef.current.push(historyBaselineRef.current);
     historyBaselineRef.current = historyRef.current.pop();
+    docDirtyRef.current = false;
     restoreHtml(historyBaselineRef.current);
   };
 
@@ -22122,6 +22131,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (!redoStackRef.current.length) return;
     historyRef.current.push(historyBaselineRef.current);
     historyBaselineRef.current = redoStackRef.current.pop();
+    docDirtyRef.current = false;
     restoreHtml(historyBaselineRef.current);
   };
 
@@ -23201,12 +23211,24 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const syncPageBreaks = () => {
     const scrollers = [];
     for (let n = bodyRef.current?.parentElement; n; n = n.parentElement) if (n.scrollTop || n.scrollLeft) scrollers.push([n, n.scrollTop, n.scrollLeft]);
+    const t0 = performance.now();
     try { syncPageBreaksRaw(); }
     finally {
       for (const [n, t, l] of scrollers) {
         if (n.scrollTop !== t) n.scrollTop = t;
         if (n.scrollLeft !== l) n.scrollLeft = l;
       }
+      lastSyncMsRef.current = performance.now() - t0;
+      // Alturas dos blocos neste layout: permitem pular o recálculo quando só se digita dentro de um bloco sem mudar a altura dele.
+      // (só vale a pena guardar quando o recálculo é lento)
+      try {
+        const body = bodyRef.current;
+        if (body && lastSyncMsRef.current > 25) {
+          const map = new WeakMap();
+          for (const n of flatPageBlocks(body)) map.set(n, n.getBoundingClientRect().height);
+          blockHeightsRef.current = { count: body.childElementCount, map };
+        } else blockHeightsRef.current = null;
+      } catch { blockHeightsRef.current = null; }
     }
   };
   // Depois de digitar, se o navegador deixou o cursor fora da área visível (ex.: rolou para o topo), traz de volta até o cursor.
@@ -23224,15 +23246,25 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   const pbRaf = useRef(0);
   const pbTimer = useRef(0);
-  const schedulePageBreakSync = () => {
+  const lastSyncMsRef = useRef(0);
+  const blockHeightsRef = useRef(null);
+  // typing = o evento veio de digitar/apagar texto (não de formatação): se o bloco do cursor manteve a altura, o layout não mudou.
+  const schedulePageBreakSync = (typing = false) => {
     cancelAnimationFrame(pbRaf.current);
     clearTimeout(pbTimer.current);
+    const unchanged = () => {
+      const c = blockHeightsRef.current, body = bodyRef.current, sel = window.getSelection();
+      if (!typing || !c || !body || !sel || !sel.rangeCount || c.count !== body.childElementCount || !body.contains(sel.anchorNode)) return false;
+      const blk = deepPageBlock(body, sel.anchorNode);
+      const h = blk ? c.map.get(blk) : null;
+      return h != null && Math.abs(blk.getBoundingClientRect().height - h) < 0.5;
+    };
     const run = () => {
-      syncPageBreaks();
+      if (!unchanged()) syncPageBreaks();
       if (typingRef.current) { typingRef.current = false; keepCaretVisible(); setTimeout(keepCaretVisible, 60); }
     };
-    // Documento grande (~140+ páginas): o recálculo completo leva centenas de ms; espera uma pausa na digitação em vez de rodar a cada tecla.
-    if ((bodyRef.current?.childElementCount || 0) > 1200) pbTimer.current = setTimeout(run, 160);
+    // Recálculo lento (documento grande): espera uma pausa na digitação em vez de rodar a cada tecla.
+    if ((bodyRef.current?.childElementCount || 0) > 1200 || lastSyncMsRef.current > 40) pbTimer.current = setTimeout(run, 160);
     else pbRaf.current = requestAnimationFrame(run);
   };
   useEffect(() => {
@@ -25348,7 +25380,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   const saveQat = (ids) => { setQatIds(ids); try { localStorage.setItem("libano.word.qat", JSON.stringify(ids)); } catch {} };
   const toggleQat = (id) => saveQat(qatIds.includes(id) ? qatIds.filter(x => x !== id) : [...qatIds, id]);
-  const undoSteps = () => Math.min(10, historyRef.current.length + (((bodyRef.current?.innerHTML || "") !== historyBaselineRef.current) ? 1 : 0));
+  const undoSteps = () => Math.min(10, historyRef.current.length + (docDirtyRef.current ? 1 : 0));
 
   // ---- pesquisa de comandos ----
   const searchResults = searchQ.trim() ? commandList.filter(([n]) => n.toLowerCase().includes(searchQ.trim().toLowerCase())).slice(0, 8) : [];
@@ -25719,7 +25751,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             {qatIds.filter(id => QAT_CMDS[id]).map(id => {
               const c = QAT_CMDS[id];
               const Icon = c.icon;
-              const disabled = (id === "undo" && !historyRef.current.length && (bodyRef.current?.innerHTML || "") === historyBaselineRef.current) || (id === "redo" && !redoStackRef.current.length);
+              const disabled = (id === "undo" && !historyRef.current.length && !docDirtyRef.current) || (id === "redo" && !redoStackRef.current.length);
               return (
                 <React.Fragment key={id}>
                   <button type="button" data-qat={id} className="rbQatBtn" data-tip={c.label} data-tipdesc={c.desc} disabled={disabled} onClick={c.run} onContextMenu={(e) => { e.preventDefault(); toggleQat(id); }}><Icon size={16}/></button>
@@ -26068,7 +26100,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               </>)}
             </RbGroup>
             <RbGroup label="Editor">
-              {rbm("editor", (t) => <RbBig icon={SpellCheck} label="Editor" chevron tip="Editor" desc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={t}/>, (() => {
+              {rbm("editor", (t) => <RbBig icon={SpellCheck} label="Editor" chevron tip="Editor" desc="Analisa o documento em busca de possíveis problemas de digitação, como espaços duplos e palavras repetidas." onClick={t}/>, () => {
                 const text = bodyRef.current?.innerText || "";
                 const doubleSpaces = (text.match(/ {2,}/g) || []).length;
                 const repeated = (text.match(/\b(\p{L}+)\s+\1\b/giu) || []).length;
@@ -26081,7 +26113,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                     <div className="wordEditorRow">Tempo de leitura estimado <b>{Math.max(1, Math.round(wordCount.words / 200))} min</b></div>
                   </>
                 );
-              })(), "wordDropdownMenu wordEditorPanel")}
+              }, "wordDropdownMenu wordEditorPanel")}
             </RbGroup>
             <RbGroup label="Suplementos">
               {rbm("addins", (t) => <RbBig icon={Grid3x3} label="Suplementos" chevron tip="Suplementos" desc="Adiciona ou gerencia extensões que ampliam os recursos do documento." onClick={t}/>, <div className="wordEditorRow">Nenhum suplemento instalado</div>)}
@@ -26591,7 +26623,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={Volume2} label={speaking ? "Parar\nLeitura" : "Ler em\nVoz Alta"} tip="Ler em Voz Alta" desc="Lê o texto selecionado (ou o documento inteiro) em voz alta. Clique de novo para parar." active={speaking} onClick={toggleReadAloud}/>
             </RbGroup>
             <RbGroup label="Acessibilidade">
-              {rbm("a11y", (t) => <RbBig icon={MonitorCheck} label={"Verificar\nAcessibilidade"} chevron tip="Verificar Acessibilidade" desc="Procura problemas que dificultam a leitura por pessoas com deficiência, como imagens sem texto alternativo." onClick={t}/>, (() => {
+              {rbm("a11y", (t) => <RbBig icon={MonitorCheck} label={"Verificar\nAcessibilidade"} chevron tip="Verificar Acessibilidade" desc="Procura problemas que dificultam a leitura por pessoas com deficiência, como imagens sem texto alternativo." onClick={t}/>, () => {
                 const issues = getA11yIssues();
                 return (
                   <>
@@ -26599,7 +26631,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                     {issues.map(i => <div key={i} className="wordEditorRow">{i}</div>)}
                   </>
                 );
-              })(), "wordDropdownMenu wordEditorPanel")}
+              }, "wordDropdownMenu wordEditorPanel")}
             </RbGroup>
             <RbGroup label="Idioma">
               {rbm("lang", (t) => <RbBig icon={Globe} label={docLanguage ? languageName(docLanguage) : "Idioma"} chevron tip="Idioma" desc="Define o idioma deste documento, usado na tradução e na verificação ortográfica." onClick={t}/>, <>

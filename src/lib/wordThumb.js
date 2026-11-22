@@ -29,9 +29,10 @@ const loadImg = (src) => new Promise((res, rej) => { const im = new Image(); im.
 
 // bodyEl: corpo (.wordRichBody) já no DOM, com o mesmo layout da página. pageClass: classes do .wordPage.
 export async function renderWordThumb(bodyEl, { pageClass, pw, ph, bg = "#fff", targetW = 300 }) {
-  const clone = bodyEl.cloneNode(true);
-  const src = Array.from(bodyEl.children), dst = Array.from(clone.children);
-  src.forEach((n, i) => { if ((n.offsetTop || 0) >= ph) dst[i]?.remove(); }); // só o que está na primeira página
+  // só o que está na primeira página: clona o corpo vazio e depois cada bloco da 1ª página (clonar o documento inteiro custava
+  // segundos num livro de centenas de páginas)
+  const clone = bodyEl.cloneNode(false);
+  for (const n of bodyEl.children) { if ((n.offsetTop || 0) < ph) clone.appendChild(n.cloneNode(true)); }
   clone.querySelectorAll(".word-img-selected,.word-cell-active,.word-shape-selected").forEach(n => n.classList.remove("word-img-selected", "word-cell-active", "word-shape-selected"));
   clone.removeAttribute("contenteditable");
   clone.style.flex = "none";
