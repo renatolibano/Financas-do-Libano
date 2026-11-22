@@ -102,6 +102,7 @@ import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from ".
 import { attachPdfFreeEdit } from "./lib/pdfFreeEdit";
 import { PAGE_SIZES, pageSizeLabel, pageSizeCmText } from "./lib/wordPageSizes";
 import { paginate } from "./lib/wordPageModel";
+import { buildPageLabeler } from "./lib/wordSections";
 import WordRuler from "./components/WordRuler";
 import { compileFind, findAll, parseReplace, expandReplace, expandRegexReplace, replaceNeedsClipboard, DEFAULT_FIND_OPTS } from "./lib/wordFindPattern";
 import { createAutocorrect, loadAutocorrectPrefs, saveAutocorrectPrefs, DEFAULT_PREFS as AC_DEFAULTS } from "./lib/wordAutocorrect";
@@ -3737,6 +3738,20 @@ function flatPageBlocks(root) {
   const walk = (parent) => { for (const c of parent.children) { if (isWrapperEl(c)) walk(c); else out.push(c); } };
   walk(root);
   return out;
+}
+// Seções do documento: a primeira usa as propriedades do documento (booklayout); cada quebra de seção abre outra, com a página em
+// que ela começa (pageOfEl = página da primeira linha do elemento). Alimenta buildPageLabeler (numeração por seção).
+function collectSections(body, bl, pageOfEl) {
+  const flat = flatPageBlocks(body).filter(n => !n.classList.contains("word-page-meta") && !n.classList.contains("word-ink-layer") && !n.classList.contains("word-img-spacer"));
+  const list = [{ startPage: 0, fmt: bl.pgfmt || "", restart: true, start: Number(bl.pgstart) || 1, hide: !!bl.pghide }];
+  flat.forEach((el, i) => {
+    if (!el.classList.contains("word-section-break")) return;
+    let startPage;
+    if (el.dataset.section === "continuous") startPage = pageOfEl(el) + 1; // a numeração muda a partir da página seguinte
+    else { const nxt = flat.slice(i + 1).find(n => !n.classList.contains("word-page-break")); startPage = nxt ? pageOfEl(nxt) : pageOfEl(el) + 1; }
+    list.push({ startPage, fmt: el.dataset.pgfmt || "", restart: el.dataset.pgrestart === "1", start: Number(el.dataset.pgstart) || 1, hide: el.dataset.pghide === "1" });
+  });
+  return list;
 }
 function deepPageBlock(root, node) {
   let cur = findTopLevelChild(root, node);
@@ -20164,6 +20179,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     headings.forEach((h, i) => { if (!h.id) h.id = "word-heading-" + Date.now().toString(36) + i; });
     try { el.__syncPageBreaks?.(); } catch {} // motor "modelo": página real de cada título
     // Nº da página de cada título: mesma conta das quebras de página do editor (altura da folha = altura do papel).
+    let labCache; // rotulador de páginas (numeração por seção), refeito a cada montagem do sumário
     const pageOf = (h) => {
       const ph = pageHeightPx;
       if (!ph) return "";
@@ -20173,12 +20189,14 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       let blk = h; while (blk && blk !== el && !(pm && pm.has(blk))) blk = blk.parentNode;
       const mp = pm?.get(blk);
       const n = mp != null ? mp + 1 : Math.max(1, Math.floor((((h.getBoundingClientRect().top - r.top) / sc) + 2) / ph) + 1);
-      // respeita "Começar a numeração em" e o formato (romano) definidos em Configurar Página
+      // numeração por seção (formato, reinício, "começar em"); sem rotulador, usa só o documento
+      if (labCache === undefined) { try { labCache = el.__pageLabeler ? el.__pageLabeler() : null; } catch { labCache = null; } }
+      if (labCache) return labCache.at(n - 1).label;
       let bl = {};
       try { bl = JSON.parse(el.querySelector(":scope > .word-page-meta")?.dataset.booklayout || "{}"); } catch {}
       const x = n + ((Number(bl.pgstart) || 1) - 1);
       if (bl.pgfmt === "lower-roman" || bl.pgfmt === "upper-roman") {
-        let v = x, r2 = ""; for (const [k, s] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) while (v >= k) { r2 += s; v -= k; }
+        let v = x, r2 = ""; for (const [k, s2] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) while (v >= k) { r2 += s2; v -= k; }
         return bl.pgfmt === "lower-roman" ? r2.toLowerCase() : r2;
       }
       return x;
@@ -20194,14 +20212,14 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     let toc = el.querySelector(":scope > .word-toc");
     if (toc) {
       const bodyEl = toc.querySelector(".word-toc-body");
-      if (bodyEl) bodyEl.innerHTML = buildBody();
+      if (bodyEl) { labCache = undefined; bodyEl.innerHTML = buildBody(); }
       onChange();
       return;
     }
     toc = document.createElement("div");
     toc.className = "word-toc";
     toc.setAttribute("contenteditable", "false");
-    toc.innerHTML = `<div class="word-toc-head"><b>Sumário</b><button type="button" class="word-toc-refresh">Atualizar sumário</button></div><div class="word-toc-body">${buildBody()}</div>`;
+    toc.innerHTML = `<div class="word-toc-head"><b>Sumário</b><button type="button" class="word-toc-refresh">Atualizar sumário</button></div><div class="word-toc-body">${(labCache = undefined, buildBody())}</div>`;
     const after = document.createElement("div");
     after.innerHTML = "<br>";
     const sel = window.getSelection();
@@ -20213,7 +20231,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       el.append(toc, after);
     }
     // O próprio sumário empurra o texto abaixo dele: recalcula os números de página depois que o layout assenta.
-    requestAnimationFrame(() => { const b = toc.querySelector(".word-toc-body"); if (b && el.contains(toc)) { b.innerHTML = buildBody(); onChange(); } });
+    requestAnimationFrame(() => { const b = toc.querySelector(".word-toc-body"); if (b && el.contains(toc)) { labCache = undefined; b.innerHTML = buildBody(); onChange(); } });
     onChange();
   };
 
@@ -21568,7 +21586,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const [marginLeftCm, setMarginLeftCm] = useState(doc.margin_left ?? null);
   const [marginRightCm, setMarginRightCm] = useState(doc.margin_right ?? null);
   const [wordGoal, setWordGoal] = useState({ total: 0, daily: 0, day: "", base: 0 }); // meta de escrita: total do livro e por dia
-  const [bookLayout, setBookLayout] = useState({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "" }); // margem superior/inferior (cm), medianiz (cm), espelhar
+  const [bookLayout, setBookLayout] = useState({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "", pghide: false }); // margem superior/inferior (cm), medianiz (cm), espelhar
   const [ribbonTab, setRibbonTab] = useState("home");
   const [rbMenu, setRbMenu] = useState(null);
   const [fmtState, setFmtState] = useState({ font: "Calibri", size: 11, bold: false, italic: false, underline: false, strike: false, sub: false, sup: false, align: "left", dir: "ltr" });
@@ -21825,7 +21843,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       }
       setWordGoal(goal);
     } catch { setWordGoal({ total: 0, daily: 0, day: "", base: 0 }); }
-    try { const bl = pageMetaEl?.dataset.booklayout ? JSON.parse(pageMetaEl.dataset.booklayout) : {}; setBookLayout({ mt: bl.mt ?? "", mb: bl.mb ?? "", gutter: bl.gutter ?? "", mirror: !!bl.mirror, pgfmt: bl.pgfmt ?? "", pgstart: bl.pgstart ?? "" }); } catch { setBookLayout({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "" }); }
+    try { const bl = pageMetaEl?.dataset.booklayout ? JSON.parse(pageMetaEl.dataset.booklayout) : {}; setBookLayout({ mt: bl.mt ?? "", mb: bl.mb ?? "", gutter: bl.gutter ?? "", mirror: !!bl.mirror, pgfmt: bl.pgfmt ?? "", pgstart: bl.pgstart ?? "", pghide: !!bl.pghide }); } catch { setBookLayout({ mt: "", mb: "", gutter: "", mirror: false, pgfmt: "", pgstart: "", pghide: false }); }
     setTextDir(pageMetaEl?.dataset.textdir || "horizontal");
     setDocProtected(pageMetaEl?.dataset.protected === "1");
     try { setComments(JSON.parse(pageMetaEl?.dataset.comments || "[]")); } catch { setComments([]); }
@@ -22191,8 +22209,56 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   const applyBookLayout = (patch) => {
     const next = { ...bookLayout, ...patch };
     setBookLayout(next);
-    const empty = next.mt === "" && next.mb === "" && next.gutter === "" && !next.mirror && !next.pgfmt && next.pgstart === "";
+    const empty = next.mt === "" && next.mb === "" && next.gutter === "" && !next.mirror && !next.pgfmt && next.pgstart === "" && !next.pghide;
     persistPageMeta({ booklayout: empty ? "" : JSON.stringify(next) });
+  };
+  // Numeração por seção: rótulo ("iv", "12") e se o número fica oculto, para cada página (0-based). Usa só refs: serve ao sumário e à barra de status.
+  const bookLayoutRef = useRef(bookLayout);
+  bookLayoutRef.current = bookLayout;
+  const pageLabeler = () => {
+    const body = bodyRef.current;
+    if (!body) return buildPageLabeler([{ startPage: 0 }]);
+    const ph = currentPageDims().h, sc = bodyScale();
+    const padT = parseFloat(getComputedStyle(body).paddingTop) || 0;
+    const bodyTop = body.getBoundingClientRect().top;
+    const pageOfEl = (el) => {
+      const r = document.createRange(); r.selectNodeContents(el);
+      const q = Array.from(r.getClientRects()).find(x => x.height > 1);
+      const top = (q || el.getBoundingClientRect()).top;
+      return Math.max(0, Math.floor(((top - bodyTop) / sc - padT + 1) / ph));
+    };
+    const total = Math.max(1, Math.ceil((body.getBoundingClientRect().height / sc - 2) / ph));
+    return buildPageLabeler(collectSections(body, bookLayoutRef.current, pageOfEl), total);
+  };
+  // Propriedades da seção do cursor (formato/numeração/ocultar número). Primeira seção = documento; as demais = quebra de seção anterior.
+  const secBreakRef = useRef(null);
+  const openSectionProps = () => {
+    const body = bodyRef.current, sel = window.getSelection();
+    if (!body) return;
+    const flat = flatPageBlocks(body).filter(n => !n.classList.contains("word-page-meta"));
+    const cur = sel && sel.rangeCount && body.contains(sel.anchorNode) ? deepPageBlock(body, sel.getRangeAt(0).startContainer) : null;
+    const idx = cur ? flat.indexOf(cur) : -1;
+    let br = null, num = 1;
+    for (let i = 0; i <= (idx < 0 ? flat.length - 1 : idx); i++) if (flat[i].classList.contains("word-section-break")) { br = flat[i]; num++; }
+    secBreakRef.current = br;
+    const bl = bookLayoutRef.current;
+    if (br) openDlg("section", { n: num, first: false, fmt: br.dataset.pgfmt || "", restart: br.dataset.pgrestart === "1", start: br.dataset.pgstart || "1", show: br.dataset.pghide !== "1" });
+    else openDlg("section", { n: 1, first: true, fmt: bl.pgfmt || "decimal", restart: true, start: String(bl.pgstart || 1), show: !bl.pghide });
+  };
+  const applySectionProps = (f) => {
+    const br = secBreakRef.current;
+    const start = Math.max(1, Math.floor(Number(f.start) || 1));
+    if (!br) {
+      applyBookLayout({ pgfmt: f.fmt === "decimal" ? "" : f.fmt, pgstart: start > 1 ? start : "", pghide: !f.show });
+    } else {
+      const set = (k, v) => { if (v) br.dataset[k] = v; else delete br.dataset[k]; };
+      set("pgfmt", f.fmt);
+      set("pgrestart", f.restart ? "1" : "");
+      set("pgstart", f.restart && start > 1 ? String(start) : "");
+      set("pghide", f.show ? "" : "1");
+      handleBodyInput();
+    }
+    closeDlg();
   };
   const applyTheme = (key) => { setThemeKey(key); persistPageMeta({ theme: key }); setThemeOpen(false); };
   const applyPageColor = (hex) => { setPageColor(hex); persistPageMeta({ pagecolor: hex }); setPageColorOpen(false); };
@@ -23074,12 +23140,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   };
   useEffect(() => {
     const body = bodyRef.current;
-    if (body) body.__syncPageBreaks = syncPageBreaks; // usado pelo sumário para ler a página real de cada título
+    if (body) { body.__syncPageBreaks = syncPageBreaks; body.__pageLabeler = pageLabeler; } // usados pelo sumário: página real e número (por seção) de cada título
     const t = setTimeout(syncPageBreaks, 80);
     document.fonts?.ready?.then(schedulePageBreakSync).catch?.(() => {});
     window.addEventListener("resize", schedulePageBreakSync);
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
-    return () => { clearTimeout(t); clearTimeout(pbTimer.current); cancelAnimationFrame(pbRaf.current); if (body) body.__syncPageBreaks = null; window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
+    return () => { clearTimeout(t); clearTimeout(pbTimer.current); cancelAnimationFrame(pbRaf.current); if (body) { body.__syncPageBreaks = null; body.__pageLabeler = null; } window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine]);
 
@@ -25019,7 +25085,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     ["Marcadores", () => fmt.exec("insertUnorderedList")], ["Numeração", () => fmt.exec("insertOrderedList")], ["Aumentar Recuo", () => fmt.exec("indent")], ["Diminuir Recuo", () => fmt.exec("outdent")],
     ["Título 1", () => fmt.applyHeading("H1")], ["Título 2", () => fmt.applyHeading("H2")], ["Título 3", () => fmt.applyHeading("H3")], ["Parágrafo Normal", () => fmt.applyHeading("P")],
     ["Localizar", () => focusFind("find")], ["Substituir", () => focusFind("replace")], ["Selecionar Tudo", () => fmt.selectAll()],
-    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Nova Página Acima", () => insertPage("above")], ["Nova Página Abaixo", () => insertPage("below")], ["Excluir Página", () => deleteCurrentPage()], ["Inserir Sumário", () => fmt.insertTOC()],
+    ["Inserir Tabela…", () => setTableDialogOpen(true)], ["Inserir Imagem", () => imageInputRef.current?.click()], ["Nova Página Acima", () => insertPage("above")], ["Nova Página Abaixo", () => insertPage("below")], ["Excluir Página", () => deleteCurrentPage()], ["Propriedades da Seção (numeração de páginas)", () => openSectionProps()], ["Inserir Sumário", () => fmt.insertTOC()],
     ["Inserir Nota de Rodapé", () => fmt.insertFootnote()], ["Inserir Nota de Fim", () => fmt.insertEndnote()], ["Inserir Gráfico…", () => openDlg("chart", { type: "bar", title: "Gráfico", labels: "A, B, C", values: "10, 20, 15" })],
     ["Inserir Assinatura", () => fmt.insertSignatureLine()], ["Data e Hora", () => fmt.insertDateTime()], ["Caixa de Texto", () => fmt.insertTextBox()],
     ["Controlar Alterações", () => toggleTrackChanges()], ["Contagem de Palavras", () => setWordCountDialogOpen(true)], ["Ler em Voz Alta", () => toggleReadAloud()],
@@ -25324,7 +25390,13 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       }
       let page = pdfPage || Math.floor((ar.top + ar.height / 2 - br.top) / ph) + 1;
       page = Math.min(Math.max(page, 1), pages);
-      setPageInfo(p => (p.page === page && p.pages === pages ? p : { page, pages }));
+      // numeração por seção: mostra o número impresso quando difere da página física (ou "sem número")
+      let label = "", hidden = false;
+      const bl0 = bookLayoutRef.current;
+      if (!pdfBlocks.length && (body.querySelector(".word-section-break") || bl0.pgfmt || bl0.pgstart || bl0.pghide)) {
+        try { const L = pageLabeler().at(page - 1); label = L.label; hidden = L.hidden; } catch {}
+      }
+      setPageInfo(p => (p.page === page && p.pages === pages && p.label === label && p.hidden === hidden ? p : { page, pages, label, hidden }));
       const s = window.getSelection();
       const n = s && !s.isCollapsed && body.contains(s.anchorNode) ? (s.toString().trim().match(/\S+/g) || []).length : 0;
       setSelWords(w => (w === n ? w : n));
@@ -26197,6 +26269,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 <button onClick={() => fmt.insertSectionBreak("continuous")}>Contínua</button>
                 <button onClick={() => fmt.insertSectionBreak("evenpage")}>Página Par</button>
                 <button onClick={() => fmt.insertSectionBreak("oddpage")}>Página Ímpar</button>
+                <button onClick={() => { openSectionProps(); }}>Propriedades da seção (numeração)…</button>
               </>)}
               <div className="rbStack">
                 {rbm("linenum", (t) => <RbSm icon={ListOrdered} label="Números de Linha" chevron tip="Números de Linha" desc="Numera os blocos de texto na margem esquerda (um número por parágrafo)." onClick={t}/>, <>
@@ -26228,6 +26301,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   <button key={k + v} className={pageCtlOn(k, v) ? "active" : ""} onClick={() => pageCtl(k, v)}>{pageCtlOn(k, v) ? "✓ " : ""}{l}</button>
                 ))}
               </>, "wordDropdownMenu wordPageCtlMenu")}
+              <RbBig icon={Layers} label={"Numeração\nda Seção"} tip="Numeração da Seção" desc="Define o formato (1, i, I), o reinício e se aparece o número de página na seção do cursor." onClick={openSectionProps}/>
             </RbGroup>
             <RbGroup label="Organizar" wide>
               {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página: em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
@@ -27065,7 +27139,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
         </div>
 
         <div className="wordStatusBar">
-          <button className="wordStatusItem" data-tip="Ir Para" data-tipdesc="Abre a janela Ir Para, para pular direto a um título, indicador, tabela ou imagem." onClick={() => openDlg("goto")}>Página {pageInfo.page} de {pageInfo.pages}</button>
+          <button className="wordStatusItem" data-tip="Ir Para" data-tipdesc="Abre a janela Ir Para, para pular direto a um título, indicador, tabela ou imagem." onClick={() => openDlg("goto")}>Página {pageInfo.page} de {pageInfo.pages}{pageInfo.hidden ? " · sem número" : pageInfo.label && pageInfo.label !== String(pageInfo.page) ? " · nº " + pageInfo.label : ""}</button>
           <button className="wordStatusItem" data-tip="Contagem de Palavras" data-tipdesc="Mostra palavras, caracteres e parágrafos do documento." onClick={() => setWordCountDialogOpen(true)}>{selWords ? `${selWords} de ${wordCount.words} palavras` : `${wordCount.words} palavra${wordCount.words === 1 ? "" : "s"}`}</button>
           <span>{wordCount.chars} caractere{wordCount.chars === 1 ? "" : "s"}</span>
           <button className="wordStatusItem" data-tip="Meta de Escrita" data-tipdesc="Define uma meta de palavras para o livro e/ou por dia e mostra o progresso." onClick={editWordGoal}>
@@ -27176,6 +27250,22 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
             <label>Espaço antes (pt) <input type="number" step="2" value={dlgForm.before ?? 0} onChange={e => setF("before", e.target.value)}/></label>
             <label>Espaço depois (pt) <input type="number" step="2" value={dlgForm.after ?? 0} onChange={e => setF("after", e.target.value)}/></label>
             <label>Espaçamento entre linhas <select value={dlgForm.line || "1.15"} onChange={e => setF("line", e.target.value)}>{WORD_LINE_HEIGHTS.map(v => <option key={v}>{v}</option>)}</select></label>
+          </WordModal>
+        )}
+
+        {dlg === "section" && (
+          <WordModal title={dlgForm.first ? "Propriedades da seção 1 (início do documento)" : "Propriedades da seção " + dlgForm.n} onClose={closeDlg} actions={<>
+            <button className="ghost" onClick={closeDlg}>Cancelar</button>
+            <button className="primary" onClick={() => applySectionProps(dlgForm)}>OK</button>
+          </>}>
+            <label><input type="checkbox" checked={!!dlgForm.show} onChange={e => setF("show", e.target.checked)}/> Mostrar o número da página nesta seção</label>
+            <label>Formato do número <select value={dlgForm.fmt || ""} onChange={e => setF("fmt", e.target.value)}>
+              {!dlgForm.first && <option value="">Igual ao da seção anterior</option>}
+              <option value="decimal">1, 2, 3…</option><option value="lower-roman">i, ii, iii…</option><option value="upper-roman">I, II, III…</option>
+            </select></label>
+            {!dlgForm.first && <label>Numeração <select value={dlgForm.restart ? "restart" : "continue"} onChange={e => setF("restart", e.target.value === "restart")}><option value="continue">Continuar a da seção anterior</option><option value="restart">Reiniciar</option></select></label>}
+            <label>{dlgForm.first ? "Começar a numeração em" : "Reiniciar em"} <input type="number" step="1" min="1" disabled={!dlgForm.first && !dlgForm.restart} value={dlgForm.start ?? "1"} onChange={e => setF("start", e.target.value)}/></label>
+            <small>Vale na barra de status, no sumário e no .docx/PDF exportados. A seção 1 é o começo do documento; as seguintes começam em cada quebra de seção (Layout › Quebras). Ex.: capa sem número, prefácio em romano, capítulo 1 na página 1.</small>
           </WordModal>
         )}
 

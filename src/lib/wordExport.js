@@ -6,10 +6,11 @@ import {
   VerticalAlign, BorderStyle, Header, Footer, PageNumber,
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript, MathSubScript, MathSubSuperScript, MathSum, MathIntegral,
   MathRoundBrackets, MathSquareBrackets, MathCurlyBrackets, MathAngledBrackets, MathFunction, MathLimitLower, MathLimitUpper,
-  SimpleField, TabStopType, LeaderType, NumberFormat,
+  SimpleField, TabStopType, LeaderType, NumberFormat, SectionType,
 } from "docx";
 import { parseEquation, toLinear } from "./wordMath";
 import { PAGE_SIZES } from "./wordPageSizes";
+import { buildPageLabeler } from "./wordSections";
 
 // ---------------------------------------------------------------------------
 // Exportação do "Word" (Área de Estudos) como .docx de verdade (preserva
@@ -79,8 +80,8 @@ function readBookLayout(html) {
     const raw = d.querySelector(".word-page-meta")?.dataset?.booklayout;
     const o = raw ? JSON.parse(raw) : {};
     const n = (v) => (v === "" || v == null || Number.isNaN(Number(v)) ? null : Math.max(0, Number(v)));
-    return { mt: n(o.mt), mb: n(o.mb), gutter: n(o.gutter), mirror: !!o.mirror, pgfmt: o.pgfmt === "lower-roman" || o.pgfmt === "upper-roman" ? o.pgfmt : "", pgstart: n(o.pgstart) ? Math.floor(n(o.pgstart)) : null };
-  } catch { return { mt: null, mb: null, gutter: null, mirror: false, pgfmt: "", pgstart: null }; }
+    return { pghide: !!o.pghide, mt: n(o.mt), mb: n(o.mb), gutter: n(o.gutter), mirror: !!o.mirror, pgfmt: o.pgfmt === "lower-roman" || o.pgfmt === "upper-roman" ? o.pgfmt : "", pgstart: n(o.pgstart) ? Math.floor(n(o.pgstart)) : null };
+  } catch { return { pghide: false, mt: null, mb: null, gutter: null, mirror: false, pgfmt: "", pgstart: null }; }
 }
 function parseFirstLine(el) {
   const m = /^(-?[\d.]+)(cm|px|pt|in|em)$/.exec((el.style?.textIndent || "").trim());
@@ -258,7 +259,12 @@ function parseBlocks(html) {
 
   Array.from(container.children).forEach((el) => {
     if (el.classList?.contains("word-page-meta")) return; // marcador invisível (tema/marca d'água/cor/borda), não é conteúdo
-    if (el.classList?.contains("word-page-break")) { blocks.push({ type: "pagebreak" }); return; }
+    if (el.classList?.contains("word-page-break")) {
+      // quebra de seção: leva as propriedades de numeração da seção que começa depois dela
+      if (el.classList.contains("word-section-break")) blocks.push({ type: "pagebreak", section: el.dataset.section || "nextpage", props: { fmt: el.dataset.pgfmt || "", restart: el.dataset.pgrestart === "1", start: Number(el.dataset.pgstart) || 1, hide: el.dataset.pghide === "1" } });
+      else blocks.push({ type: "pagebreak" });
+      return;
+    }
     if (el.classList?.contains("word-toc")) {
       blocks.push({ type: "heading", level: 2, align: "left", runs: [{ text: "Sumário" }] });
       Array.from(el.querySelectorAll(".word-toc-entry")).forEach((a) => {
@@ -426,9 +432,10 @@ const MARGIN_TWIPS = { estreita: 720, normal: 1440, larga: 2160 };
 // Cabeçalho/rodapé/número de página de verdade do .docx (campo dinâmico,
 // atualiza sozinho no Word) — a partir do que veio da faixa editável do
 // documento (ver ".word-pagenum" em collectRuns).
-function buildFieldParagraph(band) {
+function buildFieldParagraph(band, hideNumber = false) {
   const children = [];
   (band?.runs || []).forEach((r) => {
+    if (r.pageField && hideNumber) return; // seção sem número de página
     if (r.pageField) {
       if (r.pageField === "simple") {
         children.push(new TextRun({ children: [PageNumber.CURRENT] }));
@@ -466,10 +473,16 @@ export async function downloadWordDocx(doc) {
   const processedHtml = await preprocessExportHtml(doc.content);
   const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven } = parseBlocks(processedHtml);
   const book = readBookLayout(doc.content);
-  const children = [];
+  let children = [];
+  const sectionList = []; // uma por quebra de seção: { children, props, type } (a 1ª usa as propriedades do documento)
+  let curProps = null, curType = null;
 
   for (const b of blocks) {
-    if (b.type === "pagebreak") { children.push(new Paragraph({ children: [new PageBreak()] })); continue; }
+    if (b.type === "pagebreak") {
+      if (b.section) { sectionList.push({ children, props: curProps, type: curType }); children = []; curProps = b.props; curType = b.section; }
+      else children.push(new Paragraph({ children: [new PageBreak()] }));
+      continue;
+    }
     if (b.type === "toc") {
       const tx = (b.level || 1) === 1 ? { bold: true } : {};
       children.push(new Paragraph({
@@ -529,16 +542,47 @@ export async function downloadWordDocx(doc) {
   const rightTwips = doc.margin_right != null ? cmToTwips(doc.margin_right) : marginTwips;
   const landscape = doc.orientation === "paisagem";
 
-  const headerObj = header ? new Header({ children: [buildFieldParagraph(header)] }) : undefined;
-  const headerFirstObj = headerFirst ? new Header({ children: [buildFieldParagraph(headerFirst)] }) : undefined;
-  const footerObj = footer ? new Footer({ children: [buildFieldParagraph(footer)] }) : undefined;
-  const footerFirstObj = footerFirst ? new Footer({ children: [buildFieldParagraph(footerFirst)] }) : undefined;
-  const headerEvenObj = headerEven ? new Header({ children: [buildFieldParagraph(headerEven)] }) : undefined;
-  const footerEvenObj = footerEven ? new Footer({ children: [buildFieldParagraph(footerEven)] }) : undefined;
-  const hasEvenOdd = !!(headerEvenObj || footerEvenObj);
-  const hasFirstPage = !!(headerFirstObj || footerFirstObj);
+  sectionList.push({ children, props: curProps, type: curType });
+  const hasEvenOdd = !!(headerEven || footerEven);
+  const hasFirstPage = !!(headerFirst || footerFirst);
   const topTwips = book.mt != null ? cmToTwips(book.mt) : marginTwips;
   const bottomTwips = book.mb != null ? cmToTwips(book.mb) : marginTwips;
+  // cabeçalhos/rodapés são criados de novo em cada seção (com o número de página omitido nas seções sem número)
+  const mkBands = (hideNum) => {
+    const H = (band) => (band ? new Header({ children: [buildFieldParagraph(band, hideNum)] }) : undefined);
+    const F = (band) => (band ? new Footer({ children: [buildFieldParagraph(band, hideNum)] }) : undefined);
+    const headerObj = H(header), headerFirstObj = H(headerFirst), headerEvenObj = H(headerEven);
+    const footerObj = F(footer), footerFirstObj = F(footerFirst), footerEvenObj = F(footerEven);
+    return {
+      headers: (headerObj || headerFirstObj || headerEvenObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj, even: headerEvenObj } : undefined,
+      footers: (footerObj || footerFirstObj || footerEvenObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj, even: footerEvenObj } : undefined,
+    };
+  };
+  const sizeProps = { ...(PAGE_SIZES[doc.page_size] ? { width: cmToTwips(PAGE_SIZES[doc.page_size].cm[0]), height: cmToTwips(PAGE_SIZES[doc.page_size].cm[1]) } : {}), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT };
+  const fmtOf = (f) => (f === "lower-roman" ? NumberFormat.LOWER_ROMAN : f === "upper-roman" ? NumberFormat.UPPER_ROMAN : NumberFormat.DECIMAL);
+  const typeOf = (t) => (t === "continuous" ? SectionType.CONTINUOUS : t === "oddpage" ? SectionType.ODD_PAGE : t === "evenpage" ? SectionType.EVEN_PAGE : SectionType.NEXT_PAGE);
+  let curFmt = book.pgfmt || "decimal";
+  const docSections = sectionList.map((sec, i) => {
+    const p = sec.props;
+    if (p && p.fmt) curFmt = p.fmt;
+    const hide = i === 0 ? book.pghide : !!p?.hide;
+    const startNum = i === 0 ? book.pgstart : (p?.restart ? p.start : null);
+    const bands = mkBands(hide);
+    return {
+      properties: {
+        ...(i > 0 ? { type: typeOf(sec.type) } : {}),
+        page: {
+          size: sizeProps,
+          margin: { top: topTwips, bottom: bottomTwips, left: leftTwips, right: rightTwips, ...(book.gutter ? { gutter: cmToTwips(book.gutter) } : {}) },
+          ...((i > 0 || book.pgfmt || book.pgstart) ? { pageNumbers: { ...(startNum ? { start: startNum } : {}), formatType: fmtOf(curFmt) } } : {}),
+        },
+        titlePage: i === 0 && hasFirstPage,
+      },
+      headers: bands.headers,
+      footers: bands.footers,
+      children: sec.children.length ? sec.children : [new Paragraph("")],
+    };
+  });
 
   const document = new Document({
     ...(hasEvenOdd ? { evenAndOddHeaderAndFooters: true } : {}),
@@ -548,19 +592,7 @@ export async function downloadWordDocx(doc) {
         { reference: "bullet-list", levels: [0, 1, 2].map((level) => ({ level, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.START, style: { paragraph: { indent: { left: 360 * (level + 2), hanging: 360 } } } })) },
       ],
     },
-    sections: [{
-      properties: {
-        page: {
-          size: { ...(PAGE_SIZES[doc.page_size] ? { width: cmToTwips(PAGE_SIZES[doc.page_size].cm[0]), height: cmToTwips(PAGE_SIZES[doc.page_size].cm[1]) } : {}), orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-          margin: { top: topTwips, bottom: bottomTwips, left: leftTwips, right: rightTwips, ...(book.gutter ? { gutter: cmToTwips(book.gutter) } : {}) },
-          ...(book.pgfmt || book.pgstart ? { pageNumbers: { ...(book.pgstart ? { start: book.pgstart } : {}), formatType: book.pgfmt === "lower-roman" ? NumberFormat.LOWER_ROMAN : book.pgfmt === "upper-roman" ? NumberFormat.UPPER_ROMAN : NumberFormat.DECIMAL } } : {}),
-        },
-        titlePage: hasFirstPage,
-      },
-      headers: (headerObj || headerFirstObj || headerEvenObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj, even: headerEvenObj } : undefined,
-      footers: (footerObj || footerFirstObj || footerEvenObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj, even: footerEvenObj } : undefined,
-      children,
-    }],
+    sections: docSections,
   });
 
   let blob = await Packer.toBlob(document);
@@ -591,6 +623,7 @@ export async function downloadWordPdf(doc, opts = {}) {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const book = readBookLayout(doc.content);
+  const secStarts = []; // quebras de seção já aplicadas ao PDF (página onde cada seção começa + numeração)
   const topPt = book.mt != null ? cmToPt(book.mt) : marginPt;
   const botPt = book.mb != null ? cmToPt(book.mb) : marginPt;
   const baseLeft = marginLeftPt + (book.gutter ? cmToPt(book.gutter) : 0);
@@ -607,7 +640,16 @@ export async function downloadWordPdf(doc, opts = {}) {
   };
 
   blocks.forEach((b) => {
-    if (b.type === "pagebreak") { pdf.addPage(); y = topPt; return; }
+    if (b.type === "pagebreak") {
+      pdf.addPage(); y = topPt;
+      if (b.section) {
+        // página ímpar/par: se cair na paridade errada, insere uma página em branco
+        const n = pdf.internal.getNumberOfPages();
+        if ((b.section === "oddpage" && n % 2 === 0) || (b.section === "evenpage" && n % 2 === 1)) { pdf.addPage(); y = topPt; }
+        secStarts.push({ startPage: pdf.internal.getNumberOfPages() - 1, fmt: b.props.fmt, restart: b.props.restart, start: b.props.start, hide: b.props.hide });
+      }
+      return;
+    }
     if (b.type === "table") {
       const cols = Math.max(...b.rows.map((r) => r.reduce((sum, c) => sum + (c.colspan || 1), 0)));
       const colWidth = maxWidth / cols;
@@ -707,15 +749,17 @@ export async function downloadWordPdf(doc, opts = {}) {
   // Cabeçalho/rodapé em cada página de verdade, com o número da página
   // calculado agora que já sabemos quantas páginas o documento tem.
   if (hasHeader || hasFooter) {
-    const roman = (n) => { const t = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]; let r = ""; for (const [v, s] of t) while (n >= v) { r += s; n -= v; } return r; };
-    const shown = (n) => { const x = n + ((book.pgstart || 1) - 1); return book.pgfmt === "lower-roman" ? roman(x).toLowerCase() : book.pgfmt === "upper-roman" ? roman(x) : String(x); };
+    const totalPages = pdf.internal.getNumberOfPages();
+    // numeração por seção (formato, reinício, ocultar número), como no editor
+    const lab = buildPageLabeler([{ startPage: 0, fmt: book.pgfmt || "decimal", restart: true, start: book.pgstart || 1, hide: book.pghide }, ...secStarts], totalPages);
+    const shown = (n) => lab.at(n - 1).label;
     const bandText = (band, pageNum, totalPages) => (band?.runs || []).map((r) => {
-      if (r.pageField === "simple") return shown(pageNum);
-      if (r.pageField === "labelof") return `Página ${shown(pageNum)} de ${shown(totalPages)}`;
-      if (r.pageField) return `Página ${shown(pageNum)}`;
+      const hidden = lab.at(pageNum - 1).hidden;
+      if (r.pageField === "simple") return hidden ? "" : shown(pageNum);
+      if (r.pageField === "labelof") return hidden ? "" : `Página ${shown(pageNum)} de ${shown(totalPages)}`;
+      if (r.pageField) return hidden ? "" : `Página ${shown(pageNum)}`;
       return r.text || "";
     }).join("");
-    const totalPages = pdf.internal.getNumberOfPages();
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(9);
     for (let p = 1; p <= totalPages; p++) {
