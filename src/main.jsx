@@ -25072,10 +25072,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // ---- Organizar (Layout): age sobre a imagem ou forma selecionada ----
   const arrangeTarget = () => selectedImg || selectedShape || null;
   const needObject = () => alert("Selecione uma imagem ou forma primeiro.");
-  const arrWrap = (mode) => { if (selectedImg) imgSetWrap(mode); else if (selectedShape) shapeSetWrap(mode); else needObject(); };
+  // Sem imagem/forma selecionada, Posição/Alinhar agem no texto selecionado (ou no parágrafo do cursor): alinha entre as margens da folha.
+  const textSelected = () => { const sel = window.getSelection(); return !!(sel && sel.rangeCount && bodyRef.current?.contains(sel.anchorNode)); };
+  const arrWrap = (mode) => { if (selectedImg) imgSetWrap(mode); else if (selectedShape) shapeSetWrap(mode); else if (mode === "inline" && textSelected()) fmt.exec("justifyLeft"); else needObject(); };
   const arrAlign = (a) => {
     if (selectedImg) { imgSetAlign(a); return; }
-    if (!selectedShape) { needObject(); return; }
+    if (!selectedShape) {
+      if (textSelected()) fmt.exec(a === "center" ? "justifyCenter" : a === "right" ? "justifyRight" : "justifyLeft");
+      else needObject();
+      return;
+    }
     selectedShape.style.float = "";
     selectedShape.style.display = "block";
     selectedShape.style.margin = a === "center" ? "0 auto" : a === "right" ? "0 0 0 auto" : "0 auto 0 0";
@@ -26473,7 +26479,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <RbBig icon={Layers} label={"Numeração\nda Seção"} tip="Numeração da Seção" desc="Define o formato (1, i, I), o reinício e se aparece o número de página na seção do cursor." onClick={openSectionProps}/>
             </RbGroup>
             <RbGroup label="Organizar" wide>
-              {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página: em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
+              {rbm("position", (t) => <RbBig icon={Move} label="Posição" chevron tip="Posição" desc="Posiciona a imagem ou forma selecionada na página (ou alinha o texto selecionado entre as margens): em linha, à esquerda, no centro ou à direita." onClick={t}/>, <>
                 <button onClick={() => arrWrap("inline")}>Em Linha com o Texto</button>
                 <button onClick={() => arrAlign("left")}>Alinhado à Esquerda</button>
                 <button onClick={() => arrAlign("center")}>Centralizado</button>
