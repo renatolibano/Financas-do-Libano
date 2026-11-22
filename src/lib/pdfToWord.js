@@ -109,7 +109,7 @@ async function pageGraphics(page, vp, imgState) {
     if (w < 1 || h < 1) return;
     const flip = (ctm[0] < 0 ? " scaleX(-1)" : "") + (ctm[3] > 0 ? " scaleY(-1)" : "");
     flush();
-    layers.push({ type: "img", html: `<img src="${url}" contenteditable="false" style="position:absolute;left:${r2(l)}px;top:${r2(t)}px;width:${r2(w)}px;height:${r2(h)}px;${flip ? `transform:${flip.trim()};` : ""}max-width:none">` });
+    layers.push({ type: "img", url, l, t, w, h, html: `<img src="${url}" contenteditable="false" style="position:absolute;left:${r2(l)}px;top:${r2(t)}px;width:${r2(w)}px;height:${r2(h)}px;${flip ? `transform:${flip.trim()};` : ""}max-width:none">` });
   };
 
   for (let i = 0; i < fnArray.length; i++) {
@@ -240,8 +240,97 @@ function pageRuns(page, tc, vp) {
       const ls = (r.w - m) / r.text.length;
       if (Math.abs(ls) > 0.02) style += `letter-spacing:${r2(Math.max(-0.1 * r.size, Math.min(0.25 * r.size, ls)))}px;`;
     }
-    return `<span class="pdf-run"${r.rtl ? ' dir="rtl"' : ""} style="${style}">${esc(r.text)}</span>`;
+    return { html: `<span class="pdf-run"${r.rtl ? ' dir="rtl"' : ""} style="${style}">${esc(r.text)}</span>`, text: r.text, x: r.x, y: r.y, size: r.size, w: r.w, bold: fs.bold, italic: fs.italic, kind: fs.kind, rtl: r.rtl };
   });
+}
+
+// ---------- texto corrido (editável como se tivesse sido digitado) ----------
+// Em vez de blocos posicionados, o conteúdo da página vira parágrafos, títulos e imagens normais do editor, na ordem de leitura.
+const escT = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function flowPage(runs, imgs, W, H) {
+  const blocks = []; // { top, html }
+  const sorted = runs.filter((r) => r.text.trim()).sort((a, b) => a.y - b.y || a.x - b.x);
+  const lines = [];
+  for (const r of sorted) {
+    const ln = lines.find((l) => Math.abs(l.y - r.y) < Math.max(l.size, r.size) * 0.4);
+    if (ln) { ln.runs.push(r); ln.size = Math.max(ln.size, r.size); } else lines.push({ y: r.y, size: r.size, runs: [r] });
+  }
+  lines.sort((a, b) => a.y - b.y);
+  lines.forEach((l) => { l.runs.sort((a, b) => a.x - b.x); const last = l.runs[l.runs.length - 1]; l.x0 = l.runs[0].x; l.right = last.x + last.w; });
+
+  // tamanho do corpo = tamanho mais comum (ponderado pelo nº de caracteres)
+  const bySize = new Map();
+  lines.forEach((l) => l.runs.forEach((r) => { const k = Math.round(r.size); bySize.set(k, (bySize.get(k) || 0) + r.text.length); }));
+  let bodySize = 12, best = -1;
+  bySize.forEach((n, k) => { if (n > best) { best = n; bodySize = k; } });
+  const minLeft = lines.length ? Math.min(...lines.map((l) => l.x0)) : 0;
+  const maxRight = lines.length ? Math.max(...lines.map((l) => l.right)) : W;
+
+  const inline = (l, base) => {
+    let out = "";
+    l.runs.forEach((r, i) => {
+      if (i > 0) {
+        const prev = l.runs[i - 1];
+        const gap = r.x - (prev.x + prev.w);
+        if (gap > prev.size * 2.5) out += "&emsp;&emsp;";
+        else if (gap > prev.size * 0.15 && !/\s$/.test(prev.text) && !/^\s/.test(r.text)) out += " ";
+      }
+      let h = escT(i === 0 ? r.text.replace(/^\s+/, "") : r.text);
+      const css = [];
+      if (Math.abs(r.size - base) > 0.6) css.push(`font-size:${r2(r.size)}px`);
+      if (r.kind === "mono") css.push("font-family:'Courier New',Courier,monospace");
+      else if (r.kind === "serif") css.push("font-family:'Times New Roman',Times,serif");
+      if (css.length) h = `<span style="${css.join(";")}">${h}</span>`;
+      if (r.italic) h = `<i>${h}</i>`;
+      if (r.bold) h = `<b>${h}</b>`;
+      out += h;
+    });
+    return out.replace(/\s+$/, "");
+  };
+
+  const paras = [];
+  lines.forEach((l) => {
+    const p = paras[paras.length - 1];
+    const prevLine = p && p.lines[p.lines.length - 1];
+    const heading = l.size >= bodySize * 1.2;
+    if (p && !heading && !p.heading && (l.y - prevLine.y) <= 1.65 * Math.max(prevLine.size, l.size) && Math.abs(l.size - prevLine.size) < 0.8
+      && Math.abs(l.x0 - prevLine.x0) < l.size * 1.2 && prevLine.right >= maxRight - prevLine.size * 3) p.lines.push(l);
+    else paras.push({ lines: [l], heading });
+  });
+
+  paras.forEach((p, idx) => {
+    const first = p.lines[0], last = p.lines[p.lines.length - 1];
+    const size = first.size;
+    const html = p.lines.map((l) => inline(l, size)).join(" ");
+    if (!html) return;
+    const indent = first.x0 - minLeft;
+    const rightGap = maxRight - last.right;
+    let align = "left";
+    if (indent > size * 3 && Math.abs((first.x0 + last.right) / 2 - W / 2) < size * 1.5 && p.lines.length <= 2) align = "center";
+    else if (indent > (maxRight - minLeft) * 0.4 && rightGap < size * 1.5) align = "right";
+    const css = [`font-size:${r2(size)}px`];
+    if (align !== "left") css.push(`text-align:${align}`);
+    else if (indent > size * 1.5) css.push(`margin-left:${Math.round(Math.min(300, indent))}px`);
+    const ratio = size / bodySize;
+    const allBold = p.lines.every((l) => l.runs.every((r) => r.bold));
+    const tag = ratio >= 1.8 ? "h1" : ratio >= 1.4 ? "h2" : ratio >= 1.2 && allBold ? "h3" : "div";
+    const prev = idx ? paras[idx - 1] : null;
+    let top = first.y;
+    if (prev) {
+      const pl = prev.lines[prev.lines.length - 1];
+      if (first.y - pl.y >= 1.9 * Math.max(pl.size, size)) blocks.push({ top: first.y - 0.01, html: "<div><br></div>" });
+    }
+    blocks.push({ top, html: `<${tag} style="${css.join(";")}">${html}</${tag}>` });
+  });
+
+  imgs.forEach((im) => {
+    if (runs.length && im.w * im.h > W * H * 0.85) return; // imagem de fundo da página inteira: não entra no texto
+    const cx = im.l + im.w / 2;
+    const align = Math.abs(cx - W / 2) < W * 0.08 ? "center" : cx > W * 0.7 ? "right" : "left";
+    blocks.push({ top: im.t, html: `<div${align !== "left" ? ` style="text-align:${align}"` : ""}><img src="${im.url}" style="width:${r2(im.w)}px;height:${r2(im.h)}px;max-width:100%"></div>` });
+  });
+  blocks.sort((a, b) => a.top - b.top);
+  return blocks.map((b) => b.html).join("");
 }
 
 // ---------- API ----------
@@ -255,6 +344,7 @@ export async function pdfFileToWordHtml(file, opts = {}) {
   let hasContent = false;
   let meta = { page_size: "a4", orientation: "retrato" };
   const imgState = { bytes: 0 };
+  const flow = opts.layout !== true; // padrão: texto corrido editável; opts.layout = true mantém as páginas posicionadas
   try {
     let scale = 1, targetW = 794, pageH = 1123;
     const fit = opts.fit && opts.fit.w > 0 && opts.fit.h > 0 ? opts.fit : null;
@@ -278,6 +368,13 @@ export async function pdfFileToWordHtml(file, opts = {}) {
       const layers = await pageGraphics(page, vp, imgState); // carrega as fontes do PDF (usadas em pageRuns)
       const runs = pageRuns(page, tc, vp);
       const W = Math.round(vp.width), H = Math.round(vp.height);
+      if (flow) {
+        const imgs = layers.filter((l) => l.type === "img");
+        const h = flowPage(runs, imgs, W, H);
+        if (h) { hasContent = true; pages.push(h); }
+        page.cleanup();
+        continue;
+      }
       // O bloco tem sempre o tamanho exato da página (o arredondamento de 1 px por página fazia 3 páginas virarem 4).
       const outW = fit || Math.abs(W - targetW) <= 2 ? targetW : W;
       const outH = fit || Math.abs(H - pageH) <= 2 ? pageH : H;
@@ -288,7 +385,7 @@ export async function pdfFileToWordHtml(file, opts = {}) {
         else if (l.paths.length) body += `<svg contenteditable="false" xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="position:absolute;left:0;top:0;pointer-events:none;user-select:none">${l.paths.join("")}</svg>`;
       }
       if (runs.length) hasContent = true;
-      body += runs.join("\n");
+      body += runs.map((r) => r.html).join("\n");
       if (offX || offY) body = `<div style="position:absolute;left:${offX}px;top:${offY}px;width:${W}px;height:${H}px">${body}</div>`;
       pages.push(`<div class="pdf-import-page" style="position:relative;width:${outW}px;height:${outH}px;overflow:hidden;background:#fff">${body}</div>`);
       page.cleanup();
@@ -299,8 +396,8 @@ export async function pdfFileToWordHtml(file, opts = {}) {
   if (!hasContent) throw new Error("Este PDF não tem texto nem imagens que possam ser importados.");
   return {
     title: file.name.replace(/\.pdf$/i, "").trim() || "Documento",
-    html: pages.join("\n"),
+    html: flow ? pages.join("<div><br></div>") : pages.join("\n"),
     ...meta,
-    margins: "estreita",
+    margins: flow ? "normal" : "estreita",
   };
 }
