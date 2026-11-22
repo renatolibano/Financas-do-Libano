@@ -226,6 +226,9 @@ function parseBlocks(html) {
   container.innerHTML = html || "";
   const blocks = [];
   let header = null, headerFirst = null, footer = null, footerFirst = null, headerEven = null, footerEven = null;
+  // cabeçalho/rodapé próprios de uma seção (faixa marcada com data-secband, na posição da seção): índice da seção (0 = 1ª) -> faixa
+  let secIdx = 0;
+  const secHeaders = {}, secFooters = {};
 
   const pushParagraphLike = (el, type = "paragraph", extra = {}) => {
     blocks.push({ type, align: parseAlign(el), firstLine: parseFirstLine(el), runs: collectRuns(el, {}), ...extra });
@@ -261,7 +264,7 @@ function parseBlocks(html) {
     if (el.classList?.contains("word-page-meta")) return; // marcador invisível (tema/marca d'água/cor/borda), não é conteúdo
     if (el.classList?.contains("word-page-break")) {
       // quebra de seção: leva as propriedades de numeração da seção que começa depois dela
-      if (el.classList.contains("word-section-break")) blocks.push({ type: "pagebreak", section: el.dataset.section || "nextpage", props: { fmt: el.dataset.pgfmt || "", restart: el.dataset.pgrestart === "1", start: Number(el.dataset.pgstart) || 1, hide: el.dataset.pghide === "1" } });
+      if (el.classList.contains("word-section-break")) { secIdx++; blocks.push({ type: "pagebreak", section: el.dataset.section || "nextpage", props: { fmt: el.dataset.pgfmt || "", restart: el.dataset.pgrestart === "1", start: Number(el.dataset.pgstart) || 1, hide: el.dataset.pghide === "1" } }); }
       else blocks.push({ type: "pagebreak" });
       return;
     }
@@ -298,6 +301,10 @@ function parseBlocks(html) {
       });
       return;
     }
+    if (el.dataset?.secband && (el.classList?.contains("word-header-band") || el.classList?.contains("word-footer-band"))) {
+      (el.classList.contains("word-header-band") ? secHeaders : secFooters)[secIdx] = { runs: collectRuns(el, {}) };
+      return;
+    }
     if (el.classList?.contains("word-header-band-even")) { headerEven = { runs: collectRuns(el, {}) }; return; }
     if (el.classList?.contains("word-footer-band-even")) { footerEven = { runs: collectRuns(el, {}) }; return; }
     if (el.classList?.contains("word-header-band-first")) { headerFirst = { runs: collectRuns(el, {}) }; return; }
@@ -318,7 +325,7 @@ function parseBlocks(html) {
   });
 
   if (!blocks.length) blocks.push({ type: "paragraph", runs: [] });
-  return { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven };
+  return { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven, secHeaders, secFooters };
 }
 
 // ---------------------------------------------------------------------------
@@ -471,7 +478,7 @@ async function addMirrorMargins(blob) {
 
 export async function downloadWordDocx(doc) {
   const processedHtml = await preprocessExportHtml(doc.content);
-  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven } = parseBlocks(processedHtml);
+  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven, secHeaders, secFooters } = parseBlocks(processedHtml);
   const book = readBookLayout(doc.content);
   let children = [];
   const sectionList = []; // uma por quebra de seção: { children, props, type } (a 1ª usa as propriedades do documento)
@@ -548,11 +555,12 @@ export async function downloadWordDocx(doc) {
   const topTwips = book.mt != null ? cmToTwips(book.mt) : marginTwips;
   const bottomTwips = book.mb != null ? cmToTwips(book.mb) : marginTwips;
   // cabeçalhos/rodapés são criados de novo em cada seção (com o número de página omitido nas seções sem número)
-  const mkBands = (hideNum) => {
+  // ov = { h, f }: cabeçalho/rodapé próprio herdado da seção (substitui o do documento; vale também para páginas pares)
+  const mkBands = (hideNum, ov = {}) => {
     const H = (band) => (band ? new Header({ children: [buildFieldParagraph(band, hideNum)] }) : undefined);
     const F = (band) => (band ? new Footer({ children: [buildFieldParagraph(band, hideNum)] }) : undefined);
-    const headerObj = H(header), headerFirstObj = H(headerFirst), headerEvenObj = H(headerEven);
-    const footerObj = F(footer), footerFirstObj = F(footerFirst), footerEvenObj = F(footerEven);
+    const headerObj = H(ov.h || header), headerFirstObj = ov.h ? undefined : H(headerFirst), headerEvenObj = H(ov.h || headerEven);
+    const footerObj = F(ov.f || footer), footerFirstObj = ov.f ? undefined : F(footerFirst), footerEvenObj = F(ov.f || footerEven);
     return {
       headers: (headerObj || headerFirstObj || headerEvenObj) ? { default: headerObj || new Header({ children: [new Paragraph("")] }), first: headerFirstObj, even: headerEvenObj } : undefined,
       footers: (footerObj || footerFirstObj || footerEvenObj) ? { default: footerObj || new Footer({ children: [new Paragraph("")] }), first: footerFirstObj, even: footerEvenObj } : undefined,
@@ -562,12 +570,14 @@ export async function downloadWordDocx(doc) {
   const fmtOf = (f) => (f === "lower-roman" ? NumberFormat.LOWER_ROMAN : f === "upper-roman" ? NumberFormat.UPPER_ROMAN : NumberFormat.DECIMAL);
   const typeOf = (t) => (t === "continuous" ? SectionType.CONTINUOUS : t === "oddpage" ? SectionType.ODD_PAGE : t === "evenpage" ? SectionType.EVEN_PAGE : SectionType.NEXT_PAGE);
   let curFmt = book.pgfmt || "decimal";
+  let effH = null, effF = null; // cabeçalho/rodapé próprio vigente (cada seção herda o da anterior até definir o seu)
   const docSections = sectionList.map((sec, i) => {
+    if (i > 0) { if (secHeaders[i]) effH = secHeaders[i]; if (secFooters[i]) effF = secFooters[i]; }
     const p = sec.props;
     if (p && p.fmt) curFmt = p.fmt;
     const hide = i === 0 ? book.pghide : !!p?.hide;
     const startNum = i === 0 ? book.pgstart : (p?.restart ? p.start : null);
-    const bands = mkBands(hide);
+    const bands = mkBands(hide, i > 0 ? { h: effH, f: effF } : {});
     return {
       properties: {
         ...(i > 0 ? { type: typeOf(sec.type) } : {}),
@@ -631,8 +641,8 @@ export async function downloadWordPdf(doc, opts = {}) {
   // Margens espelhadas: página ímpar usa a margem interna à esquerda; a par, a externa.
   const leftFor = (p) => (book.mirror && p % 2 === 0 ? marginRightPt : baseLeft);
   const curLeft = () => leftFor(pdf.internal.getNumberOfPages());
-  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven } = parseBlocks(await preprocessExportHtml(doc.content));
-  const hasHeader = !!(header || headerFirst || headerEven), hasFooter = !!(footer || footerFirst || footerEven);
+  const { blocks, header, headerFirst, footer, footerFirst, headerEven, footerEven, secHeaders, secFooters } = parseBlocks(await preprocessExportHtml(doc.content));
+  const hasHeader = !!(header || headerFirst || headerEven || Object.keys(secHeaders).length), hasFooter = !!(footer || footerFirst || footerEven || Object.keys(secFooters).length);
   let y = topPt + (hasHeader ? 14 : 0);
 
   const ensureSpace = (lineHeight) => {
@@ -766,8 +776,10 @@ export async function downloadWordPdf(doc, opts = {}) {
       pdf.setPage(p);
       const useFirst = p === 1;
       const useEven = p % 2 === 0;
-      const h = useFirst && headerFirst ? headerFirst : (useEven && headerEven ? headerEven : header);
-      const f = useFirst && footerFirst ? footerFirst : (useEven && footerEven ? footerEven : footer);
+      let sIdx = 0; for (let i = 0; i < secStarts.length; i++) if (secStarts[i].startPage <= p - 1) sIdx = i + 1;
+      const own = (map) => { for (let j = sIdx; j >= 1; j--) if (map[j]) return map[j]; return null; }; // herda o da seção anterior
+      const h = own(secHeaders) || (useFirst && headerFirst ? headerFirst : (useEven && headerEven ? headerEven : header));
+      const f = own(secFooters) || (useFirst && footerFirst ? footerFirst : (useEven && footerEven ? footerEven : footer));
       if (h) pdf.text(bandText(h, p, totalPages), leftFor(p), topPt - 8);
       if (f) pdf.text(bandText(f, p, totalPages), leftFor(p), pageHeight - botPt + 18);
     }

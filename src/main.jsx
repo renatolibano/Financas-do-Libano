@@ -19253,7 +19253,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     const el = bodyRef.current;
     if (!el) return;
     const cls = (kind === "header" ? "word-header-band" : "word-footer-band") + (variant === "first" ? "-first" : variant === "even" ? "-even" : "");
-    let band = el.querySelector("." + cls);
+    let band = el.querySelector("." + cls + ":not([data-secband])");
     const hfStyle = HF_STYLES.find(x => x[0] === styleId);
     const labelFor = variant === "first" ? (kind === "header" ? "Cabeçalho da 1ª página" : "Rodapé da 1ª página") : variant === "even" ? (kind === "header" ? "Cabeçalho das páginas pares" : "Rodapé das páginas pares") : (kind === "header" ? "Cabeçalho" : "Rodapé");
     if (band && hfStyle) { band.innerHTML = hfStyle[2](labelFor); onChange(); }
@@ -19316,7 +19316,11 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     const el = bodyRef.current;
     if (!el) return;
     const cls = where === "header" ? "word-header-band" : "word-footer-band";
-    let band = el.querySelector("." + cls);
+    // se o cursor está numa faixa (inclusive o cabeçalho/rodapé próprio de uma seção), o número entra nela
+    const sel0 = window.getSelection();
+    const an = sel0 && sel0.rangeCount ? sel0.anchorNode : null;
+    const inBand = an ? (an.nodeType === 3 ? an.parentElement : an)?.closest?.(".word-header-band, .word-footer-band") : null;
+    let band = inBand && el.contains(inBand) ? inBand : el.querySelector("." + cls + ":not([data-secband])");
     if (!band) {
       band = document.createElement("div");
       band.className = cls;
@@ -22155,6 +22159,57 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     return attachPdfFreeEdit(el, { before: () => acLive.current.before(), after: () => acLive.current.after() });
   }, []);
 
+  // Enter no fim de um título/citação sai para um parágrafo normal (como o "próximo estilo" do Word), em vez de continuar no mesmo estilo:
+  // - citação (blockquote): Enter numa linha vazia sai da citação;
+  // - parágrafo com bordas, "Título" ou "Subtítulo": Enter no fim abre um parágrafo limpo (o navegador copiava o estilo para o novo).
+  const exitStyledBlockOnEnter = (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return false;
+    const body = bodyRef.current, sel = window.getSelection();
+    if (!body || !sel || !sel.rangeCount || !sel.isCollapsed || !body.contains(sel.anchorNode)) return false;
+    const rg = sel.getRangeAt(0);
+    const node = rg.startContainer.nodeType === 3 ? rg.startContainer.parentElement : rg.startContainer;
+    if (!node || node.closest("li, table, .check-text, .word-toc, .word-footnotes")) return false;
+    const blk = deepPageBlock(body, rg.startContainer);
+    if (!blk || blk === body) return false;
+    const tag = blk.tagName;
+    const isQuote = tag === "BLOCKQUOTE";
+    let isTitle = false;
+    if (!isQuote && !blk.classList.contains("word-page-meta")) {
+      if (blk.classList.contains("word-title") || blk.classList.contains("word-subtitle")) isTitle = true;
+      else if (tag === "DIV" || tag === "P") { const cs = getComputedStyle(blk); isTitle = parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderBottomWidth) > 0; }
+    }
+    if (!isQuote && !isTitle) return false;
+    // só vale com o cursor no fim do bloco
+    const tail = document.createRange();
+    tail.setStart(rg.startContainer, rg.startOffset); tail.setEnd(blk, blk.childNodes.length);
+    const frag = tail.cloneContents();
+    if ((frag.textContent || "").trim() || frag.querySelector("img, table, hr")) return false;
+    const hasText = !!(blk.textContent || "").trim() || !!blk.querySelector("img");
+    if (isQuote) {
+      // precisa estar numa linha vazia
+      const line = node.closest("div, p");
+      const inLine = line && line !== blk && blk.contains(line);
+      let empty;
+      if (inLine) empty = !(line.textContent || "").trim() && !line.querySelector("img");
+      else {
+        const prev = rg.startContainer === blk ? blk.childNodes[rg.startOffset - 1] : (rg.startContainer.nodeType === 3 && rg.startOffset === 0 ? rg.startContainer.previousSibling : null);
+        empty = !hasText || (!!prev && prev.nodeName === "BR");
+      }
+      if (!empty) return false;
+      if (inLine && blk.children.length > 1) line.remove();
+      else { while (blk.lastChild && (blk.lastChild.nodeName === "BR" || (blk.lastChild.nodeType === 3 && !blk.lastChild.nodeValue.trim()))) blk.lastChild.remove(); }
+    }
+    e.preventDefault();
+    const clean = document.createElement("div");
+    clean.innerHTML = "<br>";
+    if (isTitle && !hasText) blk.replaceWith(clean); // bloco de título vazio (estilo copiado): vira parágrafo normal
+    else if (isQuote && !(blk.textContent || "").trim() && !blk.querySelector("img")) blk.replaceWith(clean);
+    else blk.after(clean);
+    const r = document.createRange(); r.setStart(clean, 0); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+    handleBodyInput();
+    return true;
+  };
   const handleEditorKeyDown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (e.altKey && !mod && (e.key === "=" || e.code === "Equal")) { e.preventDefault(); insertEquationInline(); return; }
@@ -22173,6 +22228,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       return;
     }
     if (handleWordcraftKeys(e)) return;
+    if (exitStyledBlockOnEnter(e)) return;
     fmt.handleBodyKeyDown(e);
   };
 
@@ -22242,8 +22298,44 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     for (let i = 0; i <= (idx < 0 ? flat.length - 1 : idx); i++) if (flat[i].classList.contains("word-section-break")) { br = flat[i]; num++; }
     secBreakRef.current = br;
     const bl = bookLayoutRef.current;
-    if (br) openDlg("section", { n: num, first: false, fmt: br.dataset.pgfmt || "", restart: br.dataset.pgrestart === "1", start: br.dataset.pgstart || "1", show: br.dataset.pghide !== "1" });
+    if (br) { const own = sectionBands(num - 1); openDlg("section", { n: num, first: false, fmt: br.dataset.pgfmt || "", restart: br.dataset.pgrestart === "1", start: br.dataset.pgstart || "1", show: br.dataset.pghide !== "1", hdrOwn: !!own.header, ftrOwn: !!own.footer }); }
     else openDlg("section", { n: 1, first: true, fmt: bl.pgfmt || "decimal", restart: true, start: String(bl.pgstart || 1), show: !bl.pghide });
+  };
+  // Cabeçalho/rodapé PRÓPRIO de uma seção (secIdx 0-based; a 1ª seção usa o do documento). A faixa fica na posição da seção:
+  // cabeçalho logo depois da quebra que abre a seção, rodapé logo antes da quebra seguinte (ou no fim). Sem faixa própria = "igual ao da anterior".
+  const sectionBands = (secIdx) => {
+    const body = bodyRef.current;
+    const out = {};
+    if (!body) return out;
+    let cur = 0;
+    for (const n of flatPageBlocks(body)) {
+      if (n.classList.contains("word-section-break")) { cur++; if (cur > secIdx) break; continue; }
+      if (cur === secIdx && n.dataset && n.dataset.secband) { if (n.classList.contains("word-header-band")) out.header = n; else if (n.classList.contains("word-footer-band")) out.footer = n; }
+    }
+    return out;
+  };
+  const setSectionBand = (secIdx, kind, own) => {
+    const body = bodyRef.current;
+    if (!body || secIdx < 1) return;
+    const cur = sectionBands(secIdx)[kind];
+    if (!own) {
+      if (!cur) return;
+      if ((cur.textContent || "").trim() && !confirm(`Remover o ${kind === "header" ? "cabeçalho" : "rodapé"} próprio da seção ${secIdx + 1}? Ela passará a usar o da seção anterior.`)) return false;
+      cur.remove();
+      return true;
+    }
+    if (cur) return true;
+    const brks = flatPageBlocks(body).filter(n => n.classList.contains("word-section-break"));
+    const startBreak = brks[secIdx - 1], nextBreak = brks[secIdx];
+    if (!startBreak) return;
+    const band = document.createElement("div");
+    band.className = kind === "header" ? "word-header-band" : "word-footer-band";
+    band.dataset.secband = "1";
+    band.innerHTML = `<div>${kind === "header" ? "Cabeçalho" : "Rodapé"} da seção ${secIdx + 1}</div>`;
+    if (kind === "header") startBreak.after(band);
+    else if (nextBreak) nextBreak.before(band);
+    else { const end = body.querySelector(":scope > .word-footer-band:not([data-secband])"); if (end) end.before(band); else body.appendChild(band); }
+    return true;
   };
   const applySectionProps = (f) => {
     const br = secBreakRef.current;
@@ -22256,7 +22348,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       set("pgrestart", f.restart ? "1" : "");
       set("pgstart", f.restart && start > 1 ? String(start) : "");
       set("pghide", f.show ? "" : "1");
+      // cabeçalho/rodapé próprios desta seção
+      const secIdx = Number(f.n) - 1;
+      const h1 = setSectionBand(secIdx, "header", !!f.hdrOwn);
+      const f1 = setSectionBand(secIdx, "footer", !!f.ftrOwn);
       handleBodyInput();
+      if ((f.hdrOwn && h1) || (f.ftrOwn && f1)) { const b2 = sectionBands(secIdx)[f.hdrOwn ? "header" : "footer"]; b2?.scrollIntoView?.({ block: "center" }); }
     }
     closeDlg();
   };
@@ -27264,8 +27361,10 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
               <option value="decimal">1, 2, 3…</option><option value="lower-roman">i, ii, iii…</option><option value="upper-roman">I, II, III…</option>
             </select></label>
             {!dlgForm.first && <label>Numeração <select value={dlgForm.restart ? "restart" : "continue"} onChange={e => setF("restart", e.target.value === "restart")}><option value="continue">Continuar a da seção anterior</option><option value="restart">Reiniciar</option></select></label>}
+            {!dlgForm.first && <label><input type="checkbox" checked={!!dlgForm.hdrOwn} onChange={e => setF("hdrOwn", e.target.checked)}/> Cabeçalho próprio desta seção (desmarcado = igual ao da seção anterior)</label>}
+            {!dlgForm.first && <label><input type="checkbox" checked={!!dlgForm.ftrOwn} onChange={e => setF("ftrOwn", e.target.checked)}/> Rodapé próprio desta seção (desmarcado = igual ao da seção anterior)</label>}
             <label>{dlgForm.first ? "Começar a numeração em" : "Reiniciar em"} <input type="number" step="1" min="1" disabled={!dlgForm.first && !dlgForm.restart} value={dlgForm.start ?? "1"} onChange={e => setF("start", e.target.value)}/></label>
-            <small>Vale na barra de status, no sumário e no .docx/PDF exportados. A seção 1 é o começo do documento; as seguintes começam em cada quebra de seção (Layout › Quebras). Ex.: capa sem número, prefácio em romano, capítulo 1 na página 1.</small>
+            <small>Numeração, cabeçalho e rodapé valem no sumário e no .docx/PDF exportados; cabeçalho/rodapé próprios aparecem como faixa no começo/fim da seção. A seção 1 usa o cabeçalho/rodapé do documento (Inserir) e é o começo do documento; as seguintes começam em cada quebra de seção (Layout › Quebras). Ex.: capa sem número, prefácio em romano, capítulo 1 na página 1.</small>
           </WordModal>
         )}
 
