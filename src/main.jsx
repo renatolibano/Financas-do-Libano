@@ -96,6 +96,7 @@ import {
 import { useFullscreen, useScreenRotate, useSession, useTheme, useDismissedToday } from "./hooks";
 import { downloadWordDocx, downloadWordPdf, countWords, safeFileName } from "./lib/wordExport";
 import { downloadWordPdfAsImages } from "./lib/wordPdfImage";
+import { downloadWordPdfVector } from "./lib/wordPdfVector";
 import WordImageHandles from "./components/WordImageHandles";
 import { saveWordOriginal, listWordOriginals, downloadWordOriginal, deleteWordOriginals, sigOf, setWordOriginalSig, downloadPdfFromOriginals } from "./lib/wordOriginals";
 import { downloadWordAs, EXPORT_FORMATS, importWordFile, IMPORT_ACCEPT } from "./lib/wordFormats";
@@ -24319,7 +24320,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       setExportingPdf("");
     }
   };
+  // PDF "de verdade": texto selecionável e desenho vetorial a partir do que está na tela (ver lib/wordPdfVector). Se não der
+  // (PDF importado com layout fixo, texto vertical, colunas ou qualquer erro), cai no exportador anterior.
+  const vectorPdf = (asBlob) => {
+    const dims = currentPageDims();
+    return downloadWordPdfVector({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, asBlob, onProgress: (i, n) => setExportingPdf(`Gerando PDF… página ${i} de ${n}`) });
+  };
+  const legacyPdf = () => { if (hasLayoutObjects()) exportPagesAsImages("pdf"); else downloadWordPdf(currentDocForExport()); };
   const regularExport = (kind) => {
+    if (kind === "pdf" && !bodyRef.current?.querySelector(":scope > .pdf-import-page")) {
+      setExportingPdf("Gerando PDF…");
+      vectorPdf(false).catch((err) => { console.warn("[Libano] PDF vetorial falhou, usando o exportador anterior:", err); legacyPdf(); }).finally(() => setExportingPdf(""));
+      return;
+    }
     if ((kind === "pdf" || kind === "docx") && hasLayoutObjects()) { exportPagesAsImages(kind); return; }
     if (kind === "docx") downloadWordDocx(currentDocForExport());
     else if (EXPORT_FORMATS[kind]) downloadWordAs(currentDocForExport(), kind).catch(err => alert("Não foi possível exportar: " + (err?.message || err)));
@@ -24341,7 +24354,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
           let blob;
           setExportingPdf("Preparando PDF…");
           try {
-            if (hasLayoutObjects()) {
+            if (!bodyRef.current?.querySelector(":scope > .pdf-import-page")) { try { blob = await vectorPdf(true); } catch { blob = null; } }
+            if (blob) { /* PDF vetorial pronto */ }
+            else if (hasLayoutObjects()) {
               const dims = currentPageDims();
               blob = await downloadWordPdfAsImages({ pageEl: pageRef.current, bodyEl: bodyRef.current, width: dims.w, height: dims.h, title, asBlob: true, onProgress: (i, n) => setExportingPdf(`Preparando PDF… página ${i} de ${n}`) });
             } else blob = await downloadWordPdf(currentDocForExport(), { asBlob: true });
