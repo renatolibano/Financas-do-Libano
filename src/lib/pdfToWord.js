@@ -149,7 +149,7 @@ async function imageToDataUrl(img, imgState) {
   try {
     let w = img.width, h = img.height;
     let src;
-    if (img.bitmap) { src = img.bitmap; w = img.bitmap.width; h = img.bitmap.height; }
+    if (img.bitmap) { src = img.bitmap; w = src.width || src.displayWidth || src.codedWidth || img.width; h = src.height || src.displayHeight || src.codedHeight || img.height; if (!w || !h) return null; }
     else if (img.data && w && h) {
       const c = document.createElement("canvas");
       c.width = w; c.height = h;
@@ -370,6 +370,17 @@ export async function pdfFileToWordHtml(file, opts = {}) {
       const W = Math.round(vp.width), H = Math.round(vp.height);
       if (flow) {
         const imgs = layers.filter((l) => l.type === "img");
+        const textChars = runs.reduce((n, r) => n + r.text.replace(/\s/g, "").length, 0);
+        if (layers.length && textChars < 8) { // sem texto extraível (capa, texto em curvas): a página inteira entra como uma imagem
+          const parts = layers.map((l) => {
+            if (l.type !== "img") return l.paths.join("");
+            const cx = l.l + l.w / 2, cy = l.t + l.h / 2, fx = /scaleX/.test(l.html) ? -1 : 1, fy = /scaleY/.test(l.html) ? -1 : 1;
+            return `<image href="${l.url}" x="${r2(l.l)}" y="${r2(l.t)}" width="${r2(l.w)}" height="${r2(l.h)}" preserveAspectRatio="none"${fx * fy !== 1 || fx < 0 || fy < 0 ? ` transform="translate(${r2(cx)} ${r2(cy)}) scale(${fx} ${fy}) translate(${r2(-cx)} ${r2(-cy)})"` : ""}/>`;
+          });
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
+          let b64 = ""; try { b64 = btoa(unescape(encodeURIComponent(svg))); } catch { b64 = ""; }
+          if (b64) { hasContent = true; pages.push(`<div style="text-align:center"><img src="data:image/svg+xml;base64,${b64}" style="width:${W}px;height:${H}px;max-width:100%"></div>`); page.cleanup(); continue; }
+        }
         const h = flowPage(runs, imgs, W, H);
         if (h) { hasContent = true; pages.push(h); }
         page.cleanup();
