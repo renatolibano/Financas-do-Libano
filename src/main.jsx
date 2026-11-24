@@ -23088,6 +23088,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     const brs = Array.from(body.querySelectorAll(":scope > .word-page-break:not(.word-section-break)"));
     const ph = currentPageDims().h;
     const sc = bodyScale();
+    if (!(ph > 0) || !(sc > 0) || !isFinite(sc)) { body.__pageWhy = "layout"; return; } // medida inválida (corpo oculto/zoom em transição): mantém o layout atual em vez de recalcular errado
     const measure = (css) => { // mede uma margem da página na mesma unidade do layout
       const host = layer || brs[0];
       if (!host) return 0;
@@ -23317,7 +23318,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
     return () => { clearTimeout(t); clearTimeout(pbTimer.current); cancelAnimationFrame(pbRaf.current); if (body) { body.__syncPageBreaks = null; body.__pageLabeler = null; } window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine]);
+  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine, zoom]);
 
   // Nova página em branco logo ACIMA ou ABAIXO da página onde está o cursor (nunca no meio do texto).
   const insertPage = (where) => { // "above" | "below"
