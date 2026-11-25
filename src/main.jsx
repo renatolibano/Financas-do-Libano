@@ -23217,7 +23217,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
       }
       body.style.minHeight = np * ph + "px";
       layer.style.display = prevDisplay;
-      const need = Math.max(1, Math.ceil(contentBottom() / ph));
+      const need = Math.max(1, Math.ceil((contentBottom() - 1) / ph));
       if (Math.abs(need - np) > 1) { console.info("[Libano] motor de páginas (modelo): previsto", np, "obtido", need, "- usando o clássico"); body.__pageWhy = "mismatch"; return false; }
       const pageByEl = new Map();
       kids.forEach((k, i) => pageByEl.set(k, res.where.get(i)));
@@ -23234,12 +23234,12 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     layer.textContent = ""; delete layer.dataset.sig; body.style.minHeight = "";
     layoutBreaks();
     const H0 = contentBottom();
-    let n = Math.max(1, Math.ceil(H0 / ph));
+    let n = Math.max(1, Math.ceil((H0 - 1) / ph));
     // 2) com as faixas, até o número de páginas estabilizar
     for (let i = 0; i < 6; i++) {
       buildGaps(n);
       layoutBreaks();
-      const need = Math.max(1, Math.ceil(contentBottom() / ph));
+      const need = Math.max(1, Math.ceil((contentBottom() - 1) / ph));
       if (need === n) break;
       n = need;
     }
