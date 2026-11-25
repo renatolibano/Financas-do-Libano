@@ -21985,6 +21985,16 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     if (fmt.findHooks.current.busy) return; // substituindo vários achados: o onChange roda uma vez no fim
     if (fmt.findMatches.length) fmt.resetFindHighlights();
     fmt.recalcTabsInBlock?.(fmt.currentBlock?.());
+    if (e && e.nativeEvent && e.nativeEvent.inputType === "insertParagraph") { // como no Word: novo parágrafo (Enter) herda o recuo (1ª linha/esquerdo/direito) do anterior
+      const blk = fmt.currentBlock?.(), prev = blk && blk.previousElementSibling;
+      if (blk && prev && blk !== bodyRef.current && !blk.style.textIndent && prev.style.textIndent && /^(P|DIV)$/.test(blk.tagName) && !blk.closest("li, table") &&
+          !prev.classList.contains("word-title") && !prev.classList.contains("word-subtitle") && !prev.classList.contains("word-page-break") && !(parseFloat(getComputedStyle(prev).borderTopWidth) > 0)) {
+        blk.style.textIndent = prev.style.textIndent;
+        if (!blk.style.marginLeft && prev.style.marginLeft) blk.style.marginLeft = prev.style.marginLeft;
+        if (!blk.style.marginRight && prev.style.marginRight) blk.style.marginRight = prev.style.marginRight;
+        fmt.syncRulerState?.();
+      }
+    }
     docDirtyRef.current = true;
     // Contagem de palavras e painel de títulos re-renderizam o editor inteiro: em documento grande, só depois de uma pausa na digitação.
     const bigDoc = (bodyRef.current?.childElementCount || 0) > 400;
