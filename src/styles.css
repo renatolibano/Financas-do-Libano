@@ -1772,7 +1772,7 @@ h1{font-size:23px}
 .wordFindOpts button.on{border-color:var(--text-3);color:var(--text-1);box-shadow:inset 0 0 0 1px var(--text-3)}
 .wordFindErr{flex-basis:100%;font-size:11px;color:#e5736d}
 
-.wordPageArea{position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
+.wordPageArea{overflow-anchor:none;position:relative;flex:1;overflow:auto;background:#54575c;padding:26px 14px;display:flex;flex-direction:column;align-items:center}
 .wordPageAreaRow{display:flex;overflow:hidden;min-height:0}
 .wordNavPane{width:220px;flex:0 0 auto;background:var(--bg-reader-toolbar);border-right:1px solid var(--border-soft);display:flex;flex-direction:column;overflow:hidden}
 .wordNavPaneTabs{display:flex;align-items:center;border-bottom:1px solid var(--border-soft);flex:0 0 auto}
