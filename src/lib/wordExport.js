@@ -446,6 +446,9 @@ function buildFieldParagraph(band, hideNumber = false) {
     if (r.pageField) {
       if (r.pageField === "simple") {
         children.push(new TextRun({ children: [PageNumber.CURRENT] }));
+      } else if (r.pageField === "of" || r.pageField === "dashof") {
+        if (r.pageField === "dashof") children.push(new TextRun("- "));
+        children.push(new TextRun({ children: [PageNumber.CURRENT] }), new TextRun(" de "), new TextRun({ children: [PageNumber.TOTAL_PAGES] }));
       } else if (r.pageField === "labelof") {
         children.push(new TextRun("Página "), new TextRun({ children: [PageNumber.CURRENT] }), new TextRun(" de "), new TextRun({ children: [PageNumber.TOTAL_PAGES] }));
       } else {
@@ -766,6 +769,8 @@ export async function downloadWordPdf(doc, opts = {}) {
     const bandText = (band, pageNum, totalPages) => (band?.runs || []).map((r) => {
       const hidden = lab.at(pageNum - 1).hidden;
       if (r.pageField === "simple") return hidden ? "" : shown(pageNum);
+      if (r.pageField === "of") return hidden ? "" : `${shown(pageNum)} de ${shown(totalPages)}`;
+      if (r.pageField === "dashof") return hidden ? "" : `- ${shown(pageNum)} de ${shown(totalPages)}`;
       if (r.pageField === "labelof") return hidden ? "" : `Página ${shown(pageNum)} de ${shown(totalPages)}`;
       if (r.pageField) return hidden ? "" : `Página ${shown(pageNum)}`;
       return r.text || "";

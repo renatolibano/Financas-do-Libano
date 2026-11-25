@@ -23,7 +23,7 @@ const lineProps = (l) => ({ x1: l[0], y1: l[1], x2: l[2], y2: l[3] });
 export default function WordRuler({
   pageWidthCm, zoom = 100, marginLeft, marginRight, onMarginDrag,
   paraIndent, onIndentLeft, onIndentRight, onIndentFirstLine,
-  tabStops, tabType, onSetTabType, onAddTab, onMoveTab, onCommitTabOrder, onRemoveTab,
+  tabStops, tabType, onSetTabType, onAddTab, onMoveTab, onCommitTabOrder, onRemoveTab, onCycleLeader,
 }) {
   const trackRef = useRef(null);
   const [W, setW] = useState(0);
@@ -245,10 +245,11 @@ export default function WordRuler({
               <div
                 key={t.id}
                 className="wordRulerZone wordRulerZone-tab"
-                data-tip={`${TAB_KIND_LABEL[t.type] || "Parada"} ${formatCm(t.pos)}`}
-                data-tipdesc="Arraste para mover, ou para fora da régua para remover."
+                data-tip={`${TAB_KIND_LABEL[t.type] || "Parada"} ${formatCm(t.pos)}${t.leader ? " · preenchimento: " + ({ dots: "pontos", dash: "traços", line: "linha" }[t.leader] || "") : ""}`}
+                data-tipdesc="Arraste para mover, ou para fora da régua para remover. Clique duas vezes para alternar o preenchimento (nenhum, pontos, traços, linha)."
                 style={{ left: px(t.pt) - 4.5, width: 9, top: H - 9, height: 10 }}
                 onPointerDown={startTab(t.id, t.type, t.pt)}
+                onDoubleClick={() => onCycleLeader && onCycleLeader(t.id)}
               />
             ))}
             <div className="wordRulerZone wordRulerZone-indent" data-tip="Recuo da primeira linha" data-tipdesc="Arraste para recuar apenas a primeira linha do parágrafo." style={{ left: firstX - 6, width: 12, top: -2, height: 10 }} onPointerDown={startIndent("first")}/>

@@ -19334,7 +19334,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     span.className = "word-pagenum";
     span.setAttribute("contenteditable", "false");
     span.dataset.fmt = format;
-    span.textContent = format === "simple" ? "1" : format === "labelof" ? "Página 1 de N" : "Página 1";
+    span.textContent = format === "simple" ? "1" : format === "labelof" ? "Página 1 de N" : format === "of" ? "1 de N" : format === "dashof" ? "- 1 de N" : "Página 1";
     inner.appendChild(document.createTextNode(" "));
     inner.appendChild(span);
     setPageNumOpen(false);
@@ -19480,6 +19480,16 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     setTabStopsState(persistTabStops(block, getTabStops(block)));
     recalcTabsInBlock(block);
   };
+  // Preenchimento da tabulação (como no Word: pontos, traços ou linha até a próxima parada) — duplo clique na parada da régua alterna.
+  const cycleTabLeader = (id) => {
+    const block = currentBlock();
+    if (!block) return;
+    const order = ["", "dots", "dash", "line"];
+    const stops = getTabStops(block).map(s => s.id === id ? { ...s, leader: order[(order.indexOf(s.leader || "") + 1) % order.length] || undefined } : s);
+    setTabStopsState(persistTabStops(block, stops, { sort: false }));
+    recalcTabsInBlock(block);
+    onChange();
+  };
   const removeTabStop = (id) => {
     const block = currentBlock();
     if (!block) return;
@@ -19535,6 +19545,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
         else widthPx = Math.max(6, targetPxFromBlockStart - cursorPx - followPx); // right e decimal (aproximado como right)
       }
       tab.style.width = (widthPx / pxPerCm) + "cm";
+      if (stop && stop.leader) tab.dataset.leader = stop.leader; else if (tab.dataset.leader) delete tab.dataset.leader;
     });
   };
 
@@ -19834,7 +19845,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
   // com uma classe própria pra numeração hierárquica (1. / 1.1 / 1.1.1) via
   // CSS counters; o aninhamento em si usa Aumentar recuo (Tab), que o
   // próprio navegador já resolve criando uma <ol> filha dentro do <li>.
-  const applyMultilevelList = () => {
+  const applyMultilevelList = (sfx) => { // sfx: undefined (1.1.) | "-" (1.1-) | ")" (1.1))
     bodyRef.current?.focus();
     document.execCommand("insertOrderedList");
     const sel = window.getSelection();
@@ -19843,7 +19854,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
       if (node.nodeType === 3) node = node.parentElement;
       const li = node?.closest?.("li");
       const ol = li?.closest?.("ol");
-      if (ol && bodyRef.current?.contains(ol)) ol.classList.add("word-multilevel");
+      if (ol && bodyRef.current?.contains(ol)) { ol.classList.add("word-multilevel"); if (sfx === "-" || sfx === ")") ol.dataset.sfx = sfx; else delete ol.dataset.sfx; }
     }
     onChange();
   };
@@ -20895,6 +20906,7 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     inp.click();
   };
   const insertIcon = (glyph) => exec("insertHTML", `<span style="font-size:30px;line-height:1">${glyph}</span>&nbsp;`);
+  const insertSvgIcon = (uri, name) => exec("insertHTML", `<img class="word-icon" alt="${name}" src="${uri}" style="width:1.6em;height:1.6em;vertical-align:-0.35em">&nbsp;`);
 
   // ---- gráfico (SVG embutido) ----
   const buildChartSvg = (type, title, labels, values) => {
@@ -21052,12 +21064,12 @@ function useWordFormatting(bodyRef, onChange, pageRef, pageWidthCm, pageHeightPx
     applyMultilevelList, sortOpen, setSortOpen, sortBlocks, applyNoSpacing,
     dictating, dictationSupported, toggleDictation,
     currentBlock, setFirstLineIndent, paraIndent, syncRulerState, handleBodyKeyDown, recalcTabsInBlock,
-    tabStops, tabType, setTabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop,
+    tabStops, tabType, setTabType, cycleTabType, addTabStopAt, moveTabStop, commitTabStopOrder, removeTabStop, cycleTabLeader,
     insertTOC, insertFootnote, insertBookmark, listBookmarks, goToBookmark, insertVideoEmbed, insertEquation,
     insertCaption, insertTableOfFigures, refreshAllTablesOfFigures, nextFootnote, showFootnotes, insertContentControl,
     phoneticGuide, charBorder, encloseChars, underlineStyle, insertEndnote, showEndnotes,
     loadSources, saveSources, insertCitation, insertBibliography, citeText, bibEntry, markIndexEntry, insertIndex, markAuthority, insertAuthorities,
-    loadQuickParts, insertQuickPart, saveQuickPart, insertSignatureLine, insertTextFromFile, insertIcon, insertChart,
+    loadQuickParts, insertQuickPart, saveQuickPart, insertSignatureLine, insertTextFromFile, insertIcon, insertSvgIcon, insertChart,
     insertContentControl2, controlProperties, outlinePromote, outlineDemote, outlineMove, outlineToggle, outlineExpandAll, outlineSetLevel, wrapSel,
   };
 }
@@ -21414,6 +21426,27 @@ const WORD_SOURCES_KEY = "libano.word.sources";
 const WORD_QUICKPARTS_KEY = "libano.word.quickparts";
 const WORD_MACROS_KEY = "libano.word.macros";
 const WORD_ICON_GLYPHS = ["★", "☆", "♥", "♦", "♣", "♠", "✔", "✘", "☎", "✉", "⚑", "⚙", "✈", "☀", "☁", "☂", "☺", "♫", "⌂", "⌛", "✎", "✂", "⚠", "☑", "➜", "❝", "✪", "⚡"];
+// Ícones vetoriais (traço) inseridos como imagem SVG: envelope, telefone, local, calendário etc. Redimensionam como qualquer imagem.
+const WORD_SVG_ICONS = [
+  ["Envelope", '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'],
+  ["Telefone", '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>'],
+  ["Telefone em círculo", '<circle cx="12" cy="12" r="11"/><g transform="translate(6.2 6.2) scale(.52)"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></g>'],
+  ["Local", '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>'],
+  ["Calendário", '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>'],
+  ["Relógio", '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'],
+  ["Confirmação", '<circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/>'],
+  ["Pessoa", '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>'],
+  ["Documento", '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/>'],
+  ["Escudo", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'],
+  ["Informação", '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>'],
+  ["Atenção", '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'],
+  ["Casa", '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>'],
+  ["Globo", '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'],
+  ["Bandeira", '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>'],
+  ["Cadeado", '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'],
+  ["Estrela", '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>'],
+  ["Coração", '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>'],
+].map(([name, body]) => ({ name, uri: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`) }));
 const BK_BR = '<div class="word-page-break" contenteditable="false"><span>Quebra de página</span></div>';
 const BK_CHAPTER = (t) => `<h1 style="text-align:center;margin:48px 0 32px">${t}</h1>`;
 const BK_FIRST = (t) => `<p style="text-align:justify;text-indent:0;margin:0">${t}</p>`;
@@ -23280,6 +23313,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
         if (n.scrollTop !== t) n.scrollTop = t;
         if (n.scrollLeft !== l) n.scrollLeft = l;
       }
+      try { renderPageFrames(); } catch {}
       lastSyncMsRef.current = performance.now() - t0;
       // Alturas dos blocos neste layout: permitem pular o recálculo quando só se digita dentro de um bloco sem mudar a altura dele.
       // (só vale a pena guardar quando o recálculo é lento)
@@ -23338,7 +23372,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     body?.addEventListener("load", schedulePageBreakSync, true); // imagens que terminam de carregar mudam a altura
     return () => { clearTimeout(t); clearTimeout(pbTimer.current); cancelAnimationFrame(pbRaf.current); if (body) { body.__syncPageBreaks = null; body.__pageLabeler = null; } window.removeEventListener("resize", schedulePageBreakSync); body?.removeEventListener("load", schedulePageBreakSync, true); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine, zoom]);
+  }, [doc?.id, pageSize, orientation, margins, viewMode, bookLayout.mt, bookLayout.mb, pageEngine, zoom, pageBorder]);
 
   // Nova página em branco logo ACIMA ou ABAIXO da página onde está o cursor (nunca no meio do texto).
   const insertPage = (where) => { // "above" | "below"
@@ -24062,6 +24096,27 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
     return {};
   };
 
+  // No Layout de Impressão a borda é desenhada em cada folha (como no Word); nos demais modos continua uma moldura única.
+  const pageFramesOn = viewMode === "print" && pageBorder !== "none" && textDir !== "vertical" && !(typeof window !== "undefined" && window.matchMedia("(max-width:760px)").matches);
+  const renderPageFrames = () => {
+    const box = pageFramesRef.current, body = bodyRef.current;
+    if (!box || !body) return;
+    if (!pageFramesOn) { if (box.firstChild) { box.textContent = ""; delete box.dataset.k; } return; }
+    const ph = currentPageDims().h, sc = bodyScale();
+    if (!(ph > 0) || !(sc > 0) || !isFinite(sc)) return;
+    const n = Math.max(1, Math.ceil((body.getBoundingClientRect().height / sc - 1) / ph));
+    const key = pageBorder + "|" + ph + "|" + n;
+    if (box.dataset.k === key) return;
+    box.textContent = "";
+    const st = pageBorderStyle(pageBorder);
+    for (let k = 0; k < n; k++) {
+      const d = document.createElement("div");
+      Object.assign(d.style, st, { left: "22px", right: "22px", top: (k * ph + 22) + "px", height: (ph - 44) + "px" });
+      box.appendChild(d);
+    }
+    box.dataset.k = key;
+  };
+
   const PAGE_DIMS = Object.fromEntries(Object.entries(PAGE_SIZES).map(([k, v]) => [k, { w: v.px[0], h: v.px[1] }]));
   const PAGE_DIMS_CM = Object.fromEntries(Object.entries(PAGE_SIZES).map(([k, v]) => [k, { w: v.cm[0], h: v.cm[1] }]));
   const currentPageDims = () => {
@@ -24502,6 +24557,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // Mostrar Tudo: além do ¶ (CSS), desenha sobre o texto os espaços (·), espaços não separáveis (°), tabs (→) e quebras de linha (↵).
   // São desenhados numa camada à parte (fora do corpo editável), só na área visível, então não entram no documento salvo.
   const marksLayerRef = useRef(null);
+  const pageFramesRef = useRef(null); // molduras da borda de página, uma por folha (modo Layout de Impressão)
   useEffect(() => {
     const layer = marksLayerRef.current;
     if (!layer) return undefined;
@@ -26087,7 +26143,9 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                     </div>}
                   </div>
                   {rbm("multilevel", (t) => <button type="button" className="rbIco rbIcoMenu" data-tip="Lista de Vários Níveis" data-tipdesc="Cria uma lista com níveis de hierarquia, como um sumário ou tópicos aninhados." onClick={t}><ListTree size={15}/><ChevronDown size={9}/></button>, <>
-                    <button onClick={fmt.applyMultilevelList}>1. 1.1. 1.1.1.</button>
+                    <button onClick={() => fmt.applyMultilevelList()}>1. 1.1. 1.1.1.</button>
+                    <button onClick={() => fmt.applyMultilevelList("-")}>1- 1.1- 1.1.1-</button>
+                    <button onClick={() => fmt.applyMultilevelList(")")}>1) 1.1) 1.1.1)</button>
                     <button onClick={() => { fmt.applyMultilevelList(); setTimeout(() => { const a = window.getSelection()?.anchorNode; const ol = (a && a.nodeType === 3 ? a.parentElement : a)?.closest?.("ol"); if (ol) { ol.dataset.ml = "outline"; handleBodyInput(); } }, 0); }}>I. A. 1. a.</button>
                     <button onClick={() => fmt.exec("indent")}>Aumentar Nível da Lista</button>
                     <button onClick={() => fmt.exec("outdent")}>Diminuir Nível da Lista</button>
@@ -26248,6 +26306,7 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 </>, "emojiPopover rbPop")}
                 {rbm("icons", (t) => <RbSm icon={Star} label="Ícones" chevron tip="Ícones" desc="Insere um ícone ou pictograma, que pode ser aumentado como qualquer texto." onClick={t}/>, <>
                   {WORD_ICON_GLYPHS.map(g => <button key={g} className="emojiBtn" onClick={() => fmt.insertIcon(g)}>{g}</button>)}
+                  {WORD_SVG_ICONS.map(ic => <button key={ic.name} className="emojiBtn" title={ic.name} onClick={() => fmt.insertSvgIcon(ic.uri, ic.name)}><img src={ic.uri} alt={ic.name} style={{ width: 24, height: 24, display: "block" }}/></button>)}
                 </>, "emojiPopover rbPop")}
                 <RbSm icon={PenTool} label="Desenho" tip="Desenho" desc="Abre uma tela para desenhar à mão livre e inserir o resultado como imagem." onClick={() => { setInkMode(false); setDrawOpen(true); }}/>
               </div>
@@ -26294,10 +26353,14 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                   <button onClick={() => fmt.insertPageNumber("header", "simple")}>Só o número (1)</button>
                   <button onClick={() => fmt.insertPageNumber("header", "label")}>"Página 1"</button>
                   <button onClick={() => fmt.insertPageNumber("header", "labelof")}>"Página 1 de N"</button>
+                  <button onClick={() => fmt.insertPageNumber("header", "of")}>"1 de N"</button>
+                  <button onClick={() => fmt.insertPageNumber("header", "dashof")}>"- 1 de N"</button>
                   <div className="wordDropdownEmpty">No rodapé</div>
                   <button onClick={() => fmt.insertPageNumber("footer", "simple")}>Só o número (1)</button>
                   <button onClick={() => fmt.insertPageNumber("footer", "label")}>"Página 1"</button>
                   <button onClick={() => fmt.insertPageNumber("footer", "labelof")}>"Página 1 de N"</button>
+                  <button onClick={() => fmt.insertPageNumber("footer", "of")}>"1 de N"</button>
+                  <button onClick={() => fmt.insertPageNumber("footer", "dashof")}>"- 1 de N"</button>
                 </>)}
               </div>
             </RbGroup>
@@ -27254,17 +27317,19 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
                 onMoveTab={fmt.moveTabStop}
                 onCommitTabOrder={fmt.commitTabStopOrder}
                 onRemoveTab={fmt.removeTabStop}
+                onCycleLeader={fmt.cycleTabLeader}
               />
             )}
             <div
               ref={pageRef}
               className={"wordPage wordPage-" + pageSize + " wordPage-" + orientation + " wordMargin-" + margins + (showGrid ? " wordPage-grid" : "") + (viewMode === "draft" ? " wordPage-draft" : "") + (viewMode === "web" ? " wordPage-web" : "") + (viewMode === "outline" ? " wordPage-outline" : "") + (inkReplay ? " wordInkReplaying" : "")}
-              style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...pageBorderStyle(pageBorder) }}
+              style={{ backgroundColor: pageColor || undefined, "--word-theme-accent": currentTheme.accent, ...(pageFramesOn ? {} : pageBorderStyle(pageBorder)) }}
             >
               {watermarkText && <div className="wordWatermark" aria-hidden="true">{watermarkText}</div>}
               <div className="wordBodyShell">
               <div ref={gapLayerRef} className="wordGapLayer" aria-hidden="true"/>
               <div ref={marksLayerRef} className="wordMarksLayer" aria-hidden="true"/>
+              <div ref={pageFramesRef} className="wordPageFrames" aria-hidden="true"/>
               <div
                 ref={bodyRef}
                 className={"noteRichBody wordRichBody" + (showMarks ? " wordShowMarks" : "") + (fmt.painting ? " wordPainting" : "") + (showChangesMarkup ? "" : " wordHideChanges")}

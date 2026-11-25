@@ -414,7 +414,7 @@ export async function downloadWordPdfVector({ pageEl, bodyEl, width, height, tit
     const rec = (n) => {
       if (n.nodeType === 3) { s += n.data; return; }
       if (n.nodeType !== 1) return;
-      if (n.classList.contains("word-pagenum")) { const f = n.dataset.fmt || ""; s += f === "of" ? `${pgLabel(i)} de ${nPages}` : pgLabel(i); return; }
+      if (n.classList.contains("word-pagenum")) { const f = n.dataset.fmt || ""; const pl = pgLabel(i); s += f === "of" ? `${pl} de ${nPages}` : f === "dashof" ? `- ${pl} de ${nPages}` : f === "labelof" ? `Página ${pl} de ${nPages}` : f === "label" ? `Página ${pl}` : pl; return; }
       if (n.classList.contains("word-numpages")) { s += String(nPages); return; }
       if (n.tagName === "BR") { s += "\n"; return; }
       n.childNodes.forEach(rec);
