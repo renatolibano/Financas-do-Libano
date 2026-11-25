@@ -23072,7 +23072,17 @@ function WordEditor({ doc, onClose, onSave, onNew, onOpenFile, onSaveAs, docsLis
   // A página é de altura fixa (a do papel). Cada quebra de página ganha altura para que o conteúdo seguinte comece exatamente no
   // topo da próxima página (com a margem superior) e mostra uma faixa escura entre as duas páginas, como no Word.
   const gapLayerRef = useRef(null);
+  // O zoom CSS arredonda linhas e faixas de forma diferente (subpixel), o que desalinha o cálculo de páginas e cria/desfaz páginas.
+  // Por isso o layout é calculado com zoom 1 (síncrono, sem pintar) e o zoom do usuário é restaurado em seguida.
   const syncPageBreaksRaw = () => {
+    const wrap = bodyRef.current?.closest(".wordPageWrap");
+    if (!wrap || !wrap.style.zoom || Number(wrap.style.zoom) === 1) { syncPageBreaksCore(); return; }
+    const area = pageAreaRef.current, st = area ? area.scrollTop : 0, prevZoom = wrap.style.zoom;
+    wrap.style.zoom = "1";
+    try { syncPageBreaksCore(); }
+    finally { wrap.style.zoom = prevZoom; if (area && area.scrollTop !== st) area.scrollTop = st; }
+  };
+  const syncPageBreaksCore = () => {
     const body = bodyRef.current;
     const layer = gapLayerRef.current;
     const clearGaps = () => { if (layer && layer.firstChild) { layer.textContent = ""; delete layer.dataset.sig; } if (layer) layer.classList.remove("wgModel"); if (body) { body.__pageModel = null; if (body.style.minHeight) body.style.minHeight = ""; } };
